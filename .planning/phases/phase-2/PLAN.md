@@ -3,6 +3,7 @@
 **Phase:** GSD Phase 2 (PMACS Phases 3-4)
 **Milestone:** LLM calls work, kill switch fires, 8 processes run
 **Checkpoint:** A (after PMACS Phase 4)
+**Revised:** Incorporates REVIEWS.md feedback (Claude Sonnet 4.6 review, 4.0/5 → target 4.5+/5)
 
 ## Exit Tests (binary — must ALL pass)
 
@@ -328,3 +329,75 @@ Wave 1 (Inference)     Wave 2 (Crypto)       Wave 3 (Cortex)        Wave 4 (Exec
 | Security model | Architecture.md | §18 |
 | Deterministic engines | Architecture.md | §9 |
 | Exit tests | Phases.md | §2 Phase 3 & Phase 4 |
+
+---
+
+## Wave 7: Review Feedback Patches (**NEW — review feedback**)
+
+These tasks patch gaps identified in REVIEWS.md. Phase 2 code is already built and all unit tests pass.
+
+#### Task 7.1: Kill switch integration test (**CRITICAL — review feedback**)
+**Files:** `tests/integration/test_kill_switch_integration.py`
+**What:**
+The kill switch is the primary safety mechanism. Unit tests exist (22 pass) but no integration test verifies the full engage→block→TOTP→resume flow.
+
+Tests to write:
+- **Engage blocks cycle initiation**: Start a stub cycle orchestrator. Engage kill switch. Verify `initiate_cycle()` raises or returns None. Verify audit event `kill_switch_engaged` emitted.
+- **TOTP disengage resumes cycles**: Engage kill switch. Disengage with valid TOTP. Verify `initiate_cycle()` succeeds. Verify audit event `kill_switch_disengaged` emitted.
+- **Engage emits SSE event**: Engage kill switch. Verify SSE `/events` stream receives `system.kill_switch` event with `state=ENGAGED`.
+- **Crash loop triggers kill switch**: Simulate 5 rapid restarts of a process via crash loop detector. Verify kill switch engages automatically. Verify audit event logged with trigger reason.
+
+**Imports:** `pmacs.cortex.kill_switch.engage, disengage, is_engaged`, `pmacs.nervous.orchestrator.initiate_cycle`, `pmacs.cortex.crash_loop_detector.record_restart`, `pmacs.cortex.totp.generate_totp_secret, compute_totp`
+**Spec:** Architecture.md §13 (kill switch), §4.7 (crash loop), Phases.md §2 Phase 4 exit test #2
+**Verifies:** Phase 4 exit test #2
+
+#### Task 7.2: Cortex daemon unit tests (**MEDIUM — review feedback**)
+**Files:** `tests/unit/test_cortex_daemon.py`, `tests/unit/test_self_check.py`
+**What:**
+The reviewer noted unknown coverage for `pmacs/cortex/daemon.py` and `pmacs/cortex/self_check.py`.
+
+Tests to write:
+- **test_cortex_daemon.py**:
+  - `test_daemon_starts_and_writes_heartbeat`: Verify heartbeat file created on start
+  - `test_daemon_detects_stale_process`: Mock stale heartbeat, verify detection
+  - `test_daemon_triggers_kill_switch_on_audit_chain_failure`: Mock broken chain, verify kill switch engaged
+  - `test_daemon_checks_disk_space`: Mock low disk, verify kill switch trigger
+- **test_self_check.py**:
+  - `test_self_check_passes_when_cortex_alive`: Mock healthy cortex, verify no action
+  - `test_self_check_engages_kill_switch_when_cortex_dead`: Mock timeout, verify kill switch engaged
+
+**Imports:** `pmacs.cortex.daemon`, `pmacs.cortex.self_check`, `pmacs.cortex.kill_switch`
+**Spec:** Architecture.md §4.1-4.2, §4.8
+**Verifies:** Coverage gap closure
+
+#### Task 7.3: Grammar version comments (**LOW — review feedback**)
+**Files:** All files in `pmacs/agents/grammars/*.gbnf`
+**What:**
+Add version comment header to each GBNF grammar file. Per `Agents.md §3` Layer 1, grammars should have explicit version tracking.
+
+Format:
+```
+// grammar: <persona_name>
+// version: 1.0
+// spec: Agents.md §<section>
+```
+
+**Spec:** Agents.md §3 (Layer 1)
+**Verifies:** Grammar versioning matches spec
+
+---
+
+## Review Feedback Applied
+
+This plan was revised based on REVIEWS.md (Claude Sonnet 4.6 review, overall 4.0/5). Changes:
+
+| # | Issue | Severity | Fix Applied |
+|---|---|---|---|
+| 1 | Missing kill switch integration test | CRITICAL | Task 7.1: new integration test with 4 scenarios |
+| 2 | Unverified exit tests | CRITICAL | Verified: 22 unit tests pass, 12 heartbeat tests pass, heartbeat test exists (reviewer was wrong about #3) |
+| 3 | test_heartbeats.py missing | FALSE | Exists with 12 passing tests — reviewer was incorrect |
+| 4 | Magic strings should be enums | MED | Deferred — KillSwitchState is already an enum, other strings are in schema enums already |
+| 5 | initiate_cycle test wiring hack | MED | Accepted — stub phase trade-off, real DI in Phase 4 |
+| 6 | Missing cortex daemon/self_check unit tests | MED | Task 7.2: new unit tests for uncovered cortex modules |
+| 7 | pandas_market_calendars for boot_detector | LOW | Deferred — simple weekday check has been working, optional dep |
+| 8 | Grammar version comments | LOW | Task 7.3: add version headers to all GBNF files |

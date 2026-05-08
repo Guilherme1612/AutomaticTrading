@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Debug{% endblock %}
+
+{% block content %}
+<!-- Filter bar -->
+<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4">
+            <h3 class="text-sm font-semibold text-zinc-900">Event Stream</h3>
+            <div class="flex gap-1.5">
+                {% for chip in filter_chips %}
+                <button class="px-2.5 py-1 text-xs rounded font-mono transition-colors
+                               {{ 'bg-blue-50 text-blue-600 border border-blue-200' if loop.first else 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200' }}"
+                        onclick="filterEvents('{{ chip }}')">
+                    {{ chip }}
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <span id="event-count" class="text-xs text-zinc-400 font-mono">0 events</span>
+            <button class="px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
+                Clear
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Event stream -->
+<div id="event-stream" class="bg-white border border-zinc-200 rounded-lg overflow-hidden">
+    {% if events %}
+    <div class="divide-y divide-zinc-100">
+        {% for event in events %}
+        <div class="px-4 py-3 hover:bg-zinc-50 cursor-pointer" data-event-level="{{ event.level }}" onclick="toggleEventDetail(this)">
+            <div class="flex items-center gap-3">
+                <span class="px-1.5 py-0.5 text-xs font-mono rounded
+                             {{ 'bg-red-100 text-red-700' if event.level == 'ERROR' else '' }}
+                             {{ 'bg-amber-100 text-amber-700' if event.level == 'WARN' else '' }}
+                             {{ 'bg-blue-100 text-blue-700' if event.level == 'INFO' else '' }}
+                             {{ 'bg-zinc-100 text-zinc-500' if event.level == 'DEBUG' else '' }}">
+                    {{ event.level }}
+                </span>
+                <span class="text-xs font-mono text-zinc-400">{{ event.timestamp }}</span>
+                <span class="text-xs font-mono text-blue-600">{{ event.stream }}</span>
+                <span class="text-sm text-zinc-700 flex-1">{{ event.message }}</span>
+            </div>
+            <div class="hidden mt-2 ml-16 text-xs font-mono text-zinc-500 bg-zinc-50 rounded p-3 relative">
+                <pre>{{ event.detail | default('No detail') }}</pre>
+                <button onclick="event.stopPropagation(); copyDebugEvent(this)"
+                        class="absolute top-2 right-2 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-700 hover:bg-white rounded transition-colors"
+                        data-debug-event='{{ event | tojson }}'>
+                    Copy for Claude Code
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="p-12 text-center" id="event-stream-empty">
+        <h3 class="text-base font-semibold text-zinc-900 mb-2">Waiting for debug events</h3>
+        <p class="text-sm text-zinc-400">Events will stream from pmacs-nervous via SSE when cycles run.</p>
+        <p class="text-xs text-zinc-300 mt-2 font-mono">Subscribe: pmacs-nervous:8000/events</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

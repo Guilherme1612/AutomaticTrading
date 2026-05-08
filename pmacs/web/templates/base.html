@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMACS - {% block title %}Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+</head>
+<body class="h-full bg-zinc-50 text-zinc-900 font-sans">
+
+    <!-- Viewport width guard (Source.md §13.7: minimum 1024px) -->
+    <div id="viewport-guard" class="hidden fixed inset-0 z-[100] bg-zinc-900 flex items-center justify-center">
+        <div class="text-center text-zinc-300">
+            <p class="text-lg font-medium mb-2">PMACS requires a wider window</p>
+            <p class="text-sm text-zinc-500">This is a desktop tool. Please resize your browser to at least 1024px wide.</p>
+        </div>
+    </div>
+
+    <!-- Top bar: 56px (Source.md §13.2) -->
+    <header class="fixed top-0 left-0 right-0 h-14 bg-white border-b border-zinc-200 flex items-center px-6 z-40" role="banner">
+        <span class="font-mono text-blue-600 font-semibold text-lg tracking-tight" aria-label="PMACS">PMACS</span>
+        <span class="ml-4 px-2 py-0.5 text-xs font-mono rounded {{ 'bg-green-100 text-green-700' if 'PAPER' in mode else 'bg-blue-100 text-blue-700' }}"
+              aria-label="Current mode: {{ mode }}">{{ mode }}</span>
+        <div id="cycle-indicator" class="flex-1 text-center text-sm text-zinc-500" role="status" aria-live="polite">Idle. Last cycle: --</div>
+        <button id="kill-switch-btn"
+                class="px-3 py-1.5 text-sm font-medium rounded bg-zinc-700 text-white hover:bg-red-600 transition-colors"
+                aria-label="Kill switch"
+                onclick="handleKillSwitch()">
+            Kill Switch
+        </button>
+    </header>
+
+    <!-- Left sidebar: 240px (Source.md §13.2) -->
+    <nav class="fixed left-0 top-14 bottom-0 w-60 bg-white border-r border-zinc-200 p-4 overflow-y-auto"
+         role="navigation" aria-label="Main navigation">
+        {% set pages = [
+            ("dashboard", "Dashboard", "/", "1"),
+            ("agents", "Agents", "/agents", "2"),
+            ("pipeline", "Pipeline", "/pipeline", "3"),
+            ("universe", "Universe", "/universe", "4"),
+            ("cortex", "Cortex", "/cortex", "5"),
+            ("debug", "Debug", "/debug", "6"),
+            ("settings", "Settings", "/settings", "7"),
+        ] %}
+        <ul class="space-y-1" role="list">
+            {% for id, name, href, shortcut in pages %}
+            <li>
+                <a href="{{ href }}"
+                   class="flex items-center px-3 py-2 rounded text-sm transition-colors
+                          {% if page == id %}
+                              bg-blue-50 text-blue-600 font-medium border-l-2 border-blue-600
+                          {% else %}
+                              text-zinc-600 hover:bg-zinc-100
+                          {% endif %}"
+                   aria-current="{% if page == id %}page{% endif %}">
+                    {{ name }}
+                    <kbd class="ml-auto text-xs text-zinc-400 font-mono hidden lg:inline" aria-label="Shortcut: Command {{ shortcut }}">⌘{{ shortcut }}</kbd>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        <!-- Bottom: operator + TOTP status + quick action -->
+        <div class="absolute bottom-4 left-4 right-4 space-y-2">
+            <div class="flex items-center gap-2 text-xs text-zinc-400">
+                <span class="w-2 h-2 rounded-full bg-green-500" aria-label="System online"></span>
+                <span>Operator</span>
+            </div>
+            <button onclick="toggleCmdK()"
+                    class="w-full px-3 py-1.5 text-xs text-left text-zinc-500 bg-zinc-100 rounded hover:bg-zinc-200 transition-colors"
+                    aria-label="Open command palette (Cmd-K)">
+                ⌘K
+                <span class="text-zinc-400 ml-2">Search...</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main content area -->
+    <main class="ml-60 mt-14 p-8 min-h-[calc(100vh-3.5rem)]" role="main" id="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Cmd-K command palette (Source.md §13.2) -->
+    <div id="cmd-k" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-24" role="dialog" aria-label="Command palette" aria-modal="true">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg border border-zinc-200">
+            <input id="cmd-k-input" type="text" placeholder="Search tickers, pages, actions..."
+                   class="w-full px-4 py-3 bg-transparent text-lg outline-none rounded-lg"
+                   aria-label="Search commands"
+                   autocomplete="off" spellcheck="false">
+            <ul id="cmd-k-results" class="border-t border-zinc-200 max-h-64 overflow-y-auto" role="listbox"></ul>
+        </div>
+    </div>
+
+    <!-- Keyboard shortcut overlay (Source.md §13.6) -->
+    <div id="shortcut-overlay" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center" role="dialog" aria-label="Keyboard shortcuts" aria-modal="true">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md border border-zinc-200 p-6">
+            <h3 class="text-lg font-semibold mb-4">Keyboard Shortcuts</h3>
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between"><span class="text-zinc-600">Open command palette</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘K</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Jump to page</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘1–7</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Refresh page</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘R</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Show shortcuts</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘/</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Focus search</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">/</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Close/dismiss</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">Esc</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Contextual help</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">?</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Engage kill switch</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘⇧K</kbd></div>
+                <div class="flex justify-between"><span class="text-zinc-600">Open TOTP</span><kbd class="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">⌘T</kbd></div>
+            </div>
+            <button onclick="document.getElementById('shortcut-overlay').classList.add('hidden')"
+                    class="mt-4 w-full px-4 py-2 text-sm bg-zinc-100 rounded hover:bg-zinc-200 transition-colors">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <!-- TOTP Modal -->
+    <div id="totp-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center" role="dialog" aria-label="TOTP verification" aria-modal="true">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-sm border border-zinc-200 p-6">
+            <h3 class="text-lg font-semibold mb-4">TOTP Verification Required</h3>
+            <p class="text-sm text-zinc-600 mb-4">Enter your 6-digit TOTP code to confirm this action.</p>
+            <div class="flex gap-2 justify-center mb-4">
+                {% for i in range(6) %}
+                <input type="text" maxlength="1"
+                       class="totp-digit w-10 h-12 text-center text-xl font-mono border border-zinc-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                       data-index="{{ i }}"
+                       aria-label="TOTP digit {{ i + 1 }} of 6"
+                       inputmode="numeric" pattern="[0-9]">
+                {% endfor %}
+            </div>
+            <div class="flex gap-3 justify-end">
+                <button onclick="closeTotpModal()" class="px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded">Cancel</button>
+                <button onclick="submitTotp()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Verify</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Blocking modal (for kill switch engagement, audit chain failure — Source.md §13.5) -->
+    <div id="blocking-modal" class="hidden fixed inset-0 z-[60] bg-black/70 flex items-center justify-center" role="alertdialog" aria-modal="true">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md border-2 border-red-500 p-6">
+            <h3 id="blocking-modal-title" class="text-lg font-semibold text-red-600 mb-2"></h3>
+            <p id="blocking-modal-message" class="text-sm text-zinc-600 mb-4"></p>
+            <div id="blocking-modal-actions" class="flex gap-3 justify-end"></div>
+        </div>
+    </div>
+
+    <!-- Toast container (Source.md §13.2) with aria-live for screen readers -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm" role="status" aria-live="polite" aria-relevant="additions"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

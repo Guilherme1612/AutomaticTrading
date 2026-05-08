@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+{% if pre_first_cycle %}
+<div class="flex flex-col items-center justify-center py-24 text-center">
+    <h2 class="text-2xl font-semibold text-zinc-900 mb-3">Welcome to PMACS</h2>
+    <p class="text-zinc-500 max-w-md mb-6">Your first cycle will populate this dashboard with portfolio data, risk metrics, and active positions.</p>
+    <button onclick="runCycleNow()" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Run smoke-test cycle</button>
+</div>
+{% else %}
+
+<!-- Portfolio summary card -->
+<div class="bg-white border border-zinc-200 rounded-lg p-6 mb-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <p class="text-sm text-zinc-500">Portfolio Value</p>
+            <p class="text-3xl font-mono font-semibold text-zinc-900">${{ "{:,.2f}".format(portfolio_value) }}</p>
+        </div>
+        <div class="text-right">
+            <p class="text-sm text-zinc-500">Day Change</p>
+            <p class="text-xl font-mono font-semibold {{ 'text-green-600' if day_change_pct >= 0 else 'text-red-500' }}">
+                {{ "+" if day_change_pct >= 0 else "" }}{{ "%.2f"|format(day_change_pct) }}%
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Time-window selector -->
+<div class="flex items-center gap-2 mb-4">
+    <span class="text-xs text-zinc-400">Period:</span>
+    <div class="flex gap-1">
+        <button class="px-2 py-1 text-xs rounded bg-blue-50 text-blue-600">1D</button>
+        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">1W</button>
+        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">1M</button>
+        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">3M</button>
+        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">ALL</button>
+    </div>
+</div>
+
+<!-- Risk metrics row (5 StatBlocks) -->
+<div class="grid grid-cols-5 gap-4 mb-6">
+    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Max Drawdown</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.max_drawdown_pct) }}%</span>
+        <div class="sparkline-container w-full mt-2 relative">
+            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
+                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
+                          points="0,20 10,18 20,15 30,17 40,12 50,14 60,10 70,8 80,11 90,6 100,4"/>
+            </svg>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.max_drawdown_pct) }}%</div>
+        </div>
+    </div>
+    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Sharpe</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.2f"|format(risk_metrics.sharpe) }}</span>
+        <div class="sparkline-container w-full mt-2 relative">
+            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
+                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
+                          points="0,18 10,16 20,14 30,15 40,10 50,12 60,8 70,6 80,9 90,5 100,3"/>
+            </svg>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.2f"|format(risk_metrics.sharpe) }}</div>
+        </div>
+    </div>
+    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Win Rate</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.win_rate_pct) }}%</span>
+        <div class="sparkline-container w-full mt-2 relative">
+            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
+                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
+                          points="0,16 10,14 20,17 30,12 40,15 50,10 60,13 70,8 80,11 90,7 100,5"/>
+            </svg>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.win_rate_pct) }}%</div>
+        </div>
+    </div>
+    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Open Positions</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ risk_metrics.open_positions }}</span>
+        <div class="sparkline-container w-full mt-2 relative">
+            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
+                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
+                          points="0,12 10,14 20,10 30,16 40,12 50,8 60,14 70,10 80,12 90,6 100,10"/>
+            </svg>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ risk_metrics.open_positions }}</div>
+        </div>
+    </div>
+    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Capital Used</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.capital_used_pct) }}%</span>
+        <div class="sparkline-container w-full mt-2 relative">
+            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
+                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
+                          points="0,20 10,19 20,17 30,18 40,14 50,15 60,12 70,10 80,13 90,8 100,6"/>
+            </svg>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.capital_used_pct) }}%</div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-3 gap-6">
+    <!-- Active positions table -->
+    <div class="col-span-2 bg-white border border-zinc-200 rounded-lg p-6">
+        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Active Positions</h3>
+        {% if positions %}
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-zinc-500 border-b border-zinc-100">
+                    <th class="pb-2 font-medium">Ticker</th>
+                    <th class="pb-2 font-medium">Verdict</th>
+                    <th class="pb-2 font-medium">Conviction</th>
+                    <th class="pb-2 font-medium">Entry</th>
+                    <th class="pb-2 font-medium">Current</th>
+                    <th class="pb-2 font-medium">P&L</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for pos in positions %}
+                <tr class="border-b border-zinc-50">
+                    <td class="py-2 font-mono font-medium">{{ pos.ticker }}</td>
+                    <td class="py-2">{{ pos.verdict }}</td>
+                    <td class="py-2 font-mono">{{ pos.conviction }}</td>
+                    <td class="py-2 font-mono">${{ pos.entry }}</td>
+                    <td class="py-2 font-mono">${{ pos.current }}</td>
+                    <td class="py-2 font-mono {{ 'text-green-600' if pos.pnl >= 0 else 'text-red-500' }}">
+                        {{ "+" if pos.pnl >= 0 else "" }}${{ pos.pnl }}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        {% set empty_title = "No active holdings" %}
+        {% set empty_message = "Cycles are running but no STRONG_BUY signals have cleared all gates yet. This is normal during bootstrap. See Pipeline \u2192 Recent SKIPs for verdict reasoning." %}
+        {% include "components/empty_state.html" %}
+        {% endif %}
+    </div>
+
+    <!-- Right rail -->
+    <div class="space-y-6">
+        <!-- Recent decisions feed -->
+        <div class="bg-white border border-zinc-200 rounded-lg p-6">
+            <h3 class="text-sm font-semibold text-zinc-900 mb-4">Recent Decisions</h3>
+            {% if recent_decisions %}
+            <ul class="space-y-3">
+                {% for d in recent_decisions %}
+                <li class="flex items-center gap-2 text-sm">
+                    <span class="font-mono font-medium">{{ d.ticker }}</span>
+                    <span class="px-1.5 py-0.5 text-xs rounded
+                                 {{ 'bg-green-100 text-green-700' if d.verdict == 'STRONG_BUY' else '' }}
+                                 {{ 'bg-blue-100 text-blue-700' if d.verdict == 'BUY' else '' }}
+                                 {{ 'bg-amber-100 text-amber-700' if d.verdict == 'HOLD' else '' }}
+                                 {{ 'bg-red-100 text-red-700' if d.verdict == 'SKIP' else '' }}">
+                        {{ d.verdict }}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-sm text-zinc-400 text-center py-4">No recent decisions</p>
+            {% endif %}
+        </div>
+
+        <!-- System health card -->
+        <div class="bg-white border border-zinc-200 rounded-lg p-6">
+            <h3 class="text-sm font-semibold text-zinc-900 mb-4">System Health</h3>
+            <dl class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Audit Chain</dt>
+                    <dd class="font-mono {{ 'text-green-600' if system_health.audit_chain == 'verified' else 'text-red-500' }}">
+                        {{ system_health.audit_chain }}
+                    </dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Disk Free</dt>
+                    <dd class="font-mono">{{ system_health.disk_free_gb }} GB</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Inference</dt>
+                    <dd class="font-mono {{ 'text-green-600' if system_health.inference_ok else 'text-red-500' }}">
+                        {{ "OK" if system_health.inference_ok else "DOWN" }}
+                    </dd>
+                </div>
+            </dl>
+        </div>
+
+        <!-- Mutation summary card -->
+        <div class="bg-white border border-zinc-200 rounded-lg p-6">
+            <h3 class="text-sm font-semibold text-zinc-900 mb-4">Mutation Engine</h3>
+            <dl class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Status</dt>
+                    <dd class="font-mono {{ 'text-green-600' if mutation_summary.active else 'text-zinc-400' }}">
+                        {{ "Active" if mutation_summary.active else "Dormant" }}
+                    </dd>
+                </div>
+                {% if not mutation_summary.active %}
+                <div class="mt-2 px-3 py-2 bg-zinc-50 rounded text-xs text-zinc-500">
+                    Activates after 50 PAPER cycles (current: {{ mutation_summary.cycles_since_activation }})
+                </div>
+                {% else %}
+                {% if mutation_summary.pending_review > 0 %}
+                <div class="mt-2 flex items-center gap-2">
+                    <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-amber-50 text-amber-700 rounded">
+                        {{ mutation_summary.pending_review }} pending operator review
+                    </span>
+                    <a href="/settings" class="text-xs text-blue-600 hover:underline">Review in Settings</a>
+                </div>
+                {% endif %}
+                {% endif %}
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Candidates</dt>
+                    <dd class="font-mono">{{ mutation_summary.candidates }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Cycles</dt>
+                    <dd class="font-mono">{{ mutation_summary.cycles_since_activation }}</dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

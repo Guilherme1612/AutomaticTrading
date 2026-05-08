@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<h2 class="text-lg font-semibold text-zinc-900 mb-6">Settings</h2>
+
+<!-- Scrollable sections -->
+<div class="space-y-6">
+    {% for section in sections %}
+    <div class="bg-white border border-zinc-200 rounded-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-zinc-900">{{ section }}</h3>
+            <span class="text-xs text-zinc-400 font-mono">config/{{ section | lower | replace(' ', '_') | replace('&', 'and') }}.toml</span>
+        </div>
+        <div class="text-sm text-zinc-400 py-4 text-center">
+            {% if section == "General" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Mode</dt>
+                    <dd class="font-mono">{{ mode }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Paper Capital</dt>
+                    <dd class="font-mono">$5,000</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Positions</dt>
+                    <dd class="font-mono">5</dd>
+                </div>
+            </dl>
+            {% elif section == "Risk" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Single Position</dt>
+                    <dd class="font-mono">20% ($1,000)</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Catastrophe-net Stop</dt>
+                    <dd class="font-mono">15% below entry</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">EV Minimum</dt>
+                    <dd class="font-mono">--</dd>
+                </div>
+            </dl>
+            {% elif section == "Crucible" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Time Budget</dt>
+                    <dd class="font-mono">90s per attack</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Cycles</dt>
+                    <dd class="font-mono">2</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Temperature</dt>
+                    <dd class="font-mono">0.1</dd>
+                </div>
+            </dl>
+            {% elif section == "Mutation Engine" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Activation Threshold</dt>
+                    <dd class="font-mono">50 cycles</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Auto-Promote</dt>
+                    <dd class="font-mono text-amber-600">Disabled (TOTP required)</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Stat-Sig Threshold</dt>
+                    <dd class="font-mono">p &lt; 0.05, d &gt; 0.20</dd>
+                </div>
+            </dl>
+            {% elif section == "Inference" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Primary Backend</dt>
+                    <dd class="font-mono">llama-server</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Port</dt>
+                    <dd class="font-mono">:8080</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Analysis Temperature</dt>
+                    <dd class="font-mono">0.2</dd>
+                </div>
+            </dl>
+            {% else %}
+            <p>No configuration loaded. Connect to pmacs-nervous to populate.</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

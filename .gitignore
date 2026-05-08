@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Secrets — NEVER commit
+.env
+*.pem
+*.key
+credentials.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# PMACS runtime data
+data/
+*.db
+*.log
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

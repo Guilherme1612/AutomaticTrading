@@ -1,0 +1,27 @@
+[hardware]
+ram_gb = 64
+cpu_cores = 10
+gpu = "apple_m1_max"
+
+[runtime]
+backend = "llama_server"
+gguf_path = "/usr/local/var/pmacs/models/Qwen3.6-35B-A3B-Q4_K_XL.gguf"
+threads = 8
+parallel_slots = 3
+ctx_size = 32768
+quantization = "UD-Q4_K_XL"
+
+[budgets]
+phase1_seconds_per_symbol = 270
+daily_llm_seconds_total = 18000
+
+[stop_loss]
+intraday_check_interval_seconds = 1800
+quote_freshness_max_seconds = 60
+
+[crash_loop]
+max_restarts_per_minute = 5
+broken_state_requires_manual_clear = true
+
+[catastrophe_net]
+catastrophe_stop_pct = 0.15

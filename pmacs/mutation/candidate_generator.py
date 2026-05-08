@@ -1,0 +1,131 @@
+"""Rule-based mutation candidate generation (Agents.md §17.2).
+
+Generates candidates from FDE failure clusters only after
+ACTIVATION_THRESHOLD (50) PAPER cycles completed.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Any
+
+ACTIVATION_THRESHOLD = 50  # PAPER cycles before mutation activates
+
+# Rule-based candidate generation (Agents.md §17.2)
+GENERATION_RULES: list[dict] = [
+    {
+        "taxonomy": "MOAT_DRIFT_OVERESTIMATE",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": "prompts",
+        "target": "moat_analyst.system_prompt",
+        "candidate_change": (
+            "Add 'consider competitive entry risk with specific evidence' directive"
+        ),
+    },
+    {
+        "taxonomy": "GROWTH_STALL_MISSED",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": "prompts",
+        "target": "growth_hunter.system_prompt",
+        "candidate_change": (
+            "Add 'compare current growth rate to 2-quarter-ago rate; flag deceleration'"
+        ),
+    },
+    {
+        "taxonomy": "FORENSICS_FLAG_IGNORED",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": "source_weights",
+        "target": "forensics.weight",
+        "candidate_change": "Increase Forensics weight by 15%",
+    },
+    {
+        "taxonomy": "STOP_HUNTED",
+        "min_count": 3,
+        "window_cycles": 30,
+        "dimension": "thresholds",
+        "target": "stop_loss.atr_multiplier",
+        "candidate_change": "Widen stop by 0.1 ATR",
+    },
+    {
+        "taxonomy": "CATALYST_FALSE_POSITIVE",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": "prompts",
+        "target": "catalyst_summarizer.system_prompt",
+        "candidate_change": (
+            "Add 'require >1 corroborating source for positive catalyst resolution'"
+        ),
+    },
+    {
+        "taxonomy": "SIZING_OVERCONFIDENT",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": "thresholds",
+        "target": "sizing.half_kelly_multiplier",
+        "candidate_change": "Reduce from 0.5 to 0.4",
+    },
+]
+
+
+@dataclass
+class MutationCandidateData:
+    """Dataclass for a generated mutation candidate."""
+
+    id: str
+    dimension: str
+    target: str
+    trigger_taxonomy: str
+    trigger_count: int
+    baseline_config: str  # JSON
+    candidate_config: str  # JSON
+    diff_summary: str
+    reversible: bool = True
+    rollback_config: str = ""  # = baseline_config
+
+
+def generate_candidates(
+    failure_clusters: list[dict],
+    paper_cycle_count: int = 0,
+    config: Any | None = None,
+) -> list[MutationCandidateData]:
+    """Generate mutation candidates from FDE failure clusters.
+
+    Only generates if paper_cycle_count >= activation threshold.
+    Each rule matches a failure taxonomy and requires a minimum count
+    within a window of recent cycles.
+    """
+    threshold = config.min_paper_cycles if config is not None else ACTIVATION_THRESHOLD
+    if paper_cycle_count < threshold:
+        return []
+
+    candidates: list[MutationCandidateData] = []
+    for rule in GENERATION_RULES:
+        matching = [
+            f for f in failure_clusters if f.get("taxonomy") == rule["taxonomy"]
+        ]
+        count = sum(f.get("count", 0) for f in matching)
+        if count >= rule["min_count"]:
+            baseline = json.dumps({"current": "production"})
+            candidate_id = hashlib.sha256(
+                f"{rule['dimension']}:{rule['target']}:{rule['taxonomy']}".encode()
+            ).hexdigest()[:16]
+            candidates.append(
+                MutationCandidateData(
+                    id=candidate_id,
+                    dimension=rule["dimension"],
+                    target=rule["target"],
+                    trigger_taxonomy=rule["taxonomy"],
+                    trigger_count=count,
+                    baseline_config=baseline,
+                    candidate_config=json.dumps({"change": rule["candidate_change"]}),
+                    diff_summary=rule["candidate_change"],
+                    reversible=True,
+                    rollback_config=baseline,
+                )
+            )
+
+    return candidates

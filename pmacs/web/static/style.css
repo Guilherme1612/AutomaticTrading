@@ -1,0 +1,294 @@
+/* PMACS Dashboard custom styles — Tailwind via CDN handles most styling */
+
+/* ─── Accessibility (Source.md §13.7) ──────────────────────────────────── */
+
+/* Focus states: 2px accent outline, never outline:none without replacement */
+*:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+/* Focus trap for modals */
+[role="dialog"]:focus-within {
+    outline: none;
+}
+
+/* ─── Reduced Motion (Source.md §13.7) ─────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    /* Static equivalents for animated elements */
+    .toast-enter,
+    .toast-exit {
+        animation: none !important;
+        opacity: 1;
+        transform: none;
+    }
+
+    /* Progress bars: show final state only */
+    .progress-bar-animated {
+        animation: none !important;
+    }
+
+    /* Sankey: disable D3 transitions */
+    .sankey-link,
+    .sankey-node {
+        transition: none !important;
+    }
+
+    /* Sparkline hover: instant instead of animated */
+    .sparkline-point {
+        transition: none !important;
+    }
+}
+
+/* ─── HTMX Transitions ──────────────────────────────────────────────────── */
+
+.htmx-swapping {
+    opacity: 0;
+    transition: opacity 100ms ease-out;
+}
+
+.htmx-settling {
+    opacity: 1;
+    transition: opacity 100ms ease-in;
+}
+
+/* ─── Toast Animations ──────────────────────────────────────────────────── */
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes toast-out {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+.toast-enter {
+    animation: toast-in 0.2s ease-out;
+}
+
+.toast-exit {
+    animation: toast-out 0.2s ease-in forwards;
+}
+
+/* ─── Event Stream ──────────────────────────────────────────────────────── */
+
+.event-detail {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease-out;
+}
+
+.event-detail.open {
+    max-height: 500px;
+}
+
+/* ─── Cmd-K Palette ─────────────────────────────────────────────────────── */
+
+#cmd-k input:focus {
+    outline: none;
+}
+
+#cmd-k-results li {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+#cmd-k-results li:hover,
+#cmd-k-results li.active {
+    background-color: #eff6ff;
+    color: #2563eb;
+}
+
+/* ─── TOTP Input ────────────────────────────────────────────────────────── */
+
+.totp-digit:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 1px #2563eb;
+}
+
+/* ─── Sidebar ───────────────────────────────────────────────────────────── */
+
+nav a.active {
+    background-color: #eff6ff;
+    color: #2563eb;
+    font-weight: 500;
+    border-left: 2px solid #2563eb;
+}
+
+/* ─── Scrollbar Styling ─────────────────────────────────────────────────── */
+
+#event-stream {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+#event-stream::-webkit-scrollbar,
+#cmd-k-results::-webkit-scrollbar {
+    width: 6px;
+}
+
+#event-stream::-webkit-scrollbar-track,
+#cmd-k-results::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#event-stream::-webkit-scrollbar-thumb,
+#cmd-k-results::-webkit-scrollbar-thumb {
+    background-color: #d4d4d8;
+    border-radius: 3px;
+}
+
+/* ─── Kanban Columns ────────────────────────────────────────────────────── */
+
+.kanban-column {
+    min-height: 400px;
+}
+
+/* Drag-drop visual feedback */
+.kanban-card.dragging {
+    opacity: 0.5;
+    transform: rotate(2deg);
+}
+
+.kanban-column.drag-over {
+    background-color: #eff6ff;
+    border-color: #2563eb;
+}
+
+/* ─── Sparkline (Dashboard) ─────────────────────────────────────────────── */
+
+.sparkline-container {
+    height: 24px;
+    width: 100%;
+    position: relative;
+}
+
+.sparkline-container svg {
+    width: 100%;
+    height: 100%;
+}
+
+.sparkline-point {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: #2563eb;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+}
+
+.sparkline-container:hover .sparkline-point {
+    opacity: 1;
+}
+
+.sparkline-tooltip {
+    position: absolute;
+    background: #18181b;
+    color: white;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    margin-top: -8px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.sparkline-container:hover .sparkline-tooltip {
+    opacity: 1;
+}
+
+/* ─── Persona Progress Bar (Agents page) ────────────────────────────────── */
+
+.persona-progress {
+    height: 4px;
+    background: #e4e4e7;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.persona-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease-out;
+}
+
+.persona-progress-fill.status-running {
+    background: #2563eb;
+}
+
+.persona-progress-fill.status-complete {
+    background: #16a34a;
+}
+
+.persona-progress-fill.status-error {
+    background: #dc2626;
+}
+
+/* ─── Skeleton Loading ──────────────────────────────────────────────────── */
+
+@keyframes skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.skeleton {
+    background: #e4e4e7;
+    border-radius: 4px;
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+/* ─── Error State ───────────────────────────────────────────────────────── */
+
+details summary {
+    list-style: none;
+}
+
+details summary::-webkit-details-marker {
+    display: none;
+}
+
+details summary::before {
+    content: "▸ ";
+    font-size: 10px;
+}
+
+details[open] summary::before {
+    content: "▾ ";
+}
+
+/* ─── Print Styles (hidden — desktop tool, not for print) ───────────────── */
+
+@media print {
+    body { display: none; }
+}

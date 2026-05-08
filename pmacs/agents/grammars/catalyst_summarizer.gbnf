@@ -1,0 +1,21 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string ws "," ws "\"catalysts\"" ws ":" ws catalyst-array ws "," ws "\"net_catalyst_outlook\"" ws ":" ws string ws "," ws "\"p_up\"" ws ":" ws number ws "," ws "\"p_flat\"" ws ":" ws number ws "," ws "\"p_down\"" ws ":" ws number ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
+
+catalyst-array ::= "[" ws catalyst-entry (ws "," ws catalyst-entry)* ws "]"
+
+catalyst-entry ::= "{" ws "\"catalyst_type\"" ws ":" ws catalyst-type-val ws "," ws "\"description\"" ws ":" ws string ws "," ws "\"expected_date\"" ws ":" ws (string | null) ws "," ws "\"status\"" ws ":" ws status-val ws "," ws "\"thesis_impact\"" ws ":" ws impact-val ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
+
+catalyst-type-val ::= "\"earnings\"" | "\"fda_decision\"" | "\"product_launch\"" | "\"regulatory_ruling\"" | "\"ma_close\"" | "\"partnership\"" | "\"guidance_update\""
+
+status-val ::= "\"PENDING\"" | "\"RESOLVED_UP\"" | "\"RESOLVED_DOWN\"" | "\"RESOLVED_FLAT\"" | "\"RESOLVED_MIXED\""
+
+impact-val ::= "\"STRONGLY_POSITIVE\"" | "\"POSITIVE\"" | "\"NEUTRAL\"" | "\"NEGATIVE\"" | "\"STRONGLY_NEGATIVE\""
+
+null ::= "null"
+
+evidence-array ::= "[" ws string (ws "," ws string)* ws "]"
+
+ws ::= [ \t\n\r]?
+
+string ::= "\"" [^"\\]* "\""
+
+number ::= "-"? ([0-9]+ ("." [0-9]+)?)  |  ("." [0-9]+)

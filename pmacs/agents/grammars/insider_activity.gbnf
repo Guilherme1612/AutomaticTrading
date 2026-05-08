@@ -1,0 +1,10 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"transactions\"" ws ":" ws transaction_array "," ws "\"signal\"" ws ":" ws signal "," ws "\"signal_reasoning\"" ws ":" ws string "," ws "\"p_up\"" ws ":" ws number "," ws "\"p_flat\"" ws ":" ws number "," ws "\"p_down\"" ws ":" ws number "," ws "\"evidence_ids\"" ws ":" ws string_array ws "}"
+transaction ::= "{" ws "\"insider_name\"" ws ":" ws string "," ws "\"insider_role\"" ws ":" ws string "," ws "\"transaction_type\"" ws ":" ws tx_type "," ws "\"amount_usd\"" ws ":" ws number "," ws "\"shares\"" ws ":" ws integer "," ws "\"date\"" ws ":" ws string "," ws "\"evidence_id\"" ws ":" ws string ws "}"
+tx_type ::= "\"OPEN_MARKET_BUY\"" | "\"OPEN_MARKET_SELL\"" | "\"OPTION_EXERCISE\"" | "\"10B5_1_SELL\"" | "\"GIFT\"" | "\"OTHER\""
+signal ::= "\"CLUSTER_BUY\"" | "\"CLUSTER_SELL\"" | "\"LARGE_BUY\"" | "\"LARGE_SELL\"" | "\"CEO_BUY\"" | "\"ROUTINE\"" | "\"NO_SIGNAL\"" | "\"INSUFFICIENT_DATA\""
+ws ::= [ \t\n]*
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+integer ::= [0-9]+
+string ::= "\"" [^"]* "\""
+transaction_array ::= "[" ws (transaction ("," ws transaction)*)? ws "]"
+string_array ::= "[" ws (string ("," ws string)*)? ws "]"

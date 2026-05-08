@@ -1,0 +1,29 @@
+<!-- Loading state component (Source.md §13.4) -->
+<!-- Usage: {% include "components/loading_state.html" %} -->
+<!-- Context variables: loading_what, loading_eta_seconds -->
+<!-- No spinners. Shows WHAT is loading + ETA. Skeleton placeholders. -->
+
+<div class="flex flex-col items-center justify-center py-12 text-center" role="status" aria-live="polite">
+    <div class="w-full max-w-md space-y-4 mb-4">
+        <!-- Skeleton placeholder mimicking content shape -->
+        <div class="h-8 bg-zinc-200 rounded animate-pulse w-3/4 mx-auto"></div>
+        <div class="h-4 bg-zinc-100 rounded animate-pulse w-1/2 mx-auto"></div>
+        <div class="grid grid-cols-3 gap-3">
+            <div class="h-20 bg-zinc-100 rounded animate-pulse"></div>
+            <div class="h-20 bg-zinc-100 rounded animate-pulse"></div>
+            <div class="h-20 bg-zinc-100 rounded animate-pulse"></div>
+        </div>
+        <div class="h-32 bg-zinc-100 rounded animate-pulse"></div>
+    </div>
+    <p class="text-sm text-zinc-600 font-medium">
+        {{ loading_what | default("Loading data") }}
+        {% if loading_eta_seconds %}
+        <span class="text-zinc-400">&mdash; estimated {{ loading_eta_seconds }}s remaining</span>
+        {% endif %}
+    </p>
+    {% if loading_eta_seconds and loading_eta_seconds > 30 %}
+    <button onclick="cancelLoading()" class="mt-3 px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 rounded transition-colors">
+        Cancel
+    </button>
+    {% endif %}
+</div>

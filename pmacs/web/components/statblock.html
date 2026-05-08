@@ -1,0 +1,10 @@
+{# StatBlock partial. Pass: stat_label, stat_value, stat_unit, stat_color #}
+<div class="flex flex-col items-center p-4">
+    <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">{{ stat_label }}</span>
+    <span class="mt-1 text-2xl font-mono font-semibold {{ stat_color | default('text-zinc-900') }}">
+        {{ stat_value }}
+    </span>
+    {% if stat_unit %}
+    <span class="text-xs text-zinc-400 font-mono">{{ stat_unit }}</span>
+    {% endif %}
+</div>

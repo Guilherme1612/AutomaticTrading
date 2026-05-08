@@ -1,0 +1,11 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"attacks\"" ws ":" ws attack_array "," ws "\"attack_count\"" ws ":" ws integer "," ws "\"severity\"" ws ":" ws number "," ws "\"thesis_survives\"" ws ":" ws bool "," ws "\"summary\"" ws ":" ws string "," ws "\"rewrite_cycle\"" ws ":" ws integer ws "}"
+attack ::= "{" ws "\"attack_type\"" ws ":" ws attack_type "," ws "\"severity\"" ws ":" ws number "," ws "\"description\"" ws ":" ws string "," ws "\"evidence_ids\"" ws ":" ws string_array ("," ws "\"missing_evidence\"" ws ":" ws (string | null))? ws "}"
+attack_type ::= "\"LOGICAL_HOLE\"" | "\"CITATION_GAP\"" | "\"COUNTERARGUMENT\"" | "\"OVERLOOKED_RISK\"" | "\"BASE_RATE_NEGLECT\""
+bool ::= "true" | "false"
+null ::= "null"
+ws ::= [ \t\n]*
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+integer ::= [0-9]+
+string ::= "\"" [^"]* "\""
+attack_array ::= "[" ws (attack ("," ws attack)*)? ws "]"
+string_array ::= "[" ws (string ("," ws string)*)? ws "]"

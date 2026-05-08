@@ -1,0 +1,8 @@
+{# TickerChip partial. Pass: ticker, verdict (optional), color (optional) #}
+<span class="inline-flex items-center px-2 py-0.5 text-xs font-mono font-medium rounded
+             {{ 'bg-' + (color | default('zinc')) + '-100 text-' + (color | default('zinc')) + '-700' }}">
+    {{ ticker }}
+    {% if verdict %}
+    <span class="ml-1 opacity-60">{{ verdict }}</span>
+    {% endif %}
+</span>

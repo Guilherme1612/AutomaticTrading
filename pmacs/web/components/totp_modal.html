@@ -1,0 +1,18 @@
+{# TOTP modal component — included in base.html #}
+<div id="totp-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-sm border border-zinc-200 p-6">
+        <h3 class="text-lg font-semibold mb-4">TOTP Verification Required</h3>
+        <p class="text-sm text-zinc-600 mb-4">Enter your 6-digit TOTP code to confirm this action.</p>
+        <div class="flex gap-2 justify-center mb-4" id="totp-digits">
+            {% for i in range(6) %}
+            <input type="text" maxlength="1" pattern="[0-9]"
+                   class="totp-digit w-10 h-12 text-center text-xl font-mono border border-zinc-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                   data-index="{{ i }}">
+            {% endfor %}
+        </div>
+        <div class="flex gap-3 justify-end">
+            <button onclick="closeTotpModal()" class="px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded">Cancel</button>
+            <button onclick="submitTotp()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Verify</button>
+        </div>
+    </div>
+</div>

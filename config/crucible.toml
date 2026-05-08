@@ -1,0 +1,10 @@
+[time_budget]
+seconds_per_attack = 90
+max_cycles = 2
+
+[defaults]
+temperature = 0.1
+default_verdict = "NO_TRADE"
+
+[severity]
+no_trade_threshold = 0.6

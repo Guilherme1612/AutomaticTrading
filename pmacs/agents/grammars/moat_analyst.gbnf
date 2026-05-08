@@ -1,0 +1,19 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string ws "," ws "\"moat_components\"" ws ":" ws component-array ws "," ws "\"moat_strength\"" ws ":" ws number ws "," ws "\"competitive_entry_risk\"" ws ":" ws risk-val ws "," ws "\"competitive_entry_reasoning\"" ws ":" ws string ws "," ws "\"p_up\"" ws ":" ws number ws "," ws "\"p_flat\"" ws ":" ws number ws "," ws "\"p_down\"" ws ":" ws number ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
+
+component-array ::= "[" ws component-entry (ws "," ws component-entry)* ws "]"
+
+component-entry ::= "{" ws "\"moat_type\"" ws ":" ws moat-type-val ws "," ws "\"strength\"" ws ":" ws number ws "," ws "\"trajectory\"" ws ":" ws trajectory-val ws "," ws "\"reasoning\"" ws ":" ws string ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
+
+moat-type-val ::= "\"NETWORK_EFFECTS\"" | "\"SWITCHING_COSTS\"" | "\"INTANGIBLE_ASSETS\"" | "\"COST_ADVANTAGE\"" | "\"EFFICIENT_SCALE\"" | "\"DATA_ADVANTAGE\""
+
+trajectory-val ::= "\"WIDENING\"" | "\"STABLE\"" | "\"NARROWING\""
+
+risk-val ::= "\"LOW\"" | "\"MODERATE\"" | "\"HIGH\""
+
+evidence-array ::= "[" ws string (ws "," ws string)* ws "]"
+
+ws ::= [ \t\n\r]?
+
+string ::= "\"" [^"\\]* "\""
+
+number ::= "-"? ([0-9]+ ("." [0-9]+)?)  |  ("." [0-9]+)

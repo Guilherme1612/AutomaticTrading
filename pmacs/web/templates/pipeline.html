@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Pipeline{% endblock %}
+
+{% block content %}
+<!-- Top filter bar -->
+<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4">
+            <h3 class="text-sm font-semibold text-zinc-900">Pipeline</h3>
+            <span class="text-xs text-zinc-400 font-mono">Queue: {{ queue_size }} | Cycles today: {{ cycles_today }}</span>
+        </div>
+        <div class="flex gap-2">
+            <input type="text" placeholder="Filter tickers..."
+                   data-page-search
+                   class="px-3 py-1.5 text-sm border border-zinc-200 rounded focus:border-blue-500 outline-none">
+            <select class="px-3 py-1.5 text-sm border border-zinc-200 rounded bg-white">
+                <option>All Verdicts</option>
+                <option>STRONG_BUY</option>
+                <option>BUY</option>
+                <option>HOLD</option>
+                <option>SKIP</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- Kanban: 4 verdict columns -->
+<div class="grid grid-cols-4 gap-4">
+    {% for col in columns %}
+    <div class="min-h-[500px] kanban-column"
+         ondragover="onDragOver(event)"
+         ondragleave="onDragLeave(event)"
+         ondrop="onDrop(event, '{{ col.verdict }}')">
+        <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold
+                       {{ 'text-green-600' if col.verdict == 'STRONG_BUY' else '' }}
+                       {{ 'text-blue-600' if col.verdict == 'BUY' else '' }}
+                       {{ 'text-amber-600' if col.verdict == 'HOLD' else '' }}
+                       {{ 'text-red-600' if col.verdict == 'SKIP' else '' }}">
+                {{ col.verdict }}
+            </h4>
+            <span class="text-xs text-zinc-400">{{ col.cards | length }}</span>
+        </div>
+        <div class="space-y-3">
+            {% for item in col.cards %}
+            <div class="bg-white border border-zinc-200 rounded-lg p-4 kanban-card"
+                 draggable="true"
+                 ondragstart="onDragStart(event)"
+                 ondragend="onDragEnd(event)"
+                 data-ticker="{{ item.ticker }}"
+                 data-verdict="{{ col.verdict }}">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="font-mono font-semibold text-sm">{{ item.ticker }}</span>
+                    <span class="text-xs font-mono text-zinc-400">{{ item.conviction }}</span>
+                </div>
+                <p class="text-xs text-zinc-500">{{ item.thesis | truncate(80) }}</p>
+                <div class="mt-2 text-xs text-zinc-400 font-mono">{{ item.timestamp }}</div>
+                <div class="flex items-center gap-1 mt-2">
+                    <span class="text-xs px-1.5 py-0.5 rounded
+                                 {{ 'bg-red-50 text-red-600' if item.priority == 'HIGH' else '' }}
+                                 {{ 'bg-amber-50 text-amber-600' if item.priority == 'MEDIUM' else '' }}
+                                 {{ 'bg-zinc-100 text-zinc-500' if item.priority == 'LOW' or not item.priority else '' }}">
+                        {{ item.priority | default('LOW') }}
+                    </span>
+                </div>
+                {% if col.verdict == 'SKIP' %}
+                <button onclick="showToast('Queuing {{ item.ticker }} for next cycle (P1 priority)', 'info')"
+                        class="mt-2 px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                    Run again now
+                </button>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="border-2 border-dashed border-zinc-200 rounded-lg p-8 text-center">
+                <p class="text-sm text-zinc-400">No items</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+function onDragStart(e) {
+    e.target.classList.add('dragging');
+    e.dataTransfer.setData('text/plain', e.target.getAttribute('data-ticker'));
+}
+function onDragEnd(e) {
+    e.target.classList.remove('dragging');
+}
+function onDragOver(e) {
+    e.preventDefault();
+    e.currentTarget.classList.add('drag-over');
+}
+function onDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+}
+function onDrop(e, verdict) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    var ticker = e.dataTransfer.getData('text/plain');
+    // TODO: POST to pmacs-nervous to update priority/verdict
+    console.log('Move', ticker, 'to', verdict);
+}
+</script>
+{% endblock %}

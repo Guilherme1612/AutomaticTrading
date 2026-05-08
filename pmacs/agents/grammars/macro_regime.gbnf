@@ -1,0 +1,15 @@
+root ::= "{" ws "\"regime\"" ws ":" ws regime-val ws "," ws "\"regime_confidence\"" ws ":" ws number ws "," ws "\"regime_reasoning\"" ws ":" ws string ws "," ws "\"yield_curve_signal\"" ws ":" ws yield-val ws "," ws "\"vix_regime\"" ws ":" ws vix-val ws "," ws "\"sector_rotation_summary\"" ws ":" ws string ws "," ws "\"p_up\"" ws ":" ws number ws "," ws "\"p_flat\"" ws ":" ws number ws "," ws "\"p_down\"" ws ":" ws number ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
+
+regime-val ::= "\"EXPANSION\"" | "\"LATE_CYCLE\"" | "\"CONTRACTION\"" | "\"RECOVERY\"" | "\"REGIME_SHIFT\"" | "\"UNCERTAIN\""
+
+yield-val ::= "\"NORMAL\"" | "\"FLAT\"" | "\"INVERTED\""
+
+vix-val ::= "\"LOW\"" | "\"MODERATE\"" | "\"ELEVATED\"" | "\"CRISIS\""
+
+evidence-array ::= "[" ws string (ws "," ws string)* ws "]"
+
+ws ::= [ \t\n\r]?
+
+string ::= "\"" [^"\\]* "\""
+
+number ::= "-"? ([0-9]+ ("." [0-9]+)?)  |  ("." [0-9]+)

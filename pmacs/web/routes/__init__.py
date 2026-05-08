@@ -1,0 +1,1 @@
+"""PMACS Dashboard route modules."""

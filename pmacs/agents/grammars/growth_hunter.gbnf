@@ -1,0 +1,9 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"revenue_yoy_pct\"" ws ":" ws (number | "null") "," ws "\"revenue_acceleration\"" ws ":" ws accel "," ws "\"gross_margin_pct\"" ws ":" ws (number | "null") "," ws "\"gross_margin_trend\"" ws ":" ws trend "," ws "\"tam_penetration_pct\"" ws ":" ws (number | "null") "," ws "\"growth_durability\"" ws ":" ws durability "," ws "\"growth_durability_reasoning\"" ws ":" ws string "," ws "\"key_risk_to_growth\"" ws ":" ws string "," ws "\"p_up\"" ws ":" ws number "," ws "\"p_flat\"" ws ":" ws number "," ws "\"p_down\"" ws ":" ws number "," ws "\"evidence_ids\"" ws ":" ws string_array ws "}"
+accel ::= "\"ACCELERATING\"" | "\"STABLE\"" | "\"DECELERATING\"" | "\"UNKNOWN\""
+trend ::= "\"EXPANDING\"" | "\"STABLE\"" | "\"CONTRACTING\"" | "\"UNKNOWN\""
+durability ::= "\"HIGH\"" | "\"MODERATE\"" | "\"LOW\"" | "\"UNKNOWN\""
+ws ::= [ \t\n]*
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+string ::= "\"" [^"]* "\""
+string-array-item ::= string
+string_array ::= "[" ws (string-array-item ("," ws string-array-item)*)? ws "]"

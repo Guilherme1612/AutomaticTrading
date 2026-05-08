@@ -1,0 +1,53 @@
+<!-- Error state component (Source.md §13.4) -->
+<!-- Usage: {% include "components/error_state.html" %} -->
+<!-- Context variables: error_code, error_description, error_explanation, error_actions, error_spec_ref -->
+<!-- Surfaces: error code, one-sentence description, "What this means" expander, "What to try", "Copy for Claude Code" button, spec link -->
+
+<div class="bg-red-50 border border-red-200 rounded-lg p-6" role="alert">
+    <!-- Header: error code + description -->
+    <div class="flex items-start gap-3 mb-3">
+        <svg class="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div>
+            <div class="flex items-center gap-2">
+                <span class="font-mono text-xs text-red-600 bg-red-100 px-1.5 py-0.5 rounded">{{ error_code | default("UNKNOWN") }}</span>
+            </div>
+            <p class="text-sm text-zinc-900 mt-1">{{ error_description | default("An unexpected error occurred.") }}</p>
+        </div>
+    </div>
+
+    <!-- What this means (expander) -->
+    {% if error_explanation %}
+    <details class="mb-3">
+        <summary class="text-xs text-zinc-600 cursor-pointer hover:text-zinc-900">What this means</summary>
+        <p class="text-xs text-zinc-600 mt-2 pl-4">{{ error_explanation }}</p>
+    </details>
+    {% endif %}
+
+    <!-- What to try -->
+    {% if error_actions %}
+    <div class="mb-3">
+        <p class="text-xs font-medium text-zinc-700 mb-1">What to try:</p>
+        <ul class="text-xs text-zinc-600 space-y-1 pl-4 list-disc">
+            {% for action in error_actions %}
+            <li>{{ action }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <!-- Actions row -->
+    <div class="flex items-center gap-3 pt-2 border-t border-red-100">
+        <button onclick="copyForClaudeCode(this)"
+                class="px-3 py-1.5 text-xs text-zinc-600 hover:bg-white rounded transition-colors"
+                data-error-code="{{ error_code | default('') }}"
+                data-error-description="{{ error_description | default('') }}"
+                data-error-explanation="{{ error_explanation | default('') }}">
+            Copy for Claude Code
+        </button>
+        {% if error_spec_ref %}
+        <a href="{{ error_spec_ref }}" class="text-xs text-blue-600 hover:underline" target="_blank">View in spec</a>
+        {% endif %}
+    </div>
+</div>

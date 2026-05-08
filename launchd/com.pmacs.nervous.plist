@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pmacs.nervous</string>
+
+    <key>UserName</key>
+    <string>_pmacs_nervous</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>python3</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>pmacs.nervous.api:app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8000</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/var/pmacs</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PMACS_HOME</key>
+        <string>/usr/local/var/pmacs</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/pmacs/nervous-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/pmacs/nervous-stderr.log</string>
+</dict>
+</plist>

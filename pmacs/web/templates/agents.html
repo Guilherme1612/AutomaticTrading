@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Agents{% endblock %}
+
+{% block content %}
+{% if not current_ticker %}
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 flex items-center justify-between">
+    <span class="text-sm text-blue-700">No active cycle. Showing last completed cycle.</span>
+    <button onclick="runCycleNow()" class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Run new cycle</button>
+</div>
+{% endif %}
+
+<!-- Queue strip -->
+<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
+    <div class="flex items-center gap-4">
+        <h3 class="text-sm font-semibold text-zinc-900">Queue</h3>
+        <div class="flex gap-2">
+            {% if queue %}
+                {% for item in queue %}
+                <span class="px-2 py-1 text-xs font-mono bg-zinc-100 rounded">{{ item }}</span>
+                {% endfor %}
+            {% else %}
+                <span class="text-sm text-zinc-400">Empty</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Current ticker panel -->
+<div class="bg-white border border-zinc-200 rounded-lg p-6 mb-6">
+    <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-zinc-900">Current Analysis</h3>
+        {% if current_ticker %}
+        <span class="font-mono text-lg font-semibold text-blue-600">{{ current_ticker }}</span>
+        {% else %}
+        <span class="text-sm text-zinc-400">No ticker in progress</span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 9 persona cards in a row -->
+<div class="grid grid-cols-3 gap-4 mb-6">
+    {% for persona in personas %}
+    <div class="bg-white border border-zinc-200 rounded-lg p-5">
+        <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-zinc-900">{{ persona.name }}</h4>
+            <span class="px-1.5 py-0.5 text-xs rounded {{ 'bg-green-100 text-green-700' if loop.index <= 3 else 'bg-zinc-100 text-zinc-500' }}">
+                {{ 'ready' if loop.index <= 3 else 'idle' }}
+            </span>
+        </div>
+        <p class="text-xs text-zinc-500 mb-3">{{ persona.role }}</p>
+        <div class="border-t border-zinc-100 pt-3">
+            {% if persona.status == 'running' %}
+            <div class="persona-progress mb-2">
+                <div class="persona-progress-fill status-running" style="width: {{ persona.progress | default(0) }}%"></div>
+            </div>
+            <p class="text-xs text-zinc-500">Analyzing...</p>
+            {% elif persona.status == 'complete' %}
+            <div class="persona-progress mb-2">
+                <div class="persona-progress-fill status-complete" style="width: 100%"></div>
+            </div>
+            <div class="flex gap-2 text-xs font-mono">
+                <span class="text-green-600">↑{{ persona.p_up | default('—') }}</span>
+                <span class="text-zinc-400">→{{ persona.p_flat | default('—') }}</span>
+                <span class="text-red-500">↓{{ persona.p_down | default('—') }}</span>
+            </div>
+            {% elif persona.status == 'error' %}
+            <div class="persona-progress mb-2">
+                <div class="persona-progress-fill status-error" style="width: 100%"></div>
+            </div>
+            <p class="text-xs text-red-500">Error — see debug log</p>
+            {% else %}
+            <p class="text-xs text-zinc-400">Waiting for cycle...</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Bottom section: communication layer + decision summary + cycle log -->
+<div class="grid grid-cols-3 gap-6">
+    <!-- Communication layer viz -->
+    <div class="col-span-2 bg-white border border-zinc-200 rounded-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-zinc-900">Communication Layer</h3>
+            <div class="flex gap-1">
+                <button class="px-2.5 py-1 text-xs rounded bg-blue-50 text-blue-600 border border-blue-200"
+                        onclick="switchVizView('process')">Process</button>
+                <button class="px-2.5 py-1 text-xs rounded bg-zinc-100 text-zinc-500 hover:bg-zinc-200"
+                        onclick="switchVizView('network')">Network</button>
+                <button class="px-2.5 py-1 text-xs rounded bg-zinc-100 text-zinc-500 hover:bg-zinc-200"
+                        onclick="switchVizView('math')">Math</button>
+            </div>
+        </div>
+
+        <!-- Process view (default) -->
+        <div id="viz-process" class="h-64">
+            <div class="flex items-center gap-2 text-xs text-zinc-400 overflow-x-auto">
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Evidence</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Personas</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Arbitration</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Crucible</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Sizing</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-zinc-100 border">Risk Gate</span>
+                <span>→</span>
+                <span class="px-3 py-1.5 rounded bg-blue-100 border border-blue-200 text-blue-600">Verdict</span>
+            </div>
+            <p class="text-xs text-zinc-400 mt-4 text-center">Stages fill with results as the cycle progresses.</p>
+        </div>
+
+        <!-- Network view (Sankey — D3) -->
+        <div id="viz-network" class="h-64 hidden">
+            <div id="sankey-viz" class="w-full h-full flex items-center justify-center text-sm text-zinc-400">
+                Sankey diagram renders during active cycle (requires D3 + cycle data)
+            </div>
+        </div>
+
+        <!-- Math view -->
+        <div id="viz-math" class="h-64 hidden overflow-y-auto text-xs font-mono space-y-2">
+            <div>
+                <span class="text-zinc-500">Per-persona outputs:</span>
+                <div class="ml-2 text-zinc-400" id="math-personas">Waiting for persona outputs...</div>
+            </div>
+            <div>
+                <span class="text-zinc-500">Arbitration:</span>
+                <div class="ml-2 text-zinc-400" id="math-arbitration">p_up = Σ(weight_i × p_up_i) / Σ(weight_i)</div>
+            </div>
+            <div>
+                <span class="text-zinc-500">Conviction:</span>
+                <div class="ml-2 text-zinc-400" id="math-conviction">conviction = f(arbitrated, evidence_strength, crucible_severity)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Decision summary rail -->
+    <div class="bg-white border border-zinc-200 rounded-lg p-6">
+        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Decision Summary</h3>
+        <p class="text-sm text-zinc-400 text-center py-8">No decisions this cycle</p>
+    </div>
+</div>
+
+<!-- Cycle log strip -->
+<div class="bg-white border border-zinc-200 rounded-lg p-4 mt-6">
+    <h3 class="text-sm font-semibold text-zinc-900 mb-2">Cycle Log</h3>
+    {% if cycle_log %}
+    <div class="space-y-1 max-h-32 overflow-y-auto">
+        {% for entry in cycle_log %}
+        <div class="text-xs font-mono text-zinc-500">{{ entry }}</div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-zinc-400">No cycle history</p>
+    {% endif %}
+</div>
+
+<script>
+function switchVizView(view) {
+    ['process', 'network', 'math'].forEach(function(v) {
+        var el = document.getElementById('viz-' + v);
+        if (el) el.classList.toggle('hidden', v !== view);
+    });
+}
+</script>
+{% endblock %}

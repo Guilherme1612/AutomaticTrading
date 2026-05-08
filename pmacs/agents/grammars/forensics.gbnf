@@ -1,0 +1,10 @@
+root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"red_flags\"" ws ":" ws red_flag_array "," ws "\"red_flag_count\"" ws ":" ws integer "," ws "\"overall_accounting_quality\"" ws ":" ws quality "," ws "\"p_up\"" ws ":" ws number "," ws "\"p_flat\"" ws ":" ws number "," ws "\"p_down\"" ws ":" ws number "," ws "\"evidence_ids\"" ws ":" ws string_array ws "}"
+red_flag ::= "{" ws "\"category\"" ws ":" ws category "," ws "\"severity\"" ws ":" ws number "," ws "\"description\"" ws ":" ws string "," ws "\"evidence_ids\"" ws ":" ws string_array ws "}"
+category ::= "\"REVENUE_QUALITY\"" | "\"EARNINGS_QUALITY\"" | "\"CASH_FLOW_DIVERGENCE\"" | "\"RELATED_PARTY\"" | "\"AUDITOR_FLAGS\"" | "\"DSO_DPO_ANOMALY\"" | "\"MARGIN_ANOMALY\"" | "\"GOODWILL_RISK\""
+quality ::= "\"CLEAN\"" | "\"MINOR_CONCERNS\"" | "\"MATERIAL_CONCERNS\"" | "\"SEVERE_RISK\"" | "\"INSUFFICIENT_DATA\""
+ws ::= [ \t\n]*
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+integer ::= [0-9]+
+string ::= "\"" [^"]* "\""
+red_flag_array ::= "[" ws (red_flag ("," ws red_flag)*)? ws "]"
+string_array ::= "[" ws (string ("," ws string)*)? ws "]"

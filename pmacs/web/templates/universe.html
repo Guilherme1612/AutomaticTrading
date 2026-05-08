@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Universe{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
+    <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-zinc-900">Ticker Universe</h3>
+        <div class="flex gap-2">
+            <button class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                Add Ticker
+            </button>
+            <button class="px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
+                Bulk Actions
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Group tabs -->
+<div class="flex gap-2 mb-6">
+    {% for group in groups %}
+    <button class="px-3 py-1.5 text-sm rounded transition-colors
+                   {{ 'bg-blue-50 text-blue-600 font-medium' if loop.first else 'text-zinc-500 hover:bg-zinc-100' }}">
+        {{ group }}
+    </button>
+    {% endfor %}
+</div>
+
+<!-- Ticker list -->
+<div class="bg-white border border-zinc-200 rounded-lg overflow-hidden">
+    {% if tickers %}
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-zinc-500 bg-zinc-50 border-b border-zinc-200">
+                <th class="px-4 py-3 font-medium">
+                    <input type="checkbox" class="rounded border-zinc-300">
+                </th>
+                <th class="px-4 py-3 font-medium">Ticker</th>
+                <th class="px-4 py-3 font-medium">Name</th>
+                <th class="px-4 py-3 font-medium">Sector</th>
+                <th class="px-4 py-3 font-medium">Status</th>
+                <th class="px-4 py-3 font-medium">Last Cycle</th>
+                <th class="px-4 py-3 font-medium">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in tickers %}
+            <tr class="border-b border-zinc-100 hover:bg-zinc-50">
+                <td class="px-4 py-3"><input type="checkbox" class="rounded border-zinc-300"></td>
+                <td class="px-4 py-3 font-mono font-medium">{{ t.symbol }}</td>
+                <td class="px-4 py-3">{{ t.name }}</td>
+                <td class="px-4 py-3">{{ t.sector }}</td>
+                <td class="px-4 py-3">
+                    <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">{{ t.status }}</span>
+                </td>
+                <td class="px-4 py-3 font-mono text-zinc-400">{{ t.last_cycle }}</td>
+                <td class="px-4 py-3">
+                    <button class="text-xs text-blue-600 hover:underline">Remove</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="p-12 text-center">
+        <p class="text-sm text-zinc-400 mb-4">No tickers in universe</p>
+        <button class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+            Add your first ticker
+        </button>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

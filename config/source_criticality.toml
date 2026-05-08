@@ -1,0 +1,55 @@
+# CRITICAL: stale data aborts the ticker
+# IMPORTANT: stale data degrades with warning
+# NICE_TO_HAVE: stale data proceeds silently
+
+[sources.edgar]
+criticality = "CRITICAL"
+staleness_budget_seconds = 86400
+
+[sources.polygon]
+criticality = "CRITICAL"
+staleness_budget_seconds = 300
+
+[sources.finnhub]
+criticality = "CRITICAL"
+staleness_budget_seconds = 300
+
+[sources.alpaca_data]
+criticality = "CRITICAL"
+staleness_budget_seconds = 300
+
+[sources.openfda]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 86400
+
+[sources.finra]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 86400
+
+[sources.form4]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 86400
+
+[sources.ir_pages]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 604800
+
+[sources.press]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 86400
+
+[sources.fomc]
+criticality = "NICE_TO_HAVE"
+staleness_budget_seconds = 604800
+
+[sources.fred]
+criticality = "NICE_TO_HAVE"
+staleness_budget_seconds = 86400
+
+[sources.ecb]
+criticality = "NICE_TO_HAVE"
+staleness_budget_seconds = 86400
+
+[sources.fundamentals]
+criticality = "IMPORTANT"
+staleness_budget_seconds = 86400

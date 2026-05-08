@@ -1,0 +1,21 @@
+[activation]
+min_paper_cycles = 50
+
+[recommendation]
+p_value_threshold = 0.05
+cohens_d_threshold = 0.20
+min_sample_size = 20
+
+[probation]
+cycles = 30
+
+[auto_rollback]
+window_cycles = 50
+
+[concurrent]
+max_ab_tests = 3
+
+[temperature]
+analysis = 0.2
+crucible = 0.1
+memo_writer = 0.3

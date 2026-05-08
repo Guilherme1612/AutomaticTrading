@@ -1,7 +1,8 @@
 """Structured JSONL debug log (Architecture.md §5).
 
 Every WARN+ requires error_code from §5.5 registry.
-cycle_id required on cycle-scoped events.
+cycle_id required on cycle-scoped events (Architecture.md §5.2).
+System-level events are exempt from cycle_id requirement.
 """
 
 from __future__ import annotations
@@ -25,6 +26,55 @@ class LogLevel(str, Enum):
 
 
 REQUIRES_ERROR_CODE = {LogLevel.WARN, LogLevel.ERROR}
+
+# System-level events where cycle_id=None is acceptable (Architecture.md §5.2).
+# These are process lifecycle / infrastructure events not scoped to a trading cycle.
+SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
+    # Process lifecycle
+    "PROCESS_START",
+    "PROCESS_SHUTDOWN",
+    "CORTEX_STARTING",
+    "CORTEX_DAEMON_STARTING",
+    "CORTEX_SHUTDOWN",
+    "CORTEX_STARTUP_CHECK",
+    "CORTEX_STARTUP_ALL_HEALTHY",
+    "CORTEX_STARTUP_STALE_PROCESSES",
+    "CORTEX_KILL_SWITCH_ENGAGED_LOOP",
+    "CORTEX_STALE_HEARTBEATS",
+    "CORTEX_TRIGGER_FIRED",
+    "SELF_CHECK_STARTING",
+    "SELF_CHECK_SHUTDOWN",
+    "SELF_CHECK_ERROR",
+    "SELF_CHECK_ENGAGED_KILL_SWITCH",
+    # Boot detection
+    "BOOT_DETECTED",
+    "BOOT_CYCLE_INITIATED",
+    "BOOT_CYCLE_INIT_FIRST_RUN",
+    "BOOT_CYCLE_INIT_NO_HISTORY",
+    "BOOT_CYCLE_SKIPPED_WEEKEND",
+    "BOOT_CYCLE_SKIPPED_BEFORE_EOD",
+    "BOOT_CYCLE_SKIPPED_RECENT",
+    "BOOT_CYCLE_LONG_GAP",
+    # Config / infrastructure
+    "CONFIG_LOADED",
+    "KILL_SWITCH_STATE",
+    "KILL_SWITCH_ENGAGED",
+    "KILL_SWITCH_DISENGAGED",
+    "KILL_SWITCH_ENGAGE_ALREADY_ENGAGED",
+    "KILL_SWITCH_DISENGAGE_TOTP_FAILED",
+    "KILL_SWITCH_MUTATION_REVIEW",
+    "CYCLE_OPEN_BLOCKED_KILL_SWITCH",
+    # Health monitoring
+    "PROCESS_HEARTBEAT_MISSED",
+    "DISK_SPACE_LOW",
+    "DISK_CHECK_FAILED",
+    "CLOCK_DRIFT_DETECTED",
+    "NTP_CHECK_SKIPPED",
+    "CRASH_LOOP_DETECTED",
+    "PROCESS_RESTART_RECORDED",
+    # Model integrity
+    "MODEL_INTEGRITY_CHECK",
+})
 
 # Module-level log file path (set during initialization)
 _log_path: Path | None = None
@@ -60,11 +110,13 @@ def log_debug(
         payload: Structured data for the event.
         level: Log severity (DEBUG/INFO/WARN/ERROR).
         error_code: Required for WARN and ERROR levels. Must be from §5.5 registry.
-        cycle_id: Required for cycle-scoped events.
+        cycle_id: Required for cycle-scoped events (Architecture.md §5.2).
+            System events in SYSTEM_EVENT_TYPES are exempt.
         msg: Human-readable message.
 
     Raises:
         ValueError: If error_code is missing for WARN+ or is not in the registry.
+        ValueError: If cycle_id is None for a non-system event (Architecture.md §5.2).
     """
     level = LogLevel(level) if isinstance(level, str) else level
 
@@ -80,6 +132,13 @@ def log_debug(
                 f"Invalid error_code '{error_code}'. Must be from §5.5 registry. "
                 f"Event: {event_type}"
             )
+
+    # Validate cycle_id requirement (Architecture.md §5.2)
+    if cycle_id is None and event_type not in SYSTEM_EVENT_TYPES:
+        raise ValueError(
+            f"cycle_id REQUIRED for cycle-scoped events (Architecture.md §5.2). "
+            f"Event: {event_type}. Either provide cycle_id or add event to SYSTEM_EVENT_TYPES."
+        )
 
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),

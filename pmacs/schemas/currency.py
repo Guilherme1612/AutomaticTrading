@@ -21,7 +21,10 @@ class FxRate(BaseModel):
     @model_validator(mode="after")
     def _no_eur_per_usd_field(self) -> "FxRate":
         # Guard: ensure no one adds eur_per_usd as a declared field (property is OK)
-        if "eur_per_usd" in self.model_fields:
+        if "eur_per_usd" in self.__class__.model_fields:
+            raise ValueError("Use usd_per_eur convention, not eur_per_usd (Architecture.md §16.8)")
+        # Belt-and-suspenders: also check model_dump() keys for any dynamic construction
+        if "eur_per_usd" in self.model_dump():
             raise ValueError("Use usd_per_eur convention, not eur_per_usd (Architecture.md §16.8)")
         return self
 

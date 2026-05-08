@@ -1,3 +1,7 @@
+// grammar: catalyst_summarizer
+// version: 1.0
+// spec: Agents.md §5
+
 root ::= "{" ws "\"ticker\"" ws ":" ws string ws "," ws "\"catalysts\"" ws ":" ws catalyst-array ws "," ws "\"net_catalyst_outlook\"" ws ":" ws string ws "," ws "\"p_up\"" ws ":" ws number ws "," ws "\"p_flat\"" ws ":" ws number ws "," ws "\"p_down\"" ws ":" ws number ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
 
 catalyst-array ::= "[" ws catalyst-entry (ws "," ws catalyst-entry)* ws "]"

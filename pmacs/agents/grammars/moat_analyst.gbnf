@@ -1,3 +1,7 @@
+// grammar: moat_analyst
+// version: 1.0
+// spec: Agents.md §6
+
 root ::= "{" ws "\"ticker\"" ws ":" ws string ws "," ws "\"moat_components\"" ws ":" ws component-array ws "," ws "\"moat_strength\"" ws ":" ws number ws "," ws "\"competitive_entry_risk\"" ws ":" ws risk-val ws "," ws "\"competitive_entry_reasoning\"" ws ":" ws string ws "," ws "\"p_up\"" ws ":" ws number ws "," ws "\"p_flat\"" ws ":" ws number ws "," ws "\"p_down\"" ws ":" ws number ws "," ws "\"evidence_ids\"" ws ":" ws evidence-array ws "}"
 
 component-array ::= "[" ws component-entry (ws "," ws component-entry)* ws "]"

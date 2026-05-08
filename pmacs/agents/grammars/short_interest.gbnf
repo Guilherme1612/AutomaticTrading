@@ -1,3 +1,7 @@
+// grammar: short_interest
+// version: 1.0
+// spec: Agents.md §9
+
 root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"short_pct_float\"" ws ":" ws (number | "null") "," ws "\"days_to_cover\"" ws ":" ws (number | "null") "," ws "\"short_change_pct\"" ws ":" ws (number | "null") "," ws "\"anomaly\"" ws ":" ws anomaly "," ws "\"anomaly_reasoning\"" ws ":" ws string "," ws "\"p_up\"" ws ":" ws number "," ws "\"p_flat\"" ws ":" ws number "," ws "\"p_down\"" ws ":" ws number "," ws "\"evidence_ids\"" ws ":" ws string_array ws "}"
 anomaly ::= "\"SPIKE_UP\"" | "\"SPIKE_DOWN\"" | "\"HIGH_SUSTAINED\"" | "\"NORMAL\"" | "\"INSUFFICIENT_DATA\""
 ws ::= [ \t\n]*

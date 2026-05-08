@@ -106,5 +106,26 @@ def execute_rollback(
 def flag_for_kill_switch_review(
     recent_promotions: list[str], max_flag: int = 3
 ) -> list[str]:
-    """Flag the N most recent promotions for kill-switch review."""
-    return recent_promotions[:max_flag]
+    """Flag the N most recent promotions for kill-switch review.
+
+    This function is called by pmacs.cortex.kill_switch when the kill switch
+    is engaged. It returns the proposals that should be flagged for operator
+    review. The actual kill switch integration happens via the Cortex process
+    (pmacs-cortex), not via a direct call from the mutation daemon.
+
+    Logs a MUTATION_FLAGGED_FOR_REVIEW debug event for each flagged proposal.
+    """
+    flagged = recent_promotions[:max_flag]
+
+    if flagged:
+        from pmacs.logsys import log_debug
+
+        log_debug(
+            "MUTATION_FLAGGED_FOR_REVIEW",
+            payload={"flagged_proposals": flagged, "total_promotions": len(recent_promotions)},
+            level="WARN",
+            error_code="MUTATION_FLAGGED_FOR_REVIEW",
+            msg=f"Kill switch review: {len(flagged)} mutations flagged",
+        )
+
+    return flagged

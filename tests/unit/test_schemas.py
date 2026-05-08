@@ -151,6 +151,36 @@ class TestCurrency:
         converted = eur_to_usd(usd_to_eur(original, fx), fx)
         assert abs(converted - original) < 1e-6
 
+    def test_eur_per_usd_field_rejected(self):
+        """Declaring eur_per_usd as a field in an FxRate subclass raises ValueError.
+
+        The validator catches anyone adding eur_per_usd as a declared field
+        (Architecture.md §16.8). Passing it via model_validate is ignored by
+        Pydantic (extra fields are not stored), so the validator ensures the
+        *schema definition* cannot contain the forbidden field.
+        """
+        from pmacs.schemas.currency import FxRate
+
+        # Verify the property works (derived, not stored)
+        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.utcnow())
+        assert "eur_per_usd" not in fx.model_dump()
+        assert "eur_per_usd" not in fx.__class__.model_fields
+
+        # Verify the property returns the inverse
+        assert abs(fx.eur_per_usd - 1.0 / 1.08) < 1e-6
+
+        # Verify model_validate ignores extra fields (Pydantic default)
+        fx2 = FxRate.model_validate({
+            "usd_per_eur": 1.08,
+            "eur_per_usd": 0.926,
+            "business_date": "2024-01-15",
+            "fetched_at": "2024-01-15T12:00:00",
+        })
+        # Extra field ignored, not stored
+        assert "eur_per_usd" not in fx2.model_dump()
+        # Property still returns correct value from usd_per_eur
+        assert abs(fx2.eur_per_usd - 1.0 / 1.08) < 1e-6
+
 
 class TestCatalysts:
     def test_catalyst_types(self):
@@ -237,6 +267,29 @@ class TestNoPydanticV1:
             source = inspect.getsource(mod)
             assert "pydantic.v1" not in source, f"Found pydantic.v1 in {modname}"
             assert "class Config:" not in source, f"Found class Config: in {modname}"
+
+
+class TestSchemaBoundary:
+    """Schemas must not import from engines, data, storage, or logsys (Architecture.md §1.2)."""
+
+    _FORBIDDEN_PREFIXES = ("from pmacs.engines", "from pmacs.data", "from pmacs.storage", "from pmacs.logsys")
+
+    def test_schema_engine_import_boundary(self):
+        """Verify schema modules do not import from engine/data/storage/logsys layers."""
+        import importlib
+        import pkgutil
+        import pmacs.schemas
+
+        for importer, modname, ispkg in pkgutil.walk_packages(
+            pmacs.schemas.__path__, pmacs.schemas.__name__ + "."
+        ):
+            mod = importlib.import_module(modname)
+            source = inspect.getsource(mod)
+            for forbidden in self._FORBIDDEN_PREFIXES:
+                assert forbidden not in source, (
+                    f"Found '{forbidden}' in {modname}. "
+                    f"Schemas import from pydantic and stdlib only (Architecture.md §1.2)"
+                )
 
 
 import inspect

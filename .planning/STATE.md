@@ -16,7 +16,7 @@
 - **Phase 8** — Polish (LIVE-READY)
 
 ## Test Summary
-- **714 tests pass**, 0 fail, 11 skip, 5 pre-existing errors (duckdb/cryptography modules)
+- **786 tests pass**, 0 fail, 11 skip
 
 ## Remaining Phases
 None. All 8 GSD phases complete.
@@ -34,3 +34,4 @@ None.
 | 2026-05-08 | Phase 8: UI foundation (HTMX, Cmd-K, shortcuts, notifications, states) | 0 regressions |
 | 2026-05-08 | Phase 8: Page polish (sparklines, Sankey, drag-drop, copy button) | 0 regressions |
 | 2026-05-08 | Phase 8: Profiling + documentation (operator_runbook.md) | 7 new tests |
+| 2026-05-08 | Apply Phase 1 review fixes (7 HIGH + key MEDIUM patches) | 786 pass (+72), 0 fail |

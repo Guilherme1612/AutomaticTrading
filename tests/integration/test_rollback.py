@@ -1,7 +1,9 @@
 """Integration tests for rollback safety levels (Agents.md §17.4)."""
 from __future__ import annotations
 
+import inspect
 import json
+import os
 import sqlite3
 
 import pytest
@@ -201,3 +203,71 @@ class TestRollbackLevel5KillSwitch:
         )
         # If we got here without exception, the wiring works
         assert True
+
+
+class TestMutationIsolation:
+    """Mutation process cannot write to model_registry.json (Agents.md §17.4 Level 1).
+
+    Structural enforcement: apply_candidate_to_registry lives in pmacs.nervous.mutation,
+    not in pmacs.mutation. The mutation daemon does NOT import it directly. Only the
+    nervous process (after TOTP verification) calls it.
+    """
+
+    def test_apply_candidate_not_in_mutation_package(self) -> None:
+        """apply_candidate_to_registry is NOT importable from pmacs.mutation."""
+        import importlib
+
+        # Verify it does NOT exist in the mutation package
+        mutation_mod = importlib.import_module("pmacs.mutation")
+        assert not hasattr(mutation_mod, "apply_candidate_to_registry")
+
+        # Verify it DOES exist in the nervous package
+        nervous_mod = importlib.import_module("pmacs.nervous.mutation")
+        assert hasattr(nervous_mod, "apply_candidate_to_registry")
+
+    def test_mutation_daemon_does_not_import_nervous_mutation(self) -> None:
+        """MutationDaemon does not import apply_candidate_to_registry."""
+        import ast
+
+        import pmacs.mutation.daemon as daemon_mod
+
+        source = inspect.getsource(daemon_mod)
+        tree = ast.parse(source)
+
+        imported_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imported_names.add(alias.name)
+                if node.module:
+                    imported_names.add(node.module)
+
+        assert "apply_candidate_to_registry" not in imported_names
+        assert "pmacs.nervous.mutation" not in imported_names
+
+    def test_filesystem_permission_enforcement(self, tmp_env) -> None:
+        """Writing to model_registry.json from restricted dir raises PermissionError.
+
+        This tests the filesystem-level isolation: even if code in pmacs.mutation
+        tried to write to model_registry.json directly, the atomic_write_config
+        function in pmacs.nervous.mutation enforces directory permissions.
+
+        The structural isolation (apply_candidate_to_registry in nervous only)
+        is verified above. This test confirms the filesystem layer also blocks
+        direct writes when directory permissions are set.
+        """
+        from pmacs.nervous.mutation import atomic_write_config
+
+        registry = tmp_env["registry_path"]
+
+        # Make the directory read-only to simulate mutation process lacking write perms
+        parent = registry.parent
+        os.chmod(str(parent), 0o555)
+        try:
+            with pytest.raises(PermissionError):
+                atomic_write_config(registry, {"active": "hacked"})
+            # Original content unchanged
+            data = json.loads(registry.read_text())
+            assert data["active"] == "llama_server"
+        finally:
+            os.chmod(str(parent), 0o755)

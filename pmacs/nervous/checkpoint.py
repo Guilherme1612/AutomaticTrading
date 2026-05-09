@@ -42,13 +42,14 @@ def save_checkpoint(
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO op_idempotency (cycle_id, op_seq, op_type, completed_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO op_idempotency (cycle_id, op_seq, op_type, completed_at, result_hash) "
+            "VALUES (?, ?, ?, ?, ?)",
             (
                 cycle_id,
                 op_seq,
                 op_type,
                 datetime.now(timezone.utc).isoformat(),
+                result_hash,
             ),
         )
         conn.commit()
@@ -69,7 +70,7 @@ def load_checkpoint(cycle_id: str, db_path: Path) -> CheckpointState | None:
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
-            "SELECT cycle_id, op_seq, op_type, completed_at "
+            "SELECT cycle_id, op_seq, op_type, completed_at, result_hash "
             "FROM op_idempotency "
             "WHERE cycle_id = ? "
             "ORDER BY op_seq DESC LIMIT 1",
@@ -85,7 +86,7 @@ def load_checkpoint(cycle_id: str, db_path: Path) -> CheckpointState | None:
         op_seq=row[1],
         op_type=row[2],
         completed_at=row[3],
-        result_hash=None,
+        result_hash=row[4],
     )
 
 

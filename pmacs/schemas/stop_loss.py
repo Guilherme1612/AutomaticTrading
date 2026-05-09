@@ -11,6 +11,14 @@ class StopType(str, Enum):
     THESIS_INVALIDATED = "THESIS_INVALIDATED"
 
 
+class StopEventStatus(str, Enum):
+    """Lifecycle status for stop events."""
+    PENDING = "PENDING"
+    SUBMITTED = "SUBMITTED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+
+
 class StopTrigger(BaseModel):
     model_config = ConfigDict(frozen=True)
     id: str
@@ -23,3 +31,5 @@ class StopTrigger(BaseModel):
     gap_down: bool = False
     cycle_id: str = ""
     detected_at: str = ""
+    status: StopEventStatus = StopEventStatus.PENDING
+    stop_type_category: str = "FIXED"

@@ -79,7 +79,10 @@ CREATE TABLE IF NOT EXISTS stop_events (
     stop_price_usd REAL NOT NULL,
     detected_at TEXT NOT NULL,
     cycle_id TEXT,
-    processed INTEGER NOT NULL DEFAULT 0
+    processed INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    stop_type_category TEXT NOT NULL DEFAULT 'FIXED',
+    updated_at TEXT
 );
 
 -- Process state (crash loop detector)
@@ -179,9 +182,38 @@ CREATE TABLE IF NOT EXISTS op_idempotency (
     op_seq INTEGER NOT NULL,
     op_type TEXT NOT NULL,
     completed_at TEXT NOT NULL,
+    result_hash TEXT,
     PRIMARY KEY (cycle_id, op_seq, op_type)
 );
 """
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Check if a column exists in a table."""
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run schema migrations for existing databases.
+
+    Adds new columns to stop_events and op_idempotency tables if they
+    don't exist yet. Converts legacy processed flag to status enum.
+    """
+    # stop_events migrations
+    if not _column_exists(conn, "stop_events", "status"):
+        conn.execute("ALTER TABLE stop_events ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
+        conn.execute("UPDATE stop_events SET status = CASE WHEN processed = 1 THEN 'FILLED' ELSE 'PENDING' END")
+    if not _column_exists(conn, "stop_events", "stop_type_category"):
+        conn.execute("ALTER TABLE stop_events ADD COLUMN stop_type_category TEXT NOT NULL DEFAULT 'FIXED'")
+    if not _column_exists(conn, "stop_events", "updated_at"):
+        conn.execute("ALTER TABLE stop_events ADD COLUMN updated_at TEXT")
+
+    # op_idempotency migrations
+    if not _column_exists(conn, "op_idempotency", "result_hash"):
+        conn.execute("ALTER TABLE op_idempotency ADD COLUMN result_hash TEXT")
+
+    conn.commit()
 
 
 def init_db(path: str | Path) -> sqlite3.Connection:
@@ -197,6 +229,7 @@ def init_db(path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+    _run_migrations(conn)
     return conn
 
 

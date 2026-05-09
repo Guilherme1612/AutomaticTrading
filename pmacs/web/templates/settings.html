@@ -60,7 +60,8 @@
                 </div>
             </dl>
             {% elif section == "Mutation Engine" %}
-            <dl class="space-y-3 text-left max-w-lg">
+            <!-- Mutation Engine config + candidate display -->
+            <dl class="space-y-3 text-left max-w-lg mb-6">
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Activation Threshold</dt>
                     <dd class="font-mono">50 cycles</dd>
@@ -73,7 +74,95 @@
                     <dt class="text-zinc-500">Stat-Sig Threshold</dt>
                     <dd class="font-mono">p &lt; 0.05, d &gt; 0.20</dd>
                 </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Probation Period</dt>
+                    <dd class="font-mono">30 cycles</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Auto-Rollback Window</dt>
+                    <dd class="font-mono">50 cycles</dd>
+                </div>
             </dl>
+
+            <!-- Mutation Candidates -->
+            <div class="border-t border-zinc-100 pt-4">
+                <h4 class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Pending Candidates</h4>
+                {% if mutation_candidates %}
+                <div class="space-y-3">
+                    {% for candidate in mutation_candidates %}
+                    {% if candidate.status == 'pending' %}
+                    <div class="border border-zinc-200 rounded-lg p-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-mono font-semibold text-zinc-900">{{ candidate.dimension }}</span>
+                                <span class="text-xs text-zinc-400">→</span>
+                                <span class="text-sm font-mono text-zinc-600">{{ candidate.target }}</span>
+                            </div>
+                            <span class="text-xs text-zinc-400 font-mono">{{ candidate.proposed_at | default('--') }}</span>
+                        </div>
+                        <div class="flex items-center gap-4 text-xs text-zinc-500">
+                            <span>n = <strong class="text-zinc-700">{{ candidate.sample_size | default(0) }}</strong></span>
+                            <span>d = <strong class="text-zinc-700">{{ candidate.effect_size | default('--') }}</strong></span>
+                            <span>p = <strong class="text-zinc-700">{{ candidate.p_value | default('--') }}</strong></span>
+                            {% if candidate.trending_direction %}
+                            <span class="px-1.5 py-0.5 rounded
+                                         {{ 'bg-green-50 text-green-600' if candidate.trending_direction == 'positive' else '' }}
+                                         {{ 'bg-red-50 text-red-600' if candidate.trending_direction == 'negative' else '' }}
+                                         {{ 'bg-zinc-100 text-zinc-500' if candidate.trending_direction == 'neutral' else '' }}">
+                                {{ candidate.trending_direction }}
+                            </span>
+                            {% endif %}
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                            <button onclick="promoteMutation('{{ candidate.candidate_id }}')"
+                                    class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                                Promote (TOTP)
+                            </button>
+                            <button onclick="rejectMutation('{{ candidate.candidate_id }}')"
+                                    class="px-3 py-1 text-xs border border-zinc-200 text-zinc-600 rounded hover:bg-zinc-100 transition-colors">
+                                Reject (TOTP)
+                            </button>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-xs text-zinc-400">No pending mutation candidates. Active after 50 PAPER cycles.</p>
+                {% endif %}
+            </div>
+
+            <!-- Recent Promotions Log -->
+            <div class="border-t border-zinc-100 pt-4 mt-4">
+                <h4 class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Recent Promotions</h4>
+                {% if recent_mutations %}
+                <div class="space-y-2">
+                    {% for mut in recent_mutations %}
+                    <div class="flex items-center justify-between py-2 border-b border-zinc-50 last:border-0">
+                        <div class="flex items-center gap-3">
+                            <span class="text-xs font-mono font-semibold text-zinc-700">{{ mut.dimension }}</span>
+                            <span class="text-xs text-zinc-400">→</span>
+                            <span class="text-xs font-mono text-zinc-500">{{ mut.target }}</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="text-xs text-zinc-400 font-mono">{{ mut.promoted_at | default('--') }}</span>
+                            {% if mut.status == 'active' %}
+                            <span class="text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-600">Active</span>
+                            <button onclick="rollbackMutation('{{ mut.candidate_id }}')"
+                                    class="px-2 py-0.5 text-xs border border-red-200 text-red-600 rounded hover:bg-red-50 transition-colors">
+                                Rollback (TOTP)
+                            </button>
+                            {% elif mut.status == 'rolled_back' %}
+                            <span class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">Rolled back</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-xs text-zinc-400">No recent promotions.</p>
+                {% endif %}
+            </div>
             {% elif section == "Inference" %}
             <dl class="space-y-3 text-left max-w-lg">
                 <div class="flex justify-between">
@@ -96,4 +185,46 @@
     </div>
     {% endfor %}
 </div>
+
+<script>
+// --- Mutation Engine actions (TOTP-gated per Source.md §6, Architecture.md §10) ---
+function promoteMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.promote.' + candidateId,
+        description: 'Promote mutation candidate: ' + candidateId,
+        consequences: 'This mutation will be applied to production configuration. The system will monitor for regression over 50 cycles.',
+        callbackUrl: '/api/mutation/promote',
+        onSuccess: function() {
+            showToast('Mutation promoted: ' + candidateId, 'success');
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+function rejectMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.reject.' + candidateId,
+        description: 'Reject mutation candidate: ' + candidateId,
+        consequences: 'This candidate will be permanently rejected.',
+        callbackUrl: '/api/mutation/reject',
+        onSuccess: function() {
+            showToast('Mutation rejected: ' + candidateId, 'info');
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+function rollbackMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.rollback.' + candidateId,
+        description: 'Rollback mutation: ' + candidateId,
+        consequences: 'Production config reverts to the pre-mutation state immediately. All dependent cycles will use the old configuration.',
+        callbackUrl: '/api/mutation/rollback',
+        onSuccess: function() {
+            showToast('Mutation rolled back: ' + candidateId, 'success');
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+</script>
 {% endblock %}

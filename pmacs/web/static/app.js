@@ -866,23 +866,87 @@ function toggleEventDetail(el) {
 
 // ─── Copy for Claude Code ───────────────────────────────────────────────────
 
+/**
+ * Copy a formatted Claude Code prompt from a debug event button.
+ * Reads event metadata from data attributes on the button element.
+ */
 function copyForClaudeCode(btn) {
-    var code = btn.getAttribute("data-error-code") || "";
-    var desc = btn.getAttribute("data-error-description") || "";
-    var explanation = btn.getAttribute("data-error-explanation") || "";
+    var eventId = btn.getAttribute("data-event-id") || "";
+    var errorCode = btn.getAttribute("data-error-code") || "";
+    var specRef = btn.getAttribute("data-spec-ref") || "";
+    var message = btn.getAttribute("data-message") || "";
+    var level = btn.getAttribute("data-level") || "";
+    var stream = btn.getAttribute("data-stream") || "";
+    var cycleId = btn.getAttribute("data-cycle-id") || "";
+    var timestamp = btn.getAttribute("data-timestamp") || "";
 
-    var prompt = "PMACS error: " + code + "\n" +
-        "Description: " + desc + "\n" +
-        "Explanation: " + explanation + "\n" +
-        "Please investigate and suggest a fix.";
+    // Read the payload pre block from the parent container
+    var detailContainer = btn.closest("div");
+    var preEl = detailContainer ? detailContainer.querySelector("pre") : null;
+    var payload = preEl ? preEl.textContent.trim() : "No payload available";
+
+    // Build paste-ready prompt for Claude Code
+    var lines = [
+        "## PMACS Debug Event",
+        "",
+        "**Event ID:** " + eventId,
+        "**Level:** " + level,
+        "**Stream:** " + stream,
+        "**Timestamp:** " + timestamp,
+    ];
+    if (errorCode) {
+        lines.push("**Error Code:** " + errorCode);
+    }
+    if (cycleId) {
+        lines.push("**Cycle ID:** " + cycleId);
+    }
+    if (specRef) {
+        lines.push("**Spec Reference:** " + specRef);
+    }
+    lines.push("");
+    lines.push("**Message:** " + message);
+    lines.push("");
+    lines.push("### Payload");
+    lines.push("```json");
+    lines.push(payload);
+    lines.push("```");
+    lines.push("");
+    if (errorCode) {
+        lines.push("### Reproduction Steps");
+        lines.push("1. Run a PMACS cycle");
+        lines.push("2. Look for **" + errorCode + "** in debug events");
+        lines.push("3. Check the " + stream + " stream for related warnings");
+    }
+    lines.push("");
+    lines.push("Please investigate this error and suggest a fix. Reference the spec at " + (specRef || "the relevant Architecture.md section") + ".");
+
+    var prompt = lines.join("\n");
 
     navigator.clipboard.writeText(prompt).then(function () {
-        showToast("Debug context copied to clipboard", "success");
+        showToast("Claude Code prompt copied to clipboard", "success");
     }).catch(function () {
         showToast("Failed to copy — check clipboard permissions", "warning");
     });
 }
 
+/**
+ * Copy raw event JSON from the detail container.
+ */
+function copyEventJSON(btn) {
+    var detailContainer = btn.closest("div");
+    var preEl = detailContainer ? detailContainer.querySelector("pre") : null;
+    var payload = preEl ? preEl.textContent.trim() : "";
+
+    navigator.clipboard.writeText(payload).then(function () {
+        showToast("JSON copied to clipboard", "success");
+    }).catch(function () {
+        showToast("Failed to copy", "warning");
+    });
+}
+
+/**
+ * Legacy function: copy debug event from row data attribute.
+ */
 function copyDebugEvent(btn) {
     var row = btn.closest("[data-debug-event]");
     var text = row ? row.getAttribute("data-debug-event") : "";

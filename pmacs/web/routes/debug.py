@@ -37,6 +37,11 @@ async def debug_page(request: Request):
             "stream": e.get("event", ""),
             "message": e.get("msg", ""),
             "detail": e.get("payload", ""),
+            "error_code": e.get("error_code", ""),
+            "spec_ref": e.get("spec_ref", ""),
+            "cycle_id": e.get("cycle_id", ""),
+            "event_id": e.get("event_id", e.get("ts", "")),
+            "raw_payload": e.get("payload", ""),
         }
         for e in raw_events
     ]

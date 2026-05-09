@@ -15,6 +15,14 @@ async def settings_page(request: Request):
     cfg = get_config()
     config = data_layer.get_settings(cfg.config_dir)
 
+    # Get mutation candidates and recent promotions
+    db = data_layer.get_readonly_db(cfg.sqlite_path)
+    try:
+        mutation_candidates = data_layer.get_mutation_candidates(db)
+        recent_mutations = data_layer.get_recent_mutations(db)
+    finally:
+        db.close()
+
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -35,5 +43,7 @@ async def settings_page(request: Request):
                 "Operator",
             ],
             "config": config,
+            "mutation_candidates": mutation_candidates,
+            "recent_mutations": recent_mutations,
         },
     )

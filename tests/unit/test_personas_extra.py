@@ -315,6 +315,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": 15.0,
             "gross_margin_pct": 46.0,
             "growth_durability_reasoning": "Solid growth",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert result.passed
 
@@ -324,6 +327,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": 600,
             "gross_margin_pct": 46.0,
             "growth_durability_reasoning": "Solid growth",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert not result.passed
         assert "revenue_yoy_pct" in result.reason
@@ -334,6 +340,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": -150,
             "gross_margin_pct": 46.0,
             "growth_durability_reasoning": "Solid growth",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert not result.passed
         assert "revenue_yoy_pct" in result.reason
@@ -344,6 +353,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": 15.0,
             "gross_margin_pct": 120,
             "growth_durability_reasoning": "Solid growth",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert not result.passed
         assert "gross_margin_pct" in result.reason
@@ -354,6 +366,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": 15.0,
             "gross_margin_pct": -60,
             "growth_durability_reasoning": "Solid growth",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert not result.passed
 
@@ -363,6 +378,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": 15.0,
             "gross_margin_pct": 46.0,
             "growth_durability_reasoning": "",
+            "p_up": 0.5,
+            "p_flat": 0.3,
+            "p_down": 0.2,
         }, [])
         assert not result.passed
         assert "growth_durability_reasoning" in result.reason
@@ -374,6 +392,9 @@ class TestGrowthHunterSanity:
             "revenue_yoy_pct": None,
             "gross_margin_pct": None,
             "growth_durability_reasoning": "No data available",
+            "p_up": 0.4,
+            "p_flat": 0.35,
+            "p_down": 0.25,
         }, [])
         assert result.passed
 

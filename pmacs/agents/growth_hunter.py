@@ -10,6 +10,8 @@ spec_ref: Agents.md §8
 
 from __future__ import annotations
 
+from typing import Any
+
 from pmacs.agents.base import PersonaRunner
 from pmacs.schemas.data import EvidencePacket
 
@@ -21,12 +23,18 @@ class GrowthHunterRunner(PersonaRunner):
     and growth durability for a given ticker.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        cycle_id: str = "",
+        audit_writer: Any | None = None,
+    ) -> None:
         super().__init__(
             persona_name="growth_hunter",
             grammar_name="growth_hunter",
             temperature=0.2,
             max_tokens=512,
+            cycle_id=cycle_id,
+            audit_writer=audit_writer,
         )
 
     def get_pydantic_model(self):

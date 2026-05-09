@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Any
+
 from pmacs.agents.base import PersonaRunner
 from pmacs.schemas.data import EvidencePacket
 
@@ -23,12 +25,18 @@ class ForensicsRunner(PersonaRunner):
     earnings manipulation, cash flow divergence, and more.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        cycle_id: str = "",
+        audit_writer: Any | None = None,
+    ) -> None:
         super().__init__(
             persona_name="forensics",
             grammar_name="forensics",
             temperature=0.2,
             max_tokens=1024,
+            cycle_id=cycle_id,
+            audit_writer=audit_writer,
         )
 
     def get_pydantic_model(self):

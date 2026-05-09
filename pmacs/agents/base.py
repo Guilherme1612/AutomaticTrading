@@ -321,13 +321,23 @@ class PersonaRunner(ABC):
         )
 
     def _get_model_hash(self) -> str:
-        """Get the configured model hash from config, or empty string."""
+        """Get the configured model hash from config, or empty string.
+
+        Derives the hash key from gguf_path (filename without .gguf extension)
+        to look up the correct hash in model_hashes.
+        """
         try:
             from pmacs.config import load_config
             config = load_config()
-            for name, sha in config.model_hashes.items():
-                return sha
-        except Exception:
+            # Derive model name from gguf_path: strip path and .gguf suffix
+            gguf_path = config.resources.gguf_path
+            if gguf_path:
+                model_name = Path(gguf_path).stem
+                return config.model_hashes.get(model_name, "")
+            # Fallback: single-model config
+            if len(config.model_hashes) == 1:
+                return next(iter(config.model_hashes.values()))
+        except (ImportError, AttributeError):
             pass
         return ""
 

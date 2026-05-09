@@ -46,4 +46,14 @@ class GrowthHunterSanity(BaseSanityValidator):
                 reason="growth_durability_reasoning is empty",
             )
 
+        # Non-degenerate probability distribution
+        p_up = output.get("p_up", 0.0)
+        p_flat = output.get("p_flat", 0.0)
+        p_down = output.get("p_down", 0.0)
+        if p_up == p_flat == p_down:
+            return SanityResult(
+                passed=False,
+                reason="degenerate distribution: p_up == p_flat == p_down",
+            )
+
         return SanityResult(passed=True)

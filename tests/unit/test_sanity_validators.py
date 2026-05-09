@@ -65,7 +65,7 @@ class TestMacroRegimeSanity:
         assert "regime_confidence" in result.reason
 
     def test_degenerate_distribution_fails(self):
-        result = self.validator.validate(self._make_output(p_up=0.2, p_flat=0.2, p_down=0.2), self.evidence)
+        result = self.validator.validate(self._make_output(p_up=1/3, p_flat=1/3, p_down=1/3), self.evidence)
         assert not result.passed
         assert "degenerate" in result.reason
 
@@ -120,7 +120,7 @@ class TestCatalystSummarizerSanity:
         assert result.passed
 
     def test_degenerate_distribution_fails(self):
-        output = self._make_output(p_up=0.2, p_flat=0.2, p_down=0.2)
+        output = self._make_output(p_up=1/3, p_flat=1/3, p_down=1/3)
         result = self.validator.validate(output, self.evidence)
         assert not result.passed
         assert "degenerate" in result.reason
@@ -209,7 +209,7 @@ class TestMoatAnalystSanity:
         assert result.passed
 
     def test_degenerate_distribution_fails(self):
-        output = self._make_output(p_up=0.2, p_flat=0.2, p_down=0.2)
+        output = self._make_output(p_up=1/3, p_flat=1/3, p_down=1/3)
         result = self.validator.validate(output, self.evidence)
         assert not result.passed
         assert "degenerate" in result.reason

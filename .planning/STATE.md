@@ -16,7 +16,7 @@
 - **Phase 8** — Polish (LIVE-READY)
 
 ## Test Summary
-- **821 tests pass**, 0 fail, 11 skip
+- **1292 tests pass**, 0 fail, 11 skip
 
 ## Remaining Phases
 None. All 8 GSD phases complete.
@@ -39,3 +39,4 @@ None.
 | 2026-05-08 | Vendor HTMX/D3/Tailwind locally (Non-Negotiable 4) | CDN refs removed |
 | 2026-05-08 | Add sleep_watch, drift, flywheel_monitor, indexes, verify_isolation | New infrastructure |
 | 2026-05-08 | Wire mutation daemon + add filesystem isolation test | 821 pass (+3), 0 fail |
+| 2026-05-09 | Phase 5 Wave 6: Exit tests for all 7 pages + stop-loss integration [S7,M1,M4,M5,C1,C2,S1,S2] | 1292 pass (+471), 0 fail |

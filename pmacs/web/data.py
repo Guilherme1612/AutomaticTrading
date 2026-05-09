@@ -205,6 +205,233 @@ def get_queue_status(db: sqlite3.Connection) -> list[dict[str, Any]]:
         return []
 
 
+def get_priority_banded_queue(db: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    """Get queue items binned by P1-P4 priority bands.
+
+    Returns:
+        Dict mapping band name (P1, P2, P3, P4) to list of ticker items
+        sorted by computed priority_score descending. Each item includes
+        ticker, band, pinned, and score fields. Active holdings are
+        force-promoted to P1.
+    """
+    bands: dict[str, list[dict[str, Any]]] = {"P1": [], "P2": [], "P3": [], "P4": []}
+
+    # Get active holdings for auto-P1 promotion
+    active_tickers: set[str] = set()
+    try:
+        rows = db.execute(
+            "SELECT ticker FROM holdings WHERE state NOT IN ('CLOSED', 'EXITED', 'STOPPED_OUT')"
+        ).fetchall()
+        active_tickers = {r[0] for r in rows}
+    except sqlite3.OperationalError:
+        pass
+
+    # Get queue items with scoring signals
+    try:
+        rows = db.execute(
+            """SELECT q.ticker, q.priority_band, q.pinned,
+                      COALESCE(e.catalyst_imminence, 0.5),
+                      COALESCE(e.thesis_strength, 0.0),
+                      COALESCE(e.source_brier_avg, 0.5),
+                      COALESCE(e.portfolio_fit, 0.5)
+               FROM queue q
+               LEFT JOIN (
+                   SELECT ticker,
+                          MAX(catalyst_imminence) as catalyst_imminence,
+                          AVG(thesis_strength) as thesis_strength,
+                          AVG(source_brier_avg) as source_brier_avg,
+                          AVG(portfolio_fit) as portfolio_fit
+                   FROM evidence
+                   GROUP BY ticker
+               ) e ON q.ticker = e.ticker
+               WHERE q.completed_at IS NULL"""
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet — return empty bands
+        return bands
+
+    for r in rows:
+        ticker, band, pinned, cat_imm, thesis, brier, pfit = r
+        score = (cat_imm * 3.0) + (thesis * 2.0) + (brier * 1.5) + (pfit * 1.0)
+        # Active holdings always P1
+        effective_band = "P1" if ticker in active_tickers else (band or "P4")
+        if effective_band not in bands:
+            effective_band = "P4"
+        bands[effective_band].append({
+            "ticker": ticker,
+            "band": effective_band,
+            "pinned": bool(pinned),
+            "priority_score": round(score, 3),
+            "is_active_holding": ticker in active_tickers,
+        })
+
+    # Sort each band by score descending, pinned first
+    for band_name in bands:
+        bands[band_name].sort(key=lambda x: (not x["pinned"], -x["priority_score"]))
+
+    return bands
+
+
+def reorder_queue_item(db: sqlite3.Connection, ticker: str, from_band: str, to_band: str) -> bool:
+    """Move a queue item from one priority band to another.
+
+    Returns True if the row was updated, False otherwise.
+    """
+    valid_bands = {"P1", "P2", "P3", "P4"}
+    if from_band not in valid_bands or to_band not in valid_bands:
+        return False
+    try:
+        cursor = db.execute(
+            "UPDATE queue SET priority_band = ? WHERE ticker = ? AND priority_band = ? AND completed_at IS NULL",
+            (to_band, ticker, from_band),
+        )
+        db.commit()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError:
+        return False
+
+
+def pin_queue_item(db: sqlite3.Connection, ticker: str, pinned: bool) -> bool:
+    """Set or clear the pinned flag on a queue item.
+
+    Returns True if the row was updated.
+    """
+    try:
+        cursor = db.execute(
+            "UPDATE queue SET pinned = ? WHERE ticker = ? AND completed_at IS NULL",
+            (int(pinned), ticker),
+        )
+        db.commit()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError:
+        return False
+
+
+def promote_all_p1(db: sqlite3.Connection) -> int:
+    """Promote all P1 items to head of next cycle.
+
+    Sets a 'promoted' flag so the next cycle picks them first.
+    Returns count of promoted items.
+    """
+    try:
+        cursor = db.execute(
+            """UPDATE queue SET pinned = 1
+               WHERE priority_band = 'P1' AND completed_at IS NULL AND pinned = 0"""
+        )
+        db.commit()
+        return cursor.rowcount
+    except sqlite3.OperationalError:
+        return 0
+
+
+def save_priority_scheme(db_path: str | Path, name: str, config: dict[str, Any]) -> bool:
+    """Save a priority scheme configuration to SQLite.
+
+    Creates the priority_schemes table if it doesn't exist.
+    """
+    conn = _sqlite_connect(db_path)
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS priority_schemes (
+                name TEXT PRIMARY KEY,
+                config_json TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO priority_schemes (name, config_json) VALUES (?, ?)",
+            (name, json.dumps(config)),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def load_priority_scheme(db_path: str | Path, name: str) -> dict[str, Any] | None:
+    """Load a named priority scheme from SQLite.
+
+    Returns the parsed config dict, or None if not found.
+    """
+    conn = _sqlite_connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT config_json FROM priority_schemes WHERE name = ?", (name,)
+        ).fetchone()
+        if row:
+            return json.loads(row[0])
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def get_mutation_candidates(db: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Get pending mutation candidates from SQLite.
+
+    Returns:
+        List of mutation candidate dicts with dimension, target, stats.
+    """
+    try:
+        rows = db.execute(
+            """SELECT candidate_id, dimension, target, proposed_at,
+                      sample_size, effect_size, p_value, trending_direction, status
+               FROM mutation_candidates
+               WHERE status IN ('pending', 'approved', 'rejected')
+               ORDER BY proposed_at DESC"""
+        ).fetchall()
+        return [
+            {
+                "candidate_id": r[0],
+                "dimension": r[1],
+                "target": r[2],
+                "proposed_at": r[3],
+                "sample_size": r[4],
+                "effect_size": r[5],
+                "p_value": r[6],
+                "trending_direction": r[7],
+                "status": r[8],
+            }
+            for r in rows
+        ]
+    except sqlite3.OperationalError:
+        return []
+
+
+def get_recent_mutations(db: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:
+    """Get recently promoted/rolled-back mutations for the settings page.
+
+    Returns:
+        List of mutation log dicts.
+    """
+    try:
+        rows = db.execute(
+            """SELECT candidate_id, dimension, target, promoted_at, promoted_by,
+                      rolled_back_at, status
+               FROM mutation_log
+               ORDER BY COALESCE(promoted_at, '') DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "candidate_id": r[0],
+                "dimension": r[1],
+                "target": r[2],
+                "promoted_at": r[3],
+                "promoted_by": r[4],
+                "rolled_back_at": r[5],
+                "status": r[6],
+            }
+            for r in rows
+        ]
+    except sqlite3.OperationalError:
+        return []
+
+
 def get_universe_list(db: sqlite3.Connection) -> list[dict[str, Any]]:
     """Get universe tickers from SQLite.
 

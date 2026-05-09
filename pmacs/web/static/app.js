@@ -406,10 +406,14 @@ document.addEventListener("keydown", function (e) {
         return;
     }
 
-    // Cmd-T: open TOTP modal (when no text input focused)
+    // Cmd-T: open TOTP modal with generic context (when no text input focused)
     if (isCmd && e.key === "t" && !isInput) {
         e.preventDefault();
-        document.getElementById("totp-modal").classList.remove("hidden");
+        open_totp_modal({
+            actionId: "manual_totp_verify",
+            description: "Manual TOTP verification",
+            consequences: "No specific action gated — verify your TOTP code.",
+        });
         return;
     }
 
@@ -504,19 +508,239 @@ function handleKillSwitch() {
     );
 }
 
-// ─── TOTP Input Auto-Advance ────────────────────────────────────────────────
+// ─── TOTP Modal (Source.md §13.2, §13.3 TOTPField) ───────────────────────
+//
+// Reusable parameterizable TOTP modal. Any gated action calls open_totp_modal({...}).
+//
+// Gated actions per Source.md §6 (Decision rights matrix):
+//   Settings: broker key edit, catastrophe-net % change, kill-switch threshold,
+//             mutation promote/reject/rollback, persona enable/disable, mode override
+//   Universe: add/remove ticker, bulk tag/remove
+//   Pipeline: force exit (active only)
+//   Cortex: kill switch disengage (engage does NOT require TOTP)
 
+var totpModalState = {
+    actionId: "",
+    callbackUrl: "",
+    confirmText: "",
+    pendingAction: null,  // optional function to call on success
+};
+
+/**
+ * Open the TOTP modal with action context.
+ * @param {Object} opts
+ * @param {string} opts.actionId         — unique action identifier
+ * @param {string} opts.description      — human-readable action description
+ * @param {string} opts.consequences     — what happens if confirmed
+ * @param {string} [opts.confirmText]    — text operator must type (e.g. "KILL")
+ * @param {string} [opts.callbackUrl]    — URL to POST after TOTP verified
+ * @param {Function} [opts.onSuccess]    — function to call on verification success
+ */
+function open_totp_modal(opts) {
+    var modal = document.getElementById("totp-modal");
+    if (!modal) return;
+
+    // Store state
+    totpModalState.actionId = opts.actionId || "";
+    totpModalState.callbackUrl = opts.callbackUrl || "";
+    totpModalState.confirmText = opts.confirmText || "";
+    totpModalState.pendingAction = opts.onSuccess || null;
+
+    // Set data attributes
+    modal.setAttribute("data-action-id", totpModalState.actionId);
+    modal.setAttribute("data-action-description", opts.description || "");
+    modal.setAttribute("data-consequences", opts.consequences || "");
+    modal.setAttribute("data-confirm-text", totpModalState.confirmText);
+    modal.setAttribute("data-callback-url", totpModalState.callbackUrl);
+
+    // Populate visible elements
+    document.getElementById("totp-action-description").textContent = opts.description || "";
+    document.getElementById("totp-consequences").textContent = opts.consequences || "";
+
+    // Confirmation text field (for destructive actions)
+    var confirmGroup = document.getElementById("totp-confirm-group");
+    var confirmInput = document.getElementById("totp-confirm-input");
+    var confirmRequiredText = document.getElementById("totp-confirm-required-text");
+    if (totpModalState.confirmText) {
+        confirmGroup.classList.remove("hidden");
+        confirmRequiredText.textContent = totpModalState.confirmText;
+        confirmInput.value = "";
+    } else {
+        confirmGroup.classList.add("hidden");
+        confirmInput.value = "";
+    }
+
+    // Clear previous state
+    var digits = modal.querySelectorAll(".totp-digit");
+    digits.forEach(function (d) { d.value = ""; });
+    document.getElementById("totp-error").classList.add("hidden");
+    document.getElementById("totp-confirm-mismatch").classList.add("hidden");
+
+    // Reset confirm button state
+    updateTotpConfirmButton();
+
+    // Show modal
+    modal.classList.remove("hidden");
+
+    // Focus first TOTP digit
+    if (digits.length > 0) {
+        digits[0].focus();
+    }
+}
+
+function closeTotpModal() {
+    var modal = document.getElementById("totp-modal");
+    if (modal) modal.classList.add("hidden");
+    totpModalState.pendingAction = null;
+}
+
+/**
+ * Check whether the Confirm button should be enabled.
+ * Enabled when: TOTP code is 6 digits AND (no confirm text required OR confirm text matches).
+ */
+function updateTotpConfirmButton() {
+    var btn = document.getElementById("totp-confirm-btn");
+    if (!btn) return;
+
+    // Check TOTP digits
+    var digits = document.querySelectorAll("#totp-modal .totp-digit");
+    var code = "";
+    digits.forEach(function (d) { code += d.value; });
+    var totpComplete = code.length === 6;
+
+    // Check confirmation text
+    var confirmRequired = totpModalState.confirmText || "";
+    var confirmInput = document.getElementById("totp-confirm-input");
+    var confirmMatch = true;
+    if (confirmRequired) {
+        confirmMatch = confirmInput.value === confirmRequired;
+        var mismatch = document.getElementById("totp-confirm-mismatch");
+        if (confirmInput.value && !confirmMatch) {
+            mismatch.classList.remove("hidden");
+        } else {
+            mismatch.classList.add("hidden");
+        }
+    }
+
+    btn.disabled = !(totpComplete && confirmMatch);
+}
+
+/**
+ * Submit TOTP code to /api/totp/verify, then execute the gated action on success.
+ */
+function submitTotp() {
+    var digits = document.querySelectorAll("#totp-modal .totp-digit");
+    var code = "";
+    digits.forEach(function (d) { code += d.value; });
+
+    if (code.length !== 6) {
+        showToast("Enter all 6 digits", "warning");
+        return;
+    }
+
+    // Check confirmation text if required
+    if (totpModalState.confirmText) {
+        var confirmInput = document.getElementById("totp-confirm-input");
+        if (confirmInput.value !== totpModalState.confirmText) {
+            document.getElementById("totp-confirm-mismatch").classList.remove("hidden");
+            return;
+        }
+    }
+
+    var errorEl = document.getElementById("totp-error");
+    var confirmBtn = document.getElementById("totp-confirm-btn");
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Verifying...";
+
+    fetch("/api/totp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            code: code,
+            action_id: totpModalState.actionId,
+        }),
+    })
+    .then(function (resp) {
+        if (resp.ok) {
+            return resp.json();
+        }
+        return resp.json().then(function (data) {
+            throw new Error(data.detail || "Verification failed");
+        });
+    })
+    .then(function (data) {
+        // TOTP verified — close modal
+        closeTotpModal();
+        showToast("Action confirmed", "success");
+
+        // Execute gated action
+        if (totpModalState.callbackUrl) {
+            executeGatedAction(totpModalState.callbackUrl, totpModalState.actionId);
+        } else if (totpModalState.pendingAction) {
+            totpModalState.pendingAction(data);
+        }
+    })
+    .catch(function (err) {
+        // Keep modal open, show error
+        errorEl.textContent = err.message || "Verification failed. Try again.";
+        errorEl.classList.remove("hidden");
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm";
+        // Clear digits for retry
+        digits.forEach(function (d) { d.value = ""; });
+        if (digits.length > 0) digits[0].focus();
+        updateTotpConfirmButton();
+    });
+}
+
+/**
+ * Execute a gated action by POSTing to the callback URL.
+ */
+function executeGatedAction(callbackUrl, actionId) {
+    fetch(callbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: actionId }),
+    })
+    .then(function (resp) {
+        if (resp.ok) {
+            return resp.json();
+        }
+        return resp.json().then(function (data) {
+            throw new Error(data.detail || "Action failed");
+        });
+    })
+    .then(function (data) {
+        showToast(data.message || "Action completed", "success");
+        // Reload page to reflect changes
+        if (data.reload) {
+            window.location.reload();
+        }
+    })
+    .catch(function (err) {
+        showToast("Action failed: " + (err.message || "Unknown error"), "error");
+    });
+}
+
+// TOTP input auto-advance and confirmation-text validation
 document.addEventListener("DOMContentLoaded", function () {
-    var digits = document.querySelectorAll(".totp-digit");
+    var modal = document.getElementById("totp-modal");
+    if (!modal) return;
+
+    var digits = modal.querySelectorAll(".totp-digit");
     digits.forEach(function (digit, index) {
         digit.addEventListener("input", function (e) {
             e.target.value = e.target.value.replace(/[^0-9]/g, "");
             if (e.target.value && index < digits.length - 1) {
                 digits[index + 1].focus();
             }
-            // Auto-submit on 6th digit
+            updateTotpConfirmButton();
+            // Auto-submit on 6th digit (only if confirm text not required or already matched)
             if (index === digits.length - 1 && e.target.value) {
-                submitTotp();
+                var confirmRequired = totpModalState.confirmText || "";
+                if (!confirmRequired || document.getElementById("totp-confirm-input").value === confirmRequired) {
+                    submitTotp();
+                }
             }
         });
         digit.addEventListener("keydown", function (e) {
@@ -525,28 +749,27 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
     });
-});
 
-function closeTotpModal() {
-    var modal = document.getElementById("totp-modal");
-    if (modal) modal.classList.add("hidden");
-}
-
-function submitTotp() {
-    var digits = document.querySelectorAll(".totp-digit");
-    var code = "";
-    digits.forEach(function (d) {
-        code += d.value;
-    });
-    if (code.length === 6) {
-        // TODO: POST to pmacs-nervous TOTP endpoint
-        console.log("TOTP submitted:", code);
-        closeTotpModal();
-        showToast("TOTP verified (stub)", "success");
-    } else {
-        showToast("Enter all 6 digits", "warning");
+    // Confirmation text input validation
+    var confirmInput = document.getElementById("totp-confirm-input");
+    if (confirmInput) {
+        confirmInput.addEventListener("input", function () {
+            updateTotpConfirmButton();
+        });
     }
-}
+
+    // Cancel button
+    var cancelBtn = document.getElementById("totp-cancel-btn");
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", closeTotpModal);
+    }
+
+    // Confirm button
+    var confirmBtn = document.getElementById("totp-confirm-btn");
+    if (confirmBtn) {
+        confirmBtn.addEventListener("click", submitTotp);
+    }
+});
 
 // ─── Debug Page: Event Filtering ────────────────────────────────────────────
 

@@ -78,6 +78,11 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "PROCESS_RESTART_RECORDED",
     # Model integrity
     "MODEL_INTEGRITY_CHECK",
+    # Catastrophe net
+    "CATASTROPHE_CANCEL_FAILED",
+    "CATASTROPHE_CANCEL_NO_BROKER",
+    "CATASTROPHE_NET_CANCELLED",
+    "EXECUTE_EXIT",
 })
 
 # Module-level log file path (set during initialization)

@@ -1,8 +1,12 @@
 """Cortex route — system health monitoring page."""
 
+import sqlite3
+
 from fastapi import APIRouter, Request
 
 from pmacs.web.app import templates
+from pmacs.web.config import get_config
+from pmacs.web import data as data_layer
 
 router = APIRouter()
 
@@ -10,30 +14,31 @@ router = APIRouter()
 @router.get("/cortex")
 async def cortex_page(request: Request):
     """Render the cortex system health page."""
+    cfg = get_config()
+
+    try:
+        db = sqlite3.connect(f"file:{cfg.sqlite_path}?mode=ro", uri=True)
+    except Exception:
+        db = sqlite3.connect(":memory:")
+
+    try:
+        cortex_data = data_layer.get_cortex_status(
+            db, cfg.heartbeat_dir, cfg.audit_path
+        )
+    finally:
+        db.close()
+
     return templates.TemplateResponse(
         request=request,
         name="cortex.html",
         context={
             "page": "cortex",
             "mode": "SHADOW + PAPER",
-            "audit_chain": {"status": "verified", "last_hash": "--", "entries": 0},
-            "cross_db": {"sqlite": "ok", "kuzudb": "ok", "qdrant": "ok", "duckdb": "ok"},
-            "processes": [
-                {"name": "pmacs-inference", "port": 8080, "status": "unknown"},
-                {"name": "pmacs-cortex", "port": None, "status": "unknown"},
-                {"name": "pmacs-cortex-self-check", "port": None, "status": "unknown"},
-                {"name": "pmacs-execution", "port": None, "status": "unknown"},
-                {"name": "pmacs-nervous", "port": 8000, "status": "unknown"},
-                {"name": "pmacs-stoploss", "port": None, "status": "unknown"},
-                {"name": "pmacs-mutation", "port": None, "status": "unknown"},
-                {"name": "pmacs-dashboard", "port": 8001, "status": "running"},
-            ],
-            "disk_clock_network": {
-                "disk_free_gb": 50,
-                "clock_skew_ms": 0,
-                "network_ok": True,
-            },
-            "kill_switch": {"engaged": False, "totp_required": True},
-            "model_integrity": {"hash_verified": False, "model_path": "--"},
+            "audit_chain": cortex_data["audit_chain"],
+            "cross_db": cortex_data["cross_db"],
+            "processes": cortex_data["processes"],
+            "disk_clock_network": cortex_data["disk_clock_network"],
+            "kill_switch": cortex_data["kill_switch"],
+            "model_integrity": cortex_data["model_integrity"],
         },
     )

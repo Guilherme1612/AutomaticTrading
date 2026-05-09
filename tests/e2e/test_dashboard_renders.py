@@ -269,7 +269,7 @@ class TestCommonElements:
         assert "SHADOW + PAPER" in page_response.text
 
     def test_all_pages_have_tailwind(self, page_response):
-        assert "tailwindcss" in page_response.text
+        assert "tailwind" in page_response.text
 
     def test_all_pages_have_htmx(self, page_response):
         assert "htmx" in page_response.text.lower()

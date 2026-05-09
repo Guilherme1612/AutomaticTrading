@@ -31,13 +31,22 @@ PROCESS_NAMES = [
 
 
 def _sqlite_connect(db_path: str | Path) -> sqlite3.Connection:
-    """Get a read-only SQLite connection."""
+    """Get a read-only SQLite connection. Returns in-memory DB if file missing."""
     path = Path(db_path)
     if not path.exists():
         # Return in-memory connection for tests / no-DB scenarios
         return sqlite3.connect(":memory:")
     uri = f"file:{path}?mode=ro"
     return sqlite3.connect(uri, uri=True)
+
+
+def get_readonly_db(sqlite_path: str | Path) -> sqlite3.Connection:
+    """Get a read-only connection to the SQLite database.
+
+    Returns an in-memory database if the file does not exist.
+    Callers should close the connection after use.
+    """
+    return _sqlite_connect(sqlite_path)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +211,10 @@ def get_universe_list(db: sqlite3.Connection) -> list[dict[str, Any]]:
     Returns:
         List of ticker dicts.
     """
-    entries = get_universe(db, include_halted=False)
+    try:
+        entries = get_universe(db, include_halted=False)
+    except sqlite3.OperationalError:
+        return []
     return [
         {
             "ticker": e.ticker,

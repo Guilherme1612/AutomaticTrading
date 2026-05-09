@@ -1,7 +1,5 @@
 """Agents route — persona analysis page."""
 
-import sqlite3
-
 from fastapi import APIRouter, Request
 
 from pmacs.web.app import templates
@@ -28,11 +26,7 @@ async def agents_page(request: Request):
     """Render the agents analysis page with persona cards."""
     cfg = get_config()
 
-    try:
-        db = sqlite3.connect(f"file:{cfg.sqlite_path}?mode=ro", uri=True)
-    except Exception:
-        db = sqlite3.connect(":memory:")
-
+    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
         queue = data_layer.get_queue_status(db)
         decisions = data_layer.get_recent_decisions(db, limit=1)

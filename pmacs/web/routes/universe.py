@@ -1,7 +1,5 @@
 """Universe route — ticker management page."""
 
-import sqlite3
-
 from fastapi import APIRouter, Request
 
 from pmacs.web.app import templates
@@ -16,11 +14,7 @@ async def universe_page(request: Request):
     """Render the universe ticker management page."""
     cfg = get_config()
 
-    try:
-        db = sqlite3.connect(f"file:{cfg.sqlite_path}?mode=ro", uri=True)
-    except Exception:
-        db = sqlite3.connect(":memory:")
-
+    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
         ticker_rows = data_layer.get_universe_list(db)
     finally:

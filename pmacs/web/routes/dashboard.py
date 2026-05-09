@@ -1,7 +1,5 @@
 """Dashboard route — portfolio overview page."""
 
-import sqlite3
-
 from fastapi import APIRouter, Request
 
 from pmacs.web.app import templates
@@ -16,12 +14,7 @@ async def dashboard_page(request: Request):
     """Render the main dashboard page with portfolio summary."""
     cfg = get_config()
 
-    # Open read-only SQLite connection for this request
-    try:
-        db = sqlite3.connect(f"file:{cfg.sqlite_path}?mode=ro", uri=True)
-    except Exception:
-        db = sqlite3.connect(":memory:")
-
+    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
         holdings = data_layer.get_active_holdings(db)
         decisions = data_layer.get_recent_decisions(db, limit=10)

@@ -127,6 +127,7 @@ class Holding(BaseModel):
     sector: str | None = None
     subsector: str | None = None
     catalyst_type: str | None = None
+    last_reeval_at: date | None = None
     stop_price_usd: float | None = None
     trailing_stop_price_usd: float | None = None
     verdict: str | None = None

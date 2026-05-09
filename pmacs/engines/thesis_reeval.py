@@ -25,19 +25,26 @@ def check_weekly_reeval(
     entry_date: date,
     current_date: date,
     current_conviction: float,
+    last_reeval_at: date | None = None,
 ) -> bool:
     """Check if weekly re-evaluation is due (7+ days since last check).
+
+    Uses ``last_reeval_at`` when available, falls back to ``entry_date``
+    when None (first re-eval cycle).
 
     Args:
         entry_date: Date the position was entered.
         current_date: Today's date.
         current_conviction: Current conviction score (unused, kept for
             interface consistency).
+        last_reeval_at: Date of the last re-evaluation. When None, uses
+            entry_date as the reference point.
 
     Returns:
-        True if days since entry is a multiple of 7.
+        True if 7 or more days have elapsed since the reference date.
     """
-    return (current_date - entry_date).days % 7 == 0
+    reference_date = last_reeval_at if last_reeval_at is not None else entry_date
+    return (current_date - reference_date).days >= 7
 
 
 def check_thesis_aging(
@@ -45,6 +52,10 @@ def check_thesis_aging(
     current_date: date,
 ) -> bool:
     """Check if 90-day thesis aging review is triggered.
+
+    This is measured in calendar days from entry_date. Unlike weekly
+    re-evaluation, there is no reset — the 90-day clock starts at
+    entry and never restarts.
 
     Args:
         entry_date: Date the position was entered.

@@ -11,21 +11,106 @@
     <link rel="stylesheet" href="/static/style.css">
     <script>
         tailwind.config = {
+            darkMode: 'class',
             theme: {
                 extend: {
+                    // Color tokens — Source.md §13.1 Visual identity
+                    colors: {
+                        'surface': 'var(--surface)',
+                        'surface-elevated': 'var(--surface-elevated)',
+                        'border-default': 'var(--border)',
+                        'text-primary': 'var(--text-primary)',
+                        'text-secondary': 'var(--text-secondary)',
+                        'text-muted': 'var(--text-muted)',
+                        'accent': 'var(--accent)',
+                        'positive': 'var(--positive)',
+                        'negative': 'var(--negative)',
+                        'warning': 'var(--warning)',
+                        'strong-buy': 'var(--strong-buy)',
+                        'crucible': 'var(--crucible)',
+                    },
                     fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+                    },
+                    fontSize: {
+                        'caption': ['12px', { lineHeight: '16px' }],
+                        'body': ['14px', { lineHeight: '20px' }],
+                        'subhead': ['16px', { lineHeight: '24px' }],
+                        'head': ['20px', { lineHeight: '28px' }],
+                        'page-title': ['28px', { lineHeight: '36px' }],
+                    },
+                    spacing: {
+                        'page-gutter': '32px',
+                        'card-pad': '24px',
+                        'section-gap': '16px',
+                        'table-row': '12px',
+                    },
+                    screens: {
+                        'xs': '1024px',
+                        'sm': '1280px',
+                        'md': '1440px',
                     },
                 },
             },
         }
     </script>
+    <style>
+        /* Light mode tokens — Source.md §13.1 */
+        :root {
+            --surface: #fafafa;              /* zinc-50 */
+            --surface-elevated: #ffffff;
+            --border: #e4e4e7;              /* zinc-200 */
+            --text-primary: #18181b;        /* zinc-900 */
+            --text-secondary: #52525b;      /* zinc-600 */
+            --text-muted: #71717a;          /* zinc-500 */
+            --accent: #2563eb;              /* blue-600 */
+            --positive: #16a34a;            /* green-600 */
+            --negative: #ef4444;            /* red-500 */
+            --warning: #f59e0b;             /* amber-500 */
+            --strong-buy: #15803d;          /* green-700 */
+            --crucible: #9333ea;            /* purple-600 */
+        }
+        /* Dark mode tokens — Source.md §13.1 */
+        .dark {
+            --surface: #18181b;             /* zinc-900 */
+            --surface-elevated: #27272a;    /* zinc-800 */
+            --border: #3f3f46;             /* zinc-700 */
+            --text-primary: #f4f4f5;       /* zinc-100 */
+            --text-secondary: #a1a1aa;     /* zinc-400 */
+            --text-muted: #71717a;         /* zinc-500 */
+            --accent: #3b82f6;             /* blue-500 */
+            --positive: #22c55e;           /* green-500 */
+            --negative: #ef4444;           /* red-500 */
+            --warning: #fbbf24;            /* amber-400 */
+            --strong-buy: #16a34a;         /* green-600 */
+            --crucible: #a855f7;           /* purple-500 */
+        }
+        /* System preference detection for dark mode */
+        @media (prefers-color-scheme: dark) {
+            :root:not(:not(.dark)) {
+                /* dark class takes precedence */
+            }
+        }
+    </style>
+    <script>
+        // Dark mode: system preference detection (Source.md §13.1)
+        (function() {
+            var stored = localStorage.getItem('pmacs-theme');
+            if (stored === 'dark') {
+                document.documentElement.classList.add('dark');
+            } else if (stored === 'light') {
+                document.documentElement.classList.remove('dark');
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
 </head>
-<body class="h-full bg-zinc-50 text-zinc-900 font-sans">
+<body class="h-full bg-surface text-text-primary font-sans">
 
     <!-- Viewport width guard (Source.md §13.7: minimum 1024px) -->
-    <div id="viewport-guard" class="hidden fixed inset-0 z-[100] bg-zinc-900 flex items-center justify-center">
+    <div id="viewport-guard" class="hidden fixed inset-0 z-[100] bg-zinc-900 flex items-center justify-center" role="alert">
         <div class="text-center text-zinc-300">
             <p class="text-lg font-medium mb-2">PMACS requires a wider window</p>
             <p class="text-sm text-zinc-500">This is a desktop tool. Please resize your browser to at least 1024px wide.</p>
@@ -33,13 +118,13 @@
     </div>
 
     <!-- Top bar: 56px (Source.md §13.2) -->
-    <header class="fixed top-0 left-0 right-0 h-14 bg-white border-b border-zinc-200 flex items-center px-6 z-40" role="banner">
-        <span class="font-mono text-blue-600 font-semibold text-lg tracking-tight" aria-label="PMACS">PMACS</span>
+    <header class="fixed top-0 left-0 right-0 h-14 bg-surface-elevated border-b border-border flex items-center px-6 z-40" role="banner">
+        <span class="font-mono text-accent font-semibold text-lg tracking-tight" aria-label="PMACS">PMACS</span>
         <span class="ml-4 px-2 py-0.5 text-xs font-mono rounded {{ 'bg-green-100 text-green-700' if 'PAPER' in mode else 'bg-blue-100 text-blue-700' }}"
               aria-label="Current mode: {{ mode }}">{{ mode }}</span>
-        <div id="cycle-indicator" class="flex-1 text-center text-sm text-zinc-500" role="status" aria-live="polite">Idle. Last cycle: --</div>
+        <div id="cycle-indicator" class="flex-1 text-center text-sm text-text-secondary" role="status" aria-live="polite">Idle. Last cycle: --</div>
         <button id="kill-switch-btn"
-                class="px-3 py-1.5 text-sm font-medium rounded bg-zinc-700 text-white hover:bg-red-600 transition-colors"
+                class="px-3 py-1.5 text-sm font-medium rounded bg-zinc-700 text-white hover:bg-red-600 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
                 aria-label="Kill switch"
                 onclick="handleKillSwitch()">
             Kill Switch
@@ -47,7 +132,7 @@
     </header>
 
     <!-- Left sidebar: 240px (Source.md §13.2) -->
-    <nav class="fixed left-0 top-14 bottom-0 w-60 bg-white border-r border-zinc-200 p-4 overflow-y-auto"
+    <nav class="fixed left-0 top-14 bottom-0 w-60 bg-surface-elevated border-r border-border p-4 overflow-y-auto"
          role="navigation" aria-label="Main navigation">
         {% set pages = [
             ("dashboard", "Dashboard", "/", "1"),
@@ -90,8 +175,8 @@
         </div>
     </nav>
 
-    <!-- Main content area -->
-    <main class="ml-60 mt-14 p-8 min-h-[calc(100vh-3.5rem)]" role="main" id="main-content">
+    <!-- Main content area — responsive: single-col <1280px, multi-col >=1280px -->
+    <main class="ml-60 mt-14 p-page-gutter min-h-[calc(100vh-3.5rem)] max-w-[1920px]" role="main" id="main-content">
         {% block content %}{% endblock %}
     </main>
 

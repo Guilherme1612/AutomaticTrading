@@ -1,16 +1,53 @@
-/* PMACS Dashboard custom styles — Tailwind via CDN handles most styling */
+/* PMACS Dashboard custom styles — Tailwind CDN + custom tokens from Source.md §13.1 */
 
 /* ─── Accessibility (Source.md §13.7) ──────────────────────────────────── */
 
-/* Focus states: 2px accent outline, never outline:none without replacement */
+/* Focus states: 2px accent outline, WCAG AA compliant */
 *:focus-visible {
-    outline: 2px solid #2563eb;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
 
 /* Focus trap for modals */
 [role="dialog"]:focus-within {
     outline: none;
+}
+
+/* ─── Dark mode body + surface overrides ─────────────────────────────── */
+
+.dark body,
+.dark .bg-surface {
+    background-color: var(--surface);
+}
+
+.dark .bg-surface-elevated,
+.dark header,
+.dark nav,
+.dark .bg-white {
+    background-color: var(--surface-elevated);
+}
+
+.dark .border-border,
+.dark .border-zinc-200 {
+    border-color: var(--border);
+}
+
+.dark .text-text-primary,
+.dark .text-zinc-900 {
+    color: var(--text-primary);
+}
+
+.dark .text-text-secondary,
+.dark .text-zinc-600 {
+    color: var(--text-secondary);
+}
+
+.dark .text-zinc-500 {
+    color: var(--text-muted);
+}
+
+.dark .text-zinc-400 {
+    color: var(--text-muted);
 }
 
 /* ─── Reduced Motion (Source.md §13.7) ─────────────────────────────────── */
@@ -292,3 +329,54 @@ details[open] summary::before {
 @media print {
     body { display: none; }
 }
+
+/* ─── Responsiveness (Source.md §13.7) ────────────────────────────────── */
+
+/* Below 1024px: viewport guard handles it (in base.html) */
+
+/* 1024-1280px: single column layout */
+@media (min-width: 1024px) and (max-width: 1279px) {
+    main#main-content {
+        padding: 24px;
+    }
+    .grid-cols-3 {
+        grid-template-columns: 1fr;
+    }
+    .grid-cols-2 {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 1280px+: multi-column layout */
+@media (min-width: 1280px) {
+    main#main-content {
+        padding: 32px;
+    }
+}
+
+/* 1440px+: right rail on dashboard */
+@media (min-width: 1440px) {
+    .dashboard-layout {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 24px;
+    }
+    .dashboard-right-rail {
+        display: block;
+    }
+}
+
+/* ─── WCAG AA Contrast Compliance (Source.md §13.7) ──────────────────── */
+
+/* All interactive elements must have visible focus indicators */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* ─── prefers-reduced-motion (Source.md §13.7) ──────────────────────────── */

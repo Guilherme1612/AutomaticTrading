@@ -60,7 +60,7 @@ class TestComputeConviction:
         assert result == pytest.approx(0.3)
 
     def test_non_bootstrap_zero_maturity(self):
-        """Non-bootstrap: 0 matured -> maturity_factor=0.0 -> conviction=0.0."""
+        """Non-bootstrap: 0 matured -> maturity_factor floored at 0.25."""
         arb = _make_arb(p_up=0.7, p_down=0.1, matured=0)
         result = compute_conviction(
             arb,
@@ -68,7 +68,8 @@ class TestComputeConviction:
             ev_multiple=1.5,
             is_bootstrap=False,
         )
-        assert result == pytest.approx(0.0)
+        # direction=0.6, maturity=0.25 (floor), crucible=1.0, ev=1.0
+        assert result == pytest.approx(0.6 * 0.25)
 
     def test_negative_direction(self):
         """Negative direction (p_down > p_up) -> negative conviction."""
@@ -139,8 +140,8 @@ class TestVerdictTier:
         assert verdict_tier(0.0) == VerdictTier.SKIP
 
     def test_active_holding_with_valid_thesis(self):
-        """Active holding with valid thesis -> BUY (HOLD)."""
-        assert verdict_tier(0.1, is_active_holding=True, thesis_valid=True) == VerdictTier.BUY
+        """Active holding with valid thesis -> HOLD."""
+        assert verdict_tier(0.1, is_active_holding=True, thesis_valid=True) == VerdictTier.HOLD
 
     def test_active_holding_invalid_thesis(self):
         """Active holding with invalid thesis -> normal tier logic."""

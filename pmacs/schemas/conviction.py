@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class VerdictTier(str, Enum):
     STRONG_BUY = "STRONG_BUY"
     BUY = "BUY"
+    HOLD = "HOLD"
     SKIP = "SKIP"
 
 
@@ -42,4 +43,4 @@ class ConvictionResult(BaseModel):
             return VerdictTier.STRONG_BUY
         if score >= 0.3:
             return VerdictTier.BUY
-        return VerdictTier.SKIP
+        return VerdictTier.SKIP  # HOLD is only via verdict_tier() for active holdings

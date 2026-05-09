@@ -1,4 +1,4 @@
-"""MemoWriter sanity validator — persona-specific checks (Agents.md §15).
+"""MemoWriter sanity validator — persona-specific checks (Agents.md §13).
 
 Checks:
 - verdict_line starts with STRONG_BUY / BUY / HOLD / SKIP

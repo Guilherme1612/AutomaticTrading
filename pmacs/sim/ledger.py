@@ -6,7 +6,7 @@ Capital: $5,000 initial, max 5 concurrent positions, 20% max single position.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pmacs.constants import CATASTROPHE_NET_PCT, MAX_CONCURRENT_POSITIONS, MAX_SINGLE_POSITION_PCT, PAPER_CAPITAL_USD
 
@@ -74,6 +74,11 @@ class PaperLedger:
         stop_price: float | None = None,
     ) -> None:
         """Open a new position. Raises ValueError on constraint violations."""
+        if shares <= 0:
+            raise ValueError(f"Shares must be positive, got {shares}")
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+
         cost = shares * price
 
         # Check cash sufficiency
@@ -109,7 +114,7 @@ class PaperLedger:
             ticker=ticker,
             shares=shares,
             entry_price=price,
-            entry_date=datetime.utcnow(),
+            entry_date=datetime.now(timezone.utc),
             current_price=price,
             stop_price=stop_price,
             sector=sector,
@@ -117,6 +122,8 @@ class PaperLedger:
 
     def close_position(self, ticker: str, price: float) -> float:
         """Close a position. Returns realized PnL."""
+        if price <= 0:
+            raise ValueError(f"Close price must be positive, got {price}")
         if ticker not in self.positions:
             raise ValueError(f"No position: {ticker}")
 

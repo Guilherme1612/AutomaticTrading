@@ -5,7 +5,7 @@ Three-layer validation pipeline:
   2. Pydantic model_validate() parse
   3. Sanity validator
 
-spec_ref: Agents.md §14
+spec_ref: Agents.md §12
 """
 
 from __future__ import annotations
@@ -58,5 +58,7 @@ class CrucibleRunner(PersonaRunner):
             context_block = f"\n## Episodic Context\n{episodic_context}"
 
         return template.replace(
+            "{evidence}", evidence_text
+        ).replace(
             "{episodic_context}", context_block
         )

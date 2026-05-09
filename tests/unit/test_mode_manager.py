@@ -99,6 +99,24 @@ class TestTransitionMode:
                 Mode.PAPER_VALIDATED, Mode.LIVE_EARLY, reason="promotion"
             )
 
+    def test_paper_validated_requires_totp(self) -> None:
+        """Spec: PAPER → PAPER_VALIDATED requires TOTP."""
+        with pytest.raises(ValueError, match="TOTP verification"):
+            transition_mode(
+                Mode.PAPER, Mode.PAPER_VALIDATED, reason="promotion"
+            )
+
+    def test_paper_validated_with_totp_succeeds(self) -> None:
+        """PAPER → PAPER_VALIDATED with TOTP succeeds."""
+        result = transition_mode(
+            Mode.PAPER,
+            Mode.PAPER_VALIDATED,
+            reason="met criteria",
+            totp_verified=True,
+        )
+        assert result.to_mode == Mode.PAPER_VALIDATED
+        assert result.operator_totp_verified is True
+
     def test_live_standard_requires_totp(self) -> None:
         with pytest.raises(ValueError, match="TOTP verification"):
             transition_mode(
@@ -180,8 +198,9 @@ class TestRequiresTotp:
     def test_installing_does_not_require_totp(self) -> None:
         assert requires_totp(Mode.INSTALLING) is False
 
-    def test_paper_validated_does_not_require_totp(self) -> None:
-        assert requires_totp(Mode.PAPER_VALIDATED) is False
+    def test_paper_validated_requires_totp(self) -> None:
+        """Spec: PAPER → PAPER_VALIDATED requires TOTP (Source.md line 147)."""
+        assert requires_totp(Mode.PAPER_VALIDATED) is True
 
 
 class TestGetValidTransitions:

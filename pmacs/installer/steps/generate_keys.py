@@ -34,6 +34,7 @@ def run(wizard: Wizard, key_dir: Path | None = None) -> dict:
 
     key_dir = Path(key_dir)
     key_dir.mkdir(parents=True, exist_ok=True)
+    key_dir.chmod(0o700)  # Restrict directory for signing keys + TOTP secret
 
     # Generate Ed25519 keypair
     priv_path = key_dir / PRIVATE_KEY_FILE

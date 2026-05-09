@@ -5,7 +5,7 @@ Three-layer validation pipeline:
   2. Pydantic model_validate() parse
   3. Sanity validator
 
-spec_ref: Agents.md §15
+spec_ref: Agents.md §13
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class MemoWriterRunner(PersonaRunner):
         super().__init__(
             persona_name="memo_writer",
             grammar_name="memo_writer",
-            temperature=0.3,  # Higher than analysis, lower than Crucible
+            temperature=0.3,  # Highest temperature: analysis=0.2, Crucible=0.1
             max_tokens=1024,
         )
 
@@ -58,5 +58,7 @@ class MemoWriterRunner(PersonaRunner):
             context_block = f"\n## Episodic Context\n{episodic_context}"
 
         return template.replace(
+            "{evidence}", evidence_text
+        ).replace(
             "{episodic_context}", context_block
         )

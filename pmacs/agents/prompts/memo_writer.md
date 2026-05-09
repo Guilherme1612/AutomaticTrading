@@ -8,8 +8,12 @@ STRUCTURE:
 3. KEY EVIDENCE: 3-5 bullet points. The strongest evidence supporting the thesis.
 4. KEY RISKS: 2-3 bullet points. The strongest Crucible attacks that survived.
 5. NUMBERS: conviction score, directional probability, EV multiple, sizing.
-6. DISSENT: any persona that significantly disagreed with the consensus.
+6. DISSENT: any persona that significantly disagreed with the consensus. What did they see?
 
 Keep the memo under 400 words. Use plain language.
+The operator is an experienced investor; do not over-explain standard financial concepts.
+
+## Evidence and Outputs
+{evidence}
 
 {episodic_context}

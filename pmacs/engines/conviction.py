@@ -31,7 +31,7 @@ def compute_conviction(
     if is_bootstrap:
         maturity_factor = max(0.50, min(arb.matured_sources_used / 4.0, 1.0))
     else:
-        maturity_factor = min(arb.matured_sources_used / 4.0, 1.0)
+        maturity_factor = max(0.25, min(arb.matured_sources_used / 4.0, 1.0))
 
     crucible_factor = max(0.0, 1.0 - crucible_severity)
     ev_factor = min(ev_multiple / 1.5, 1.0)
@@ -53,7 +53,7 @@ def verdict_tier(
     Active holding with valid thesis -> HOLD.
     """
     if is_active_holding and thesis_valid:
-        return VerdictTier.BUY  # HOLD mapped to BUY per spec schema
+        return VerdictTier.HOLD  # Active position with valid thesis
     if conviction >= 0.6:
         return VerdictTier.STRONG_BUY
     if conviction >= 0.3:

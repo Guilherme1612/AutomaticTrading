@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,7 +42,7 @@ class ModeTransition(BaseModel):
 
     from_mode: Mode
     to_mode: Mode
-    changed_at: datetime = Field(default_factory=datetime.utcnow)
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     reason: str = ""
     operator_totp_verified: bool = False
     triggered_by: str = "OPERATOR"  # OPERATOR / AUTO_DEMOTION

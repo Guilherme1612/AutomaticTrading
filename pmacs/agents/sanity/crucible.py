@@ -1,4 +1,4 @@
-"""Crucible sanity validator — persona-specific checks (Agents.md §14).
+"""Crucible sanity validator — persona-specific checks (Agents.md §12).
 
 Checks:
 - severity matches max attack severity (within 0.05)

@@ -3,17 +3,34 @@
 Spec ref: Architecture.md §4.6, Source.md §1, Phases.md §3
 Mode ladder: INSTALLING -> SHADOW -> PAPER -> PAPER_VALIDATED -> LIVE_EARLY -> LIVE_STANDARD -> LIVE_EXPANDED
 All LIVE transitions require operator TOTP verification.
+PAPER → PAPER_VALIDATED also requires TOTP per Source.md line 147.
 """
 from __future__ import annotations
 
 from pmacs.schemas.system import Mode, ModeTransition, VALID_MODE_TRANSITIONS
 
-# Modes that require TOTP verification to transition into
-LIVE_MODES: frozenset[Mode] = frozenset({
+# Mode ladder ranking — higher = more privileged
+MODE_RANK: dict[Mode, int] = {
+    Mode.INSTALLING: 0,
+    Mode.SHADOW: 1,
+    Mode.PAPER: 2,
+    Mode.PAPER_VALIDATED: 3,
+    Mode.LIVE_EARLY: 4,
+    Mode.LIVE_STANDARD: 5,
+    Mode.LIVE_EXPANDED: 6,
+}
+
+# Modes that require TOTP verification to transition INTO (promotion only)
+# Spec: Source.md line 147 — PAPER_VALIDATED and all LIVE modes require TOTP
+TOTP_REQUIRED_MODES: frozenset[Mode] = frozenset({
+    Mode.PAPER_VALIDATED,
     Mode.LIVE_EARLY,
     Mode.LIVE_STANDARD,
     Mode.LIVE_EXPANDED,
 })
+
+# Backward compat alias
+LIVE_MODES = TOTP_REQUIRED_MODES
 
 
 def can_transition(from_mode: Mode, to_mode: Mode) -> bool:
@@ -41,7 +58,7 @@ def transition_mode(
         ModeTransition record on success.
 
     Raises:
-        ValueError: If transition is invalid or TOTP is missing for LIVE modes.
+        ValueError: If transition is invalid or TOTP is missing for required modes.
     """
     if not can_transition(from_mode, to_mode):
         raise ValueError(
@@ -49,8 +66,9 @@ def transition_mode(
             f"Valid targets: {[m.value for m in VALID_MODE_TRANSITIONS.get(from_mode, set())]}"
         )
 
-    # LIVE transitions require TOTP verification
-    if to_mode in LIVE_MODES and not totp_verified:
+    # TOTP required for promotions to TOTP_REQUIRED_MODES (not demotions)
+    is_promotion = MODE_RANK.get(to_mode, 0) > MODE_RANK.get(from_mode, 0)
+    if to_mode in TOTP_REQUIRED_MODES and is_promotion and not totp_verified:
         raise ValueError(
             f"Mode transition to {to_mode.value} requires TOTP verification"
         )

@@ -17,6 +17,9 @@ class SanityResult:
     reason: str | None = None
 
 
+PROB_SUM_TOLERANCE = 0.05
+
+
 class BaseSanityValidator:
     """Abstract sanity validator with common checks.
 
@@ -34,9 +37,10 @@ class BaseSanityValidator:
         Returns:
             SanityResult with passed=True if all checks pass.
         """
-        # Common check: reasoning must be non-empty
-        reasoning = output.get("reasoning", "")
-        if not reasoning or not reasoning.strip():
+        # Common check: reasoning must be non-empty if present
+        # Not all personas have a reasoning field (e.g. Crucible, MemoWriter)
+        reasoning = output.get("reasoning", None)
+        if reasoning is not None and not reasoning.strip():
             return SanityResult(passed=False, reason="reasoning field is empty")
 
         # Common check: evidence_ids reference real packets
@@ -55,6 +59,16 @@ class BaseSanityValidator:
                         passed=False,
                         reason=f"evidence_id '{eid}' not found in provided packets",
                     )
+
+        # Common check: probability sum ≈ 1.0 (defense-in-depth)
+        p_keys = ("p_up", "p_flat", "p_down")
+        if all(k in output for k in p_keys):
+            total = output["p_up"] + output["p_flat"] + output["p_down"]
+            if abs(total - 1.0) > PROB_SUM_TOLERANCE:
+                return SanityResult(
+                    passed=False,
+                    reason=f"probabilities sum to {total:.4f}, expected ~1.0 (tolerance {PROB_SUM_TOLERANCE})",
+                )
 
         # Persona-specific checks
         return self._persona_checks(output, evidence)

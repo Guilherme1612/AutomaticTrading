@@ -227,7 +227,7 @@ function handleNotification(eventType, data) {
     }
 }
 
-// ─── Cmd-K Command Palette (Source.md §13.2) ───────────────────────────────
+// ─── Cmd-K Command Palette (Source.md §13.2, §13.6) ─────────────────────────
 
 var CMD_K_PAGES = [
     { name: "Dashboard", href: "/", category: "page" },
@@ -244,9 +244,28 @@ var CMD_K_ACTIONS = [
     { name: "Engage kill switch", action: "handleKillSwitch", category: "action" },
     { name: "Compare cycles", action: "openCycleCompare", category: "action" },
     { name: "Failures by taxonomy", action: "openTaxonomyBrowser", category: "action" },
+    { name: "Promote all P1 queue", action: "promoteAllP1Global", category: "action" },
+    { name: "Show shortcuts", action: "showShortcuts", category: "action" },
+    { name: "Open TOTP modal", action: "openTOTPManual", category: "action" },
 ];
 
-var CMD_K_ALL = CMD_K_PAGES.concat(CMD_K_ACTIONS);
+// Error codes from Architecture.md §5.5 — searchable in palette
+var CMD_K_ERROR_CODES = [
+    { name: "E001 — Queue pop on empty", href: "/debug?event=E001", category: "audit" },
+    { name: "E002 — Cycle timeout exceeded", href: "/debug?event=E002", category: "audit" },
+    { name: "E003 — Inference connection lost", href: "/debug?event=E003", category: "audit" },
+    { name: "E004 — TOTP verification failed", href: "/debug?event=E004", category: "audit" },
+    { name: "E005 — Audit chain hash mismatch", href: "/debug?event=E005", category: "audit" },
+    { name: "E006 — Broker connection error", href: "/debug?event=E006", category: "audit" },
+    { name: "E010 — Holding state invalid transition", href: "/debug?event=E010", category: "audit" },
+    { name: "E011 — Schema validation failure", href: "/debug?event=E011", category: "audit" },
+    { name: "E012 — Probability range violation", href: "/debug?event=E012", category: "audit" },
+    { name: "E013 — Persona output sanity fail", href: "/debug?event=E013", category: "audit" },
+    { name: "E014 — Crucible budget exceeded", href: "/debug?event=E014", category: "audit" },
+    { name: "E015 — Mutation auto-rollback triggered", href: "/debug?event=E015", category: "audit" },
+];
+
+var CMD_K_ALL = CMD_K_PAGES.concat(CMD_K_ACTIONS).concat(CMD_K_ERROR_CODES);
 var cmdKActiveIndex = -1;
 
 function toggleCmdK() {
@@ -282,7 +301,7 @@ function renderCmdKResults(query) {
     // If query looks like a ticker (1-5 uppercase letters), add ticker search
     if (/^[A-Z]{1,5}$/i.test(query)) {
         filtered.unshift({
-            name: 'Go to Pipeline → ' + query.toUpperCase(),
+            name: 'Go to Pipeline filtered: ' + query.toUpperCase(),
             href: '/pipeline?ticker=' + query.toUpperCase(),
             category: "ticker",
         });
@@ -297,23 +316,39 @@ function renderCmdKResults(query) {
         });
     }
 
+    // If query looks like error code search (E followed by digits)
+    if (/^E\d{1,3}$/i.test(query)) {
+        filtered.unshift({
+            name: 'Search debug events: ' + query.toUpperCase(),
+            href: '/debug?event=' + query.toUpperCase(),
+            category: "audit",
+        });
+    }
+
     results.innerHTML = "";
     cmdKActiveIndex = -1;
+
+    var categoryLabel = {
+        page: "Page",
+        action: "Action",
+        ticker: "Ticker",
+        audit: "Audit",
+    };
 
     filtered.forEach(function (item, idx) {
         var li = document.createElement("li");
         li.setAttribute("role", "option");
-
-        var categoryLabel = {
-            page: "Page",
-            action: "Action",
-            ticker: "Ticker",
-            audit: "Audit",
-        };
+        li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-zinc-100 text-sm";
 
         li.innerHTML =
-            '<span class="text-xs text-zinc-400 font-mono mr-2">' + (categoryLabel[item.category] || "") + '</span>' +
-            '<span>' + item.name + '</span>';
+            '<span class="text-xs font-mono mr-3 px-1.5 py-0.5 rounded ' +
+            (item.category === "page" ? "bg-blue-50 text-blue-500" : "") +
+            (item.category === "action" ? "bg-green-50 text-green-600" : "") +
+            (item.category === "ticker" ? "bg-amber-50 text-amber-600" : "") +
+            (item.category === "audit" ? "bg-purple-50 text-purple-600" : "") +
+            '">' + (categoryLabel[item.category] || "") + '</span>' +
+            '<span class="flex-1">' + item.name + '</span>';
+
         li.addEventListener("click", function () {
             executeCmdKItem(item);
         });
@@ -323,15 +358,23 @@ function renderCmdKResults(query) {
         });
         results.appendChild(li);
     });
+
+    // No results state
+    if (filtered.length === 0) {
+        var empty = document.createElement("li");
+        empty.className = "px-4 py-3 text-sm text-zinc-400 text-center";
+        empty.textContent = 'No results for "' + query + '"';
+        results.appendChild(empty);
+    }
 }
 
 function updateCmdKActiveItem(results) {
-    var items = results.querySelectorAll("li");
+    var items = results.querySelectorAll("li[role='option']");
     items.forEach(function (li, idx) {
         if (idx === cmdKActiveIndex) {
-            li.classList.add("active");
+            li.classList.add("bg-zinc-100");
         } else {
-            li.classList.remove("active");
+            li.classList.remove("bg-zinc-100");
         }
     });
 }
@@ -339,6 +382,8 @@ function updateCmdKActiveItem(results) {
 function executeCmdKItem(item) {
     closeCmdK();
     if (item.href) {
+        // Push URL state via history API for HTMX compatibility
+        history.pushState({ page: item.href }, "", item.href);
         window.location.href = item.href;
     } else if (item.action && typeof window[item.action] === "function") {
         window[item.action]();
@@ -356,7 +401,35 @@ function openCycleCompare() {
 }
 
 function openTaxonomyBrowser() {
+    history.pushState({ page: "/debug" }, "", "/debug?filter=taxonomy");
     window.location.href = "/debug?filter=taxonomy";
+}
+
+function promoteAllP1Global() {
+    fetch("/pipeline/queue/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+    }).then(function (resp) {
+        return resp.json();
+    }).then(function (data) {
+        if (data.ok) {
+            showToast("Promoted " + data.promoted_count + " P1 items", "success");
+        }
+    }).catch(function () {
+        showToast("Failed to promote P1 items", "error");
+    });
+}
+
+function showShortcuts() {
+    document.getElementById("shortcut-overlay").classList.remove("hidden");
+}
+
+function openTOTPManual() {
+    open_totp_modal({
+        actionId: "manual_totp_verify",
+        description: "Manual TOTP verification",
+        consequences: "No specific action gated — verify your TOTP code.",
+    });
 }
 
 // ─── Keyboard Shortcuts (Source.md §13.6) ───────────────────────────────────

@@ -78,7 +78,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     # --- Abort states — not failures, they're prevention -------------------
     if holding.state in ("ABORTED_PRE_LLM", "ABORTED_LLM", "ABORTED_RISK"):
         return ClassifyResult(
-            primary=FailureTaxonomy.THESIS_INVALIDATED_PREMATURE,
+            primary=FailureTaxonomy.UNCLASSIFIED,
             severity=0.0,
             summary=f"Aborted: {holding.exit_reason or holding.state}",
             holding_id=holding_id,
@@ -96,7 +96,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     # --- EXIT_OPPORTUNITY_COST ---------------------------------------------
     if holding.state == "EXIT_OPPORTUNITY_COST":
         return ClassifyResult(
-            primary=FailureTaxonomy.OPPORTUNITY_COST_EXCEEDED,
+            primary=FailureTaxonomy.OPPORTUNITY_COST_EXIT_CORRECT,
             severity=0.2,
             summary="Exit via opportunity cost decision",
             holding_id=holding_id,
@@ -110,7 +110,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     # --- RESOLUTION_TIMEOUT ------------------------------------------------
     if holding.state == "RESOLUTION_TIMEOUT":
         return ClassifyResult(
-            primary=FailureTaxonomy.CATALYST_FAILED_TO_MATERIALIZE,
+            primary=FailureTaxonomy.CATALYST_TIMEOUT,
             severity=0.5,
             summary="Catalyst resolution timed out",
             holding_id=holding_id,
@@ -120,7 +120,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     # --- PANIC_EXIT / EXIT_FAILED ------------------------------------------
     if holding.state in ("PANIC_EXIT", "EXIT_FAILED"):
         return ClassifyResult(
-            primary=FailureTaxonomy.THESIS_INVALIDATED_CORRECT,
+            primary=FailureTaxonomy.UNCLASSIFIED,
             severity=0.6,
             summary=f"Force exit: {holding.state}",
             holding_id=holding_id,
@@ -129,7 +129,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
 
     # --- Fallback ----------------------------------------------------------
     return ClassifyResult(
-        primary=FailureTaxonomy.THESIS_INVALIDATED_PREMATURE,
+        primary=FailureTaxonomy.UNCLASSIFIED,
         severity=0.1,
         summary=f"Unclassified terminal state: {holding.state}",
         holding_id=holding_id,
@@ -145,18 +145,19 @@ def _classify_stop(
     holding: HoldingContext,
     **kwargs: str,
 ) -> ClassifyResult:
-    """STOP_HUNTED vs STOP_LOSS_CORRECT vs CORRELATION_BREAKDOWN."""
+    """STOP_HUNTED vs STOP_LOSS_CORRECT vs EXOGENOUS_MACRO_SHOCK vs
+    CORRELATION_REGIME_SHIFT."""
 
     holding_id: str = kwargs.get("holding_id", "")
     cycle_id: str = kwargs.get("cycle_id", "")
 
-    # Correlation regime shift / sector-wide drop
+    # Exogenous macro shock — sector-wide drop >10% in 5d
     if (
         holding.sector_drop_5d_pct is not None
         and holding.sector_drop_5d_pct < -10.0
     ):
         return ClassifyResult(
-            primary=FailureTaxonomy.CORRELATION_BREAKDOWN,
+            primary=FailureTaxonomy.EXOGENOUS_MACRO_SHOCK,
             severity=0.4,
             summary=f"Sector dropped {holding.sector_drop_5d_pct:.1f}% in 5d",
             holding_id=holding_id,
@@ -208,27 +209,46 @@ def _classify_thesis_invalidation(
     holding: HoldingContext,
     **kwargs: str,
 ) -> ClassifyResult:
-    """Determine PREMATURE vs CORRECT thesis invalidation."""
+    """Determine FUNDAMENTAL vs COMPETITIVE vs REGULATORY thesis invalidation."""
 
     holding_id: str = kwargs.get("holding_id", "")
     cycle_id: str = kwargs.get("cycle_id", "")
 
     reason = (holding.exit_reason or "").lower()
 
-    # If the exit reason mentions fundamental/competitive/regulatory it's
-    # likely a *correct* invalidation — the thesis was truly wrong.
-    if any(kw in reason for kw in ("regulatory", "competitive", "moat", "fundamental")):
+    # Regulatory
+    if "regulatory" in reason:
         return ClassifyResult(
-            primary=FailureTaxonomy.THESIS_INVALIDATED_CORRECT,
+            primary=FailureTaxonomy.THESIS_INVALIDATED_REGULATORY,
             severity=0.6,
-            summary=f"Thesis correctly invalidated: {holding.exit_reason}",
+            summary=f"Thesis invalidated by regulatory action: {holding.exit_reason}",
             holding_id=holding_id,
             cycle_id=cycle_id,
         )
 
-    # Default: premature — we bailed but data didn't clearly contradict.
+    # Competitive / moat
+    if any(kw in reason for kw in ("competitive", "moat")):
+        return ClassifyResult(
+            primary=FailureTaxonomy.THESIS_INVALIDATED_COMPETITIVE,
+            severity=0.6,
+            summary=f"Thesis invalidated by competitive dynamics: {holding.exit_reason}",
+            holding_id=holding_id,
+            cycle_id=cycle_id,
+        )
+
+    # Fundamental
+    if "fundamental" in reason:
+        return ClassifyResult(
+            primary=FailureTaxonomy.THESIS_INVALIDATED_FUNDAMENTAL,
+            severity=0.6,
+            summary=f"Thesis invalidated by fundamental data: {holding.exit_reason}",
+            holding_id=holding_id,
+            cycle_id=cycle_id,
+        )
+
+    # Default: fundamental — we bailed but data didn't clearly specify.
     return ClassifyResult(
-        primary=FailureTaxonomy.THESIS_INVALIDATED_PREMATURE,
+        primary=FailureTaxonomy.THESIS_INVALIDATED_FUNDAMENTAL,
         severity=0.5,
         summary="Fundamental data contradicted thesis",
         holding_id=holding_id,
@@ -245,14 +265,14 @@ def _classify_persona_failure(
     holding_id: str = kwargs.get("holding_id", "")
     cycle_id: str = kwargs.get("cycle_id", "")
 
-    # SIZING_OVERCONFIDENT — realized loss far exceeded expectation
+    # SIZING_OVERLEVERAGED — realized loss far exceeded expectation
     if (
         holding.realized_pnl_pct is not None
         and holding.expected_max_loss_pct is not None
         and abs(holding.realized_pnl_pct) > 2 * holding.expected_max_loss_pct
     ):
         return ClassifyResult(
-            primary=FailureTaxonomy.SIZING_OVERCONFIDENT,
+            primary=FailureTaxonomy.SIZING_OVERLEVERAGED,
             severity=0.6,
             summary=(
                 f"Realized loss {holding.realized_pnl_pct:.1f}% > 2x "
@@ -262,10 +282,10 @@ def _classify_persona_failure(
             cycle_id=cycle_id,
         )
 
-    # ENTRY_TIMING_POOR — significant fill slippage
+    # EXECUTION_SLIPPAGE — significant fill slippage
     if holding.fill_slippage_pct is not None and holding.fill_slippage_pct > 1.0:
         return ClassifyResult(
-            primary=FailureTaxonomy.ENTRY_TIMING_POOR,
+            primary=FailureTaxonomy.EXECUTION_SLIPPAGE,
             severity=0.3,
             summary=f"Fill slippage {holding.fill_slippage_pct:.1f}%",
             holding_id=holding_id,
@@ -282,21 +302,20 @@ def _classify_persona_failure(
             cycle_id=cycle_id,
         )
 
-    # REGIME_SHIFT_MISSED — revenue acceleration was positive but failed
+    # GROWTH_STALL_MISSED — revenue acceleration was positive but failed
     if holding.revenue_acceleration == "ACCELERATING":
         return ClassifyResult(
-            primary=FailureTaxonomy.REGIME_SHIFT_MISSED,
+            primary=FailureTaxonomy.GROWTH_STALL_MISSED,
             severity=0.5,
             summary="Growth was rated ACCELERATING but thesis failed",
             holding_id=holding_id,
             cycle_id=cycle_id,
         )
 
-    # FORENSIC_RED_FLAG_FALSE_POSITIVE — forensics raised flags that were
-    # underweighted
+    # FORENSICS_FLAG_IGNORED — forensics raised flags that were underweighted
     if holding.forensics_flags and len(holding.forensics_flags) > 0:
         return ClassifyResult(
-            primary=FailureTaxonomy.FORENSIC_RED_FLAG_FALSE_POSITIVE,
+            primary=FailureTaxonomy.FORENSICS_FLAG_IGNORED,
             severity=0.6,
             summary=(
                 f"Forensics raised {len(holding.forensics_flags)} red flags "
@@ -306,33 +325,33 @@ def _classify_persona_failure(
             cycle_id=cycle_id,
         )
 
-    # INSIDER_SIGNAL_NOISE — insider buying was misleading
+    # INSIDER_SIGNAL_FALSE — insider buying was misleading
     if holding.insider_signal in ("CLUSTER_BUY", "CEO_BUY"):
         return ClassifyResult(
-            primary=FailureTaxonomy.INSIDER_SIGNAL_NOISE,
+            primary=FailureTaxonomy.INSIDER_SIGNAL_FALSE,
             severity=0.4,
             summary=f"Insider signal was {holding.insider_signal} but thesis failed",
             holding_id=holding_id,
             cycle_id=cycle_id,
         )
 
-    # SHORT_THESIS_CROWDED — shorts were right
+    # SHORT_INTEREST_CORRECT — shorts were right
     if holding.short_anomaly == "SPIKE_UP":
         return ClassifyResult(
-            primary=FailureTaxonomy.SHORT_THESIS_CROWDED,
+            primary=FailureTaxonomy.SHORT_INTEREST_CORRECT,
             severity=0.4,
             summary="Short interest spike was correct; shorts were right",
             holding_id=holding_id,
             cycle_id=cycle_id,
         )
 
-    # SECTOR_CORRELATION_MISJUDGED
+    # CORRELATION_REGIME_SHIFT — high sector correlation treated as idiosyncratic
     if (
         holding.correlation_with_sector is not None
         and holding.correlation_with_sector > 0.8
     ):
         return ClassifyResult(
-            primary=FailureTaxonomy.SECTOR_CORRELATION_MISJUDGED,
+            primary=FailureTaxonomy.CORRELATION_REGIME_SHIFT,
             severity=0.4,
             summary=(
                 f"Stock correlated {holding.correlation_with_sector:.2f} "
@@ -342,22 +361,22 @@ def _classify_persona_failure(
             cycle_id=cycle_id,
         )
 
-    # CATALYST_TIMING_MISREAD — catalyst happened but market disagreed
+    # CATALYST_FALSE_POSITIVE — catalyst happened but market disagreed
     if holding.actual_outcome == "down" and holding.state in (
         "RESOLVED_DOWN",
         "RESOLVED_MIXED",
     ):
         return ClassifyResult(
-            primary=FailureTaxonomy.CATALYST_TIMING_MISREAD,
+            primary=FailureTaxonomy.CATALYST_FALSE_POSITIVE,
             severity=0.4,
             summary="Catalyst resolved but market disagreed",
             holding_id=holding_id,
             cycle_id=cycle_id,
         )
 
-    # SIZING_UNDERCONFIDENT — fallback for down outcomes with no clear cause
+    # UNCLASSIFIED — fallback for down outcomes with no clear cause
     return ClassifyResult(
-        primary=FailureTaxonomy.SIZING_UNDERCONFIDENT,
+        primary=FailureTaxonomy.UNCLASSIFIED,
         severity=0.2,
         summary=f"Unresolved failure for {holding.ticker}",
         holding_id=holding_id,

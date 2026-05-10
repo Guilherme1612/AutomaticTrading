@@ -51,7 +51,7 @@ class TestFullDataBrief:
             regime_confidence=0.8,
             recent_failures=[
                 {"taxonomy": "STOP_HUNTED", "summary": "Stopped out then recovered"},
-                {"taxonomy": "CATALYST_TIMING_MISREAD", "summary": "Earnings timing off"},
+                {"taxonomy": "CATALYST_FALSE_POSITIVE", "summary": "Earnings timing off"},
             ],
             persona_brier=0.22,
             persona_cycle_count=15,
@@ -59,7 +59,7 @@ class TestFullDataBrief:
             affinity_data={"avg_brier": 0.22, "cycle_count": 15},
             fde_history=[
                 {"taxonomy": "STOP_HUNTED", "severity": 0.7},
-                {"taxonomy": "ENTRY_TIMING_POOR", "severity": 0.3},
+                {"taxonomy": "EXECUTION_SLIPPAGE", "severity": 0.3},
             ],
         )
         assert len(brief) > 0

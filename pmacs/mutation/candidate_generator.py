@@ -61,7 +61,7 @@ GENERATION_RULES: list[dict] = [
         ),
     },
     {
-        "taxonomy": "SIZING_OVERCONFIDENT",
+        "taxonomy": "SIZING_OVERLEVERAGED",
         "min_count": 5,
         "window_cycles": 30,
         "dimension": "thresholds",

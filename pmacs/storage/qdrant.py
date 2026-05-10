@@ -1,8 +1,13 @@
-"""Qdrant vector adapter — stub for thesis/memo/lesson embedding operations."""
+"""Qdrant vector adapter — stub for thesis/memo/lesson embedding operations.
+
+Architecture.md §1.8: Both audit and debug logging required.
+"""
 from __future__ import annotations
 
 import hashlib
 from typing import Any
+
+from pmacs.logsys import log_debug
 
 
 class QdrantAdapter:
@@ -23,10 +28,22 @@ class QdrantAdapter:
 
     def upsert(self, collection: str, id: str, vector: list[float], payload: dict) -> None:
         """Upsert a point.  Stub."""
-        pass
+        # Audit event — vector upsert (Architecture.md §1.8)
+        log_debug(
+            "QDRANT_UPSERT",
+            payload={"collection": collection, "id": id},
+            level="INFO",
+            msg=f"Qdrant upsert: {collection}/{id}",
+        )
 
     def search(self, collection: str, vector: list[float], limit: int = 5) -> list[dict]:
         """Search by vector similarity.  Stub."""
+        # Debug event — search trace (Architecture.md §1.8)
+        log_debug(
+            "QDRANT_SEARCH",
+            payload={"collection": collection, "limit": limit},
+            level="DEBUG",
+        )
         return []
 
     def get_embedding(self, text: str) -> list[float]:
@@ -40,4 +57,10 @@ class QdrantAdapter:
 
     def create_collections(self) -> None:
         """Create all required collections.  Stub."""
-        pass
+        # Audit event — collections created (Architecture.md §1.8)
+        log_debug(
+            "QDRANT_COLLECTIONS_CREATED",
+            payload={"collections": self.COLLECTIONS},
+            level="INFO",
+            msg=f"Qdrant collections created: {len(self.COLLECTIONS)} collections",
+        )

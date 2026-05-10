@@ -83,6 +83,15 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "CATASTROPHE_CANCEL_NO_BROKER",
     "CATASTROPHE_NET_CANCELLED",
     "EXECUTE_EXIT",
+    # Storage layer (not cycle-scoped)
+    "KUZU_QUERY",
+    "KUZU_FAILURES_RETRIEVED",
+    "KUZU_LINEAGE_RETRIEVED",
+    "QDRANT_UPSERT",
+    "QDRANT_SEARCH",
+    "QDRANT_COLLECTIONS_CREATED",
+    "DUCKDB_TABLES_INITIALIZED",
+    "DUCKDB_WRITE",
 })
 
 # Module-level log file path (set during initialization)

@@ -1,8 +1,13 @@
-"""DuckDB analytics adapter — rolling metrics, persona performance, affinity tables."""
+"""DuckDB analytics adapter — rolling metrics, persona performance, affinity tables.
+
+Architecture.md §1.8: Both audit and debug logging required.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+from pmacs.logsys import log_debug
 
 
 class DuckDBAdapter:
@@ -87,6 +92,19 @@ class DuckDBAdapter:
             """
         )
 
+        # Audit event — tables initialized (Architecture.md §1.8)
+        log_debug(
+            "DUCKDB_TABLES_INITIALIZED",
+            payload={"tables": [
+                "rolling_metrics",
+                "persona_performance",
+                "persona_ticker_affinity",
+                "failure_taxonomy_counts",
+            ]},
+            level="INFO",
+            msg="DuckDB analytics tables initialized",
+        )
+
     # ------------------------------------------------------------------
     # Query helpers
     # ------------------------------------------------------------------
@@ -118,4 +136,16 @@ class DuckDBAdapter:
                 updated_at = now()
             """,
             [persona, ticker, brier, brier],
+        )
+
+        # Debug event — affinity write (Architecture.md §1.8)
+        log_debug(
+            "DUCKDB_WRITE",
+            payload={
+                "table": "persona_ticker_affinity",
+                "persona": persona,
+                "ticker": ticker,
+                "brier": brier,
+            },
+            level="DEBUG",
         )

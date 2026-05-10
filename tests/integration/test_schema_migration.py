@@ -20,6 +20,13 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import duckdb as _duckdb_mod  # noqa: F401
+
+    _HAS_DUCKDB = True
+except ImportError:
+    _HAS_DUCKDB = False
+
 from pmacs.storage.duckdb import DuckDBAdapter
 from pmacs.storage.kuzu import KuzuDBAdapter
 from pmacs.storage.qdrant import QdrantAdapter
@@ -31,6 +38,7 @@ from pmacs.storage.sqlite import init_db
 # ======================================================================
 
 
+@pytest.mark.skipif(not _HAS_DUCKDB, reason="duckdb package not installed")
 class TestDuckDBSchemaMigration:
     """Verify DuckDB adapter init_tables() creates all required analytics tables."""
 

@@ -48,7 +48,57 @@ class KuzuDBAdapter:
         cycle_id: str,
         summary: str,
     ) -> None:
-        """Write a FailedAssumption node and link to Holding."""
+        """Write a FailedAssumption node and link to Holding.
+
+        Architecture.md §9.5: Cypher creates the node and links it to the
+        parent Holding.  If the KuzuDB connection is not available (stub
+        mode), logs a warning and returns gracefully.
+        """
+        import logging
+        from datetime import datetime, timezone
+
+        if self._conn is None:
+            log_debug(
+                "FAILED_ASSUMPTION_WRITTEN",
+                payload={
+                    "fa_id": fa_id,
+                    "taxonomy": taxonomy,
+                    "severity": severity,
+                    "holding_id": holding_id,
+                    "stub": True,
+                    "reason": "KuzuDB connection not available",
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Failed assumption stub-logged (no KuzuDB): {fa_id} ({taxonomy})",
+            )
+            return
+
+        cypher = """CREATE (fa:FailedAssumption {
+    id: $id, taxonomy: $tax, severity: $sev, ts: $ts,
+    holding_id: $hid, cycle_id: $cid, summary: $summary
+})
+WITH fa
+MATCH (h:Holding {id: $hid})
+CREATE (h)-[:FAILED_ASSUMPTION]->(fa)"""
+
+        params = {
+            "id": fa_id,
+            "tax": taxonomy,
+            "sev": severity,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "hid": holding_id,
+            "cid": cycle_id,
+            "summary": summary,
+        }
+
+        try:
+            self.execute(cypher, params)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "KuzuDB FailedAssumption write failed: %s", exc
+            )
+
         # Audit event — failed assumption written (Architecture.md §1.8)
         log_debug(
             "FAILED_ASSUMPTION_WRITTEN",

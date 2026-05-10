@@ -1,12 +1,69 @@
 """Paper-ledger reconciliation engine (Architecture.md §9).
 
 Compares PMACS internal paper ledger totals against broker-reported
-positions.  Pure deterministic math — no LLM.
+positions.  Pure deterministic math -- no LLM.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Default config path (relative to project root)
+_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "risk.toml"
+
+
+@dataclass
+class ToleranceConfig:
+    """Tolerance thresholds loaded from config/risk.toml."""
+    tolerance_usd: float = 100.0
+    tolerance_pct: float = 5.0
+
+
+def load_tolerance_from_config(config_path: str | Path | None = None) -> ToleranceConfig:
+    """Load reconciliation tolerance from config/risk.toml.
+
+    The config file uses a fraction (0.05 = 5%).  The reconciliation
+    engine works with percentages (5.0 = 5%).  This function converts
+    automatically.
+
+    Falls back to defaults if the file or keys are missing.
+    """
+    path = Path(config_path) if config_path is not None else _DEFAULT_CONFIG_PATH
+
+    if not path.is_file():
+        logger.debug("Config file not found at %s, using default tolerances", path)
+        return ToleranceConfig()
+
+    try:
+        import tomllib
+    except ImportError:
+        # Python < 3.11 fallback
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ImportError:
+            logger.debug("No TOML parser available, using default tolerances")
+            return ToleranceConfig()
+
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except Exception as exc:
+        logger.warning("Failed to parse %s: %s", path, exc)
+        return ToleranceConfig()
+
+    kill_switch = data.get("kill_switch", {})
+
+    # Config stores tolerance_pct as a fraction (0.05), convert to percentage (5.0)
+    raw_pct = kill_switch.get("reconciliation_tolerance_pct", 0.05)
+    pct = raw_pct * 100.0
+
+    usd = float(kill_switch.get("reconciliation_tolerance_usd", 100.0))
+
+    return ToleranceConfig(tolerance_usd=usd, tolerance_pct=pct)
 
 
 @dataclass

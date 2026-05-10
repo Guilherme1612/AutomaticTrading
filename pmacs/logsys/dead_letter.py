@@ -36,9 +36,23 @@ class DeadLetterQueue:
     dashboard for manual investigation.
     """
 
-    def __init__(self, max_attempts: int = 3, retry_delay_s: float = 60.0) -> None:
+    # Architecture.md §14.1: 1s, 5s, 30s, 5min, 1h, 1d (6 steps).
+    DEFAULT_BACKOFF_SCHEDULE: list[float] = [1, 5, 30, 300, 3600, 86400]
+
+    def __init__(
+        self,
+        max_attempts: int = 6,
+        backoff_schedule: list[float] | None = None,
+        retry_delay_s: float | None = None,
+    ) -> None:
         self.max_attempts = max_attempts
-        self.retry_delay_s = retry_delay_s
+        if backoff_schedule is not None:
+            self.backoff_schedule = backoff_schedule
+        elif retry_delay_s is not None:
+            # Backward compat: fixed delay schedule
+            self.backoff_schedule = [retry_delay_s] * max_attempts
+        else:
+            self.backoff_schedule = list(self.DEFAULT_BACKOFF_SCHEDULE)
         self._queue: list[DeadLetterEntry] = []
 
     # ------------------------------------------------------------------
@@ -58,7 +72,12 @@ class DeadLetterQueue:
         return entry
 
     def get_pending(self) -> list[DeadLetterEntry]:
-        """Return entries that are ready for a retry attempt."""
+        """Return entries that are ready for a retry attempt.
+
+        Uses exponential backoff from ``backoff_schedule``.  The delay for
+        each entry is determined by how many attempts have already been
+        made (index into the schedule).
+        """
         now = time.time()
         pending: list[DeadLetterEntry] = []
         for entry in self._queue:
@@ -68,8 +87,11 @@ class DeadLetterQueue:
                 continue
             if entry.last_attempt_at is None:
                 pending.append(entry)
-            elif (now - entry.last_attempt_at.timestamp()) >= self.retry_delay_s:
-                pending.append(entry)
+            else:
+                idx = min(entry.attempts, len(self.backoff_schedule) - 1)
+                delay = self.backoff_schedule[idx]
+                if (now - entry.last_attempt_at.timestamp()) >= delay:
+                    pending.append(entry)
         return pending
 
     def mark_retry(self, entry_id: str) -> None:

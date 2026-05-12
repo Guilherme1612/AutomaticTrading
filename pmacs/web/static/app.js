@@ -878,7 +878,7 @@ function filterEvents(type) {
 }
 
 function toggleEventDetail(el) {
-    var detail = el.querySelector(".event-detail, [class*='hidden']");
+    var detail = el.querySelector(".event-detail-row");
     if (detail) {
         detail.classList.toggle("hidden");
     }

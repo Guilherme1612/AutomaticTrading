@@ -15,6 +15,9 @@ var prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
 var SSE_URL = "http://127.0.0.1:8000/events";
 var eventSource = null;
 var eventHandlers = {};
+var sseRetryCount = 0;
+var SSE_MAX_RETRIES = 20;
+var sseReconnectTimer = null;
 
 /**
  * Register a handler for a named SSE stream.
@@ -27,12 +30,25 @@ function onSSE(stream, handler) {
 }
 
 function connectSSE() {
+    if (sseReconnectTimer) {
+        clearTimeout(sseReconnectTimer);
+        sseReconnectTimer = null;
+    }
     if (eventSource) {
         eventSource.close();
     }
 
+    if (sseRetryCount >= SSE_MAX_RETRIES) {
+        showToast("SSE connection permanently lost. Reload the page.", "error", 0);
+        return;
+    }
+
     try {
         eventSource = new EventSource(SSE_URL);
+
+        eventSource.onopen = function () {
+            sseRetryCount = 0;
+        };
 
         eventSource.onmessage = function (event) {
             try {
@@ -48,13 +64,17 @@ function connectSSE() {
         };
 
         eventSource.onerror = function () {
-            console.warn("SSE connection lost, reconnecting in 5s");
+            var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
+            console.warn("SSE connection lost, reconnecting in", delay, "ms (attempt", sseRetryCount + 1, "/", SSE_MAX_RETRIES, ")");
             eventSource.close();
-            setTimeout(connectSSE, 5000);
+            sseRetryCount++;
+            sseReconnectTimer = setTimeout(connectSSE, delay);
         };
     } catch (e) {
         console.warn("SSE unavailable:", e);
-        setTimeout(connectSSE, 5000);
+        var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
+        sseRetryCount++;
+        sseReconnectTimer = setTimeout(connectSSE, delay);
     }
 }
 

@@ -1027,6 +1027,44 @@ function copyForClaudeCode(btn) {
 }
 
 /**
+ * Copy error state context as a Claude Code prompt.
+ * Reads error-state-specific data attributes (Source.md §13.4).
+ * Separate from copyForClaudeCode which serves debug events.
+ */
+function copyErrorForClaude(btn) {
+    var errorCode = btn.getAttribute("data-error-code") || "UNKNOWN";
+    var description = btn.getAttribute("data-error-description") || "";
+    var explanation = btn.getAttribute("data-error-explanation") || "";
+    // Try to find spec link in sibling elements
+    var specLink = btn.parentElement ? btn.parentElement.querySelector("a[href]") : null;
+    var specRef = specLink ? specLink.getAttribute("href") || "" : "";
+
+    var lines = [
+        "## PMACS Error State",
+        "",
+        "**Error Code:** " + errorCode,
+        "**Description:** " + description,
+        ""
+    ];
+    if (explanation) {
+        lines.push("**Explanation:** " + explanation);
+        lines.push("");
+    }
+    if (specRef) {
+        lines.push("**Spec Reference:** " + specRef);
+        lines.push("");
+    }
+    lines.push("Please analyze this error and suggest a fix.");
+
+    var text = lines.join("\n");
+    navigator.clipboard.writeText(text).then(function() {
+        showToast("Error context copied to clipboard", "success", 3000);
+    }).catch(function() {
+        showToast("Failed to copy to clipboard", "error");
+    });
+}
+
+/**
  * Copy raw event JSON from the detail container.
  */
 function copyEventJSON(btn) {

@@ -39,7 +39,7 @@
 
     <!-- Actions row -->
     <div class="flex items-center gap-3 pt-2 border-t border-red-100">
-        <button onclick="copyForClaudeCode(this)"
+        <button onclick="copyErrorForClaude(this)"
                 class="px-3 py-1.5 text-xs text-zinc-600 hover:bg-white rounded transition-colors"
                 data-error-code="{{ error_code | default('') }}"
                 data-error-description="{{ error_description | default('') }}"

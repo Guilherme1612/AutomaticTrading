@@ -8,12 +8,20 @@
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-zinc-900">Ticker Universe</h3>
         <div class="flex gap-2">
-            <button class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+            <button onclick="addTickerPrompt()"
+                    class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
                 Add Ticker
             </button>
-            <button class="px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
-                Bulk Actions
-            </button>
+            <div class="relative inline-block">
+                <button onclick="toggleBulkMenu()"
+                        class="px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
+                    Bulk Actions
+                </button>
+                <div id="bulk-menu" class="hidden absolute right-0 top-full mt-1 bg-white border border-zinc-200 rounded shadow-lg z-10 py-1 w-44">
+                    <button onclick="bulkTagSubsector()" class="w-full text-left px-3 py-2 text-sm hover:bg-zinc-50">Tag sub-sector</button>
+                    <button onclick="bulkRemoveTickers()" class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">Remove selected</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -57,7 +65,8 @@
                 </td>
                 <td class="px-4 py-3 font-mono text-zinc-400">{{ t.last_cycle }}</td>
                 <td class="px-4 py-3">
-                    <button class="text-xs text-blue-600 hover:underline">Remove</button>
+                    <button onclick="removeTicker('{{ t.symbol }}')"
+                            class="text-xs text-red-600 hover:underline">Remove</button>
                 </td>
             </tr>
             {% endfor %}
@@ -72,4 +81,71 @@
     </div>
     {% endif %}
 </div>
+<script>
+function addTickerPrompt() {
+    open_totp_modal({
+        actionId: "universe.add_ticker",
+        description: "Add a ticker to the universe",
+        consequences: "The ticker will be added to the active universe and included in future cycles.",
+        callbackUrl: "/api/universe/add",
+        onSuccess: function() {
+            showToast("Ticker added. Reloading...", "success");
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+function removeTicker(symbol) {
+    open_totp_modal({
+        actionId: "universe.remove_ticker." + symbol,
+        description: "Remove " + symbol + " from universe",
+        consequences: symbol + " will be removed from the active universe. Active positions are NOT affected.",
+        callbackUrl: "/api/universe/remove",
+        onSuccess: function() {
+            showToast(symbol + " removed. Reloading...", "info");
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+function toggleBulkMenu() {
+    document.getElementById("bulk-menu").classList.toggle("hidden");
+}
+
+function bulkTagSubsector() {
+    document.getElementById("bulk-menu").classList.add("hidden");
+    open_totp_modal({
+        actionId: "universe.bulk_tag",
+        description: "Tag selected tickers with a sub-sector",
+        consequences: "Selected tickers will have their sub-sector classification updated.",
+        callbackUrl: "/api/universe/bulk-tag",
+        onSuccess: function() {
+            showToast("Sub-sectors updated. Reloading...", "success");
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+function bulkRemoveTickers() {
+    document.getElementById("bulk-menu").classList.add("hidden");
+    open_totp_modal({
+        actionId: "universe.bulk_remove",
+        description: "Remove all selected tickers from universe",
+        consequences: "All checked tickers will be removed. Active positions are NOT affected.",
+        callbackUrl: "/api/universe/bulk-remove",
+        onSuccess: function() {
+            showToast("Tickers removed. Reloading...", "info");
+            setTimeout(function() { window.location.reload(); }, 1000);
+        }
+    });
+}
+
+// Close bulk menu on outside click
+document.addEventListener("click", function(e) {
+    var menu = document.getElementById("bulk-menu");
+    if (menu && !e.target.closest(".relative")) {
+        menu.classList.add("hidden");
+    }
+});
+</script>
 {% endblock %}

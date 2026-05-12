@@ -132,7 +132,7 @@
     </header>
 
     <!-- Left sidebar: 240px (Source.md §13.2) -->
-    <nav class="fixed left-0 top-14 bottom-0 w-60 bg-surface-elevated border-r border-border p-4 overflow-y-auto"
+    <nav id="sidebar" class="fixed left-0 top-14 bottom-0 w-60 bg-surface-elevated border-r border-border p-4 overflow-y-auto"
          role="navigation" aria-label="Main navigation">
         {% set pages = [
             ("dashboard", "Dashboard", "/", "1"),
@@ -154,23 +154,32 @@
                               text-zinc-600 hover:bg-zinc-100
                           {% endif %}"
                    aria-current="{% if page == id %}page{% endif %}">
-                    {{ name }}
-                    <kbd class="ml-auto text-xs text-zinc-400 font-mono hidden lg:inline" aria-label="Shortcut: Command {{ shortcut }}">⌘{{ shortcut }}</kbd>
+                    <span class="nav-label">{{ name }}</span>
+                    <kbd class="ml-auto text-xs text-zinc-400 font-mono hidden lg:inline nav-label" aria-label="Shortcut: Command {{ shortcut }}">⌘{{ shortcut }}</kbd>
                 </a>
             </li>
             {% endfor %}
         </ul>
+        <!-- Sidebar collapse toggle -->
+        <button onclick="toggleSidebar()"
+                id="sidebar-toggle"
+                class="w-full flex items-center justify-center py-1.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded transition-colors mb-2"
+                aria-label="Collapse sidebar">
+            <svg class="w-4 h-4 sidebar-toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+        </button>
         <!-- Bottom: operator + TOTP status + quick action -->
         <div class="absolute bottom-4 left-4 right-4 space-y-2">
             <div class="flex items-center gap-2 text-xs text-zinc-400">
                 <span class="w-2 h-2 rounded-full bg-green-500" aria-label="System online"></span>
-                <span>Operator</span>
+                <span class="sidebar-bottom-text">Operator</span>
             </div>
             <button onclick="toggleCmdK()"
                     class="w-full px-3 py-1.5 text-xs text-left text-zinc-500 bg-zinc-100 rounded hover:bg-zinc-200 transition-colors"
                     aria-label="Open command palette (Cmd-K)">
                 ⌘K
-                <span class="text-zinc-400 ml-2">Search...</span>
+                <span class="text-zinc-400 ml-2 sidebar-bottom-text">Search...</span>
             </button>
         </div>
     </nav>

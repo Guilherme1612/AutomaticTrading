@@ -456,13 +456,25 @@ function openTOTPManual() {
 
 var PAGE_SHORTCUTS = ["/", "/agents", "/pipeline", "/universe", "/cortex", "/debug", "/settings"];
 
+function isElementVisible(id) {
+    var el = document.getElementById(id);
+    return el ? !el.classList.contains("hidden") : false;
+}
+
+function toggleSidebar() {
+    var sidebar = document.getElementById("sidebar");
+    var main = document.getElementById("main-content");
+    if (!sidebar || !main) return;
+    var isCollapsed = sidebar.classList.toggle("collapsed");
+    main.classList.toggle("sidebar-collapsed", isCollapsed);
+    try { localStorage.setItem("sidebar-collapsed", isCollapsed); } catch (e) {}
+}
+
 document.addEventListener("keydown", function (e) {
     var isCmd = e.metaKey || e.ctrlKey;
     var isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT";
-    var activeModal = !document.getElementById("cmd-k").classList.contains("hidden") ||
-                      !document.getElementById("totp-modal").classList.contains("hidden") ||
-                      !document.getElementById("shortcut-overlay").classList.contains("hidden") ||
-                      !document.getElementById("blocking-modal").classList.contains("hidden");
+    var activeModal = isElementVisible("cmd-k") || isElementVisible("totp-modal") ||
+                      isElementVisible("shortcut-overlay") || isElementVisible("blocking-modal");
 
     // Cmd-K: command palette
     if (isCmd && e.key === "k") {
@@ -1044,3 +1056,17 @@ function checkViewportWidth() {
 
 window.addEventListener("resize", checkViewportWidth);
 document.addEventListener("DOMContentLoaded", checkViewportWidth);
+
+// ─── Sidebar State Restoration ─────────────────────────────────────────────
+
+// Restore sidebar state from localStorage
+(function() {
+    try {
+        if (localStorage.getItem("sidebar-collapsed") === "true") {
+            var sidebar = document.getElementById("sidebar");
+            var main = document.getElementById("main-content");
+            if (sidebar) sidebar.classList.add("collapsed");
+            if (main) main.classList.add("sidebar-collapsed");
+        }
+    } catch (e) {}
+})();

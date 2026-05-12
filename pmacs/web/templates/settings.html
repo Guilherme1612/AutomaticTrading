@@ -28,7 +28,44 @@
                     <dt class="text-zinc-500">Max Positions</dt>
                     <dd class="font-mono">5</dd>
                 </div>
+                <div class="flex justify-between items-center">
+                    <dt class="text-zinc-500">Theme</dt>
+                    <dd>
+                        <select id="theme-select" onchange="setTheme(this.value)"
+                                class="text-sm font-mono border border-zinc-200 rounded px-2 py-1 bg-white">
+                            <option value="system">System</option>
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                        </select>
+                    </dd>
+                </div>
             </dl>
+            <div class="border-t border-zinc-100 mt-4 pt-4">
+                <h4 class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Notification Levels</h4>
+                <p class="text-xs text-zinc-400 mb-3">Adjust per-event notification behavior. Source: config/notification.toml</p>
+                <div class="space-y-2">
+                    {% for event_key, event_label in notification_events | default([
+                        ("cycle_start", "Cycle Start"),
+                        ("cycle_complete", "Cycle Complete"),
+                        ("trade_signed", "Trade Signed"),
+                        ("kill_switch", "Kill Switch"),
+                        ("error", "Error"),
+                        ("mutation_proposed", "Mutation Proposed"),
+                        ("crucible_attack", "Crucible Attack"),
+                    ]) %}
+                    <div class="flex items-center justify-between py-1">
+                        <span class="text-sm text-zinc-700">{{ event_label }}</span>
+                        <select class="text-xs font-mono border border-zinc-200 rounded px-2 py-1 bg-white notification-level-select"
+                                data-event="{{ event_key }}">
+                            <option value="toast">Toast</option>
+                            <option value="toast+sound">Toast + Sound</option>
+                            <option value="modal">Modal</option>
+                            <option value="none">Silent</option>
+                        </select>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
             {% elif section == "Risk" %}
             <dl class="space-y-3 text-left max-w-lg">
                 <div class="flex justify-between">
@@ -185,6 +222,38 @@
     </div>
     {% endfor %}
 </div>
+
+<script>
+// Theme toggle (Source.md §13.1: manual toggle in Settings)
+(function() {
+    try {
+        var saved = localStorage.getItem("pmacs-theme") || "system";
+        var sel = document.getElementById("theme-select");
+        if (sel) sel.value = saved;
+    } catch (e) {}
+})();
+
+function setTheme(mode) {
+    try { localStorage.setItem("pmacs-theme", mode); } catch (e) {}
+    var root = document.documentElement;
+    var isDark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (isDark) {
+        root.classList.add("dark");
+    } else {
+        root.classList.remove("dark");
+    }
+}
+
+// Notification level changes (Source.md §13.5)
+document.querySelectorAll(".notification-level-select").forEach(function(sel) {
+    sel.addEventListener("change", function() {
+        var eventKey = this.getAttribute("data-event");
+        var level = this.value;
+        console.log("[PMACS] Notification level changed:", eventKey, "->", level);
+        // When backend exists: POST to /api/settings/notifications with {event: eventKey, level: level}
+    });
+});
+</script>
 
 <script>
 // --- Mutation Engine actions (TOTP-gated per Source.md §6, Architecture.md §10) ---

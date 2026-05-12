@@ -412,12 +412,75 @@ function executeCmdKItem(item) {
 
 function runCycleNow() {
     showToast("Starting new cycle...", "info");
-    // TODO: POST to pmacs-nervous /api/cycle/start
+    fetch("http://127.0.0.1:8000/api/cycle/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: "manual" })
+    }).then(function (resp) {
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+    }).then(function (data) {
+        showToast("Cycle " + (data.cycle_id || "started"), "success");
+    }).catch(function (err) {
+        showToast("Cycle start failed: " + err.message, "error");
+    });
 }
 
 function openCycleCompare() {
-    showToast("Select two cycles to compare", "info");
-    // TODO: Open cycle compare modal
+    var modal = document.getElementById("cycle-compare-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "cycle-compare-modal";
+        modal.className = "hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-24";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-label", "Compare cycles");
+        modal.setAttribute("aria-modal", "true");
+        modal.innerHTML =
+            '<div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-zinc-200 p-6">' +
+            '<h3 class="text-lg font-semibold text-zinc-900 mb-4">Compare Cycles</h3>' +
+            '<p class="text-sm text-zinc-500 mb-4">Select two cycle IDs to compare side-by-side (Source.md §15.9).</p>' +
+            '<div class="grid grid-cols-2 gap-4 mb-4">' +
+            '  <div><label class="text-xs text-zinc-500 block mb-1">Cycle A</label>' +
+            '  <input id="cycle-a" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded text-sm font-mono" placeholder="e.g. 2026-05-10T08:00"></div>' +
+            '  <div><label class="text-xs text-zinc-500 block mb-1">Cycle B</label>' +
+            '  <input id="cycle-b" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded text-sm font-mono" placeholder="e.g. 2026-05-11T08:00"></div>' +
+            '</div>' +
+            '<div id="compare-result" class="hidden mb-4 max-h-80 overflow-auto"></div>' +
+            '<div class="flex justify-end gap-2">' +
+            '  <button onclick="document.getElementById(\'cycle-compare-modal\').classList.add(\'hidden\')" class="px-4 py-2 text-sm border border-zinc-200 rounded hover:bg-zinc-50">Cancel</button>' +
+            '  <button onclick="fetchCycleComparison()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Compare</button>' +
+            '</div></div>';
+        document.body.appendChild(modal);
+        // Click outside to close
+        modal.addEventListener("click", function(e) {
+            if (e.target === modal) modal.classList.add("hidden");
+        });
+    }
+    modal.classList.remove("hidden");
+    var inputA = document.getElementById("cycle-a");
+    if (inputA) inputA.focus();
+}
+
+function fetchCycleComparison() {
+    var inputA = document.getElementById("cycle-a");
+    var inputB = document.getElementById("cycle-b");
+    var a = inputA ? inputA.value.trim() : "";
+    var b = inputB ? inputB.value.trim() : "";
+    if (!a || !b) { showToast("Enter both cycle IDs", "warning"); return; }
+    var resultDiv = document.getElementById("compare-result");
+    if (!resultDiv) return;
+    resultDiv.classList.remove("hidden");
+    resultDiv.innerHTML = '<p class="text-sm text-zinc-600">Comparing ' + a + ' vs ' + b + '...</p>';
+    fetch("http://127.0.0.1:8000/api/cycle/compare?cycle_a=" + encodeURIComponent(a) + "&cycle_b=" + encodeURIComponent(b))
+        .then(function(r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+        }).then(function(data) {
+            resultDiv.innerHTML = '<pre class="text-xs font-mono bg-zinc-50 p-3 rounded overflow-auto">' +
+                JSON.stringify(data, null, 2) + '</pre>';
+        }).catch(function(err) {
+            resultDiv.innerHTML = '<p class="text-sm text-red-600">Comparison failed: ' + err.message + '</p>';
+        });
 }
 
 function openTaxonomyBrowser() {
@@ -426,17 +489,14 @@ function openTaxonomyBrowser() {
 }
 
 function promoteAllP1Global() {
-    fetch("/pipeline/queue/promote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-    }).then(function (resp) {
-        return resp.json();
-    }).then(function (data) {
-        if (data.ok) {
-            showToast("Promoted " + data.promoted_count + " P1 items", "success");
+    open_totp_modal({
+        actionId: "pipeline.promote_all_p1",
+        description: "Promote all P1 queue items",
+        consequences: "All items in the P1 priority queue will be promoted for immediate processing.",
+        callbackUrl: "/pipeline/queue/promote",
+        onSuccess: function(data) {
+            showToast("Promoted " + (data.promoted_count || "all") + " P1 items", "success");
         }
-    }).catch(function () {
-        showToast("Failed to promote P1 items", "error");
     });
 }
 
@@ -524,6 +584,11 @@ document.addEventListener("keydown", function (e) {
 
     // Esc: close modals/drawers/dismiss toasts
     if (e.key === "Escape") {
+        var ccModal = document.getElementById("cycle-compare-modal");
+        if (ccModal && !ccModal.classList.contains("hidden")) {
+            ccModal.classList.add("hidden");
+            return;
+        }
         closeCmdK();
         closeTotpModal();
         document.getElementById("shortcut-overlay").classList.add("hidden");

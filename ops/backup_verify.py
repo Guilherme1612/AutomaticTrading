@@ -230,19 +230,36 @@ def do_e2e(data_dir: Path, verbose: bool = False) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         backup_dir = do_backup(data_dir, Path(tmp), verbose)
 
+        # Safety: verify backup has content before wiping
+        backup_contents = list(backup_dir.iterdir())
+        if not backup_contents:
+            print("ERROR: Backup directory is empty. Aborting E2E to prevent data loss.", file=sys.stderr)
+            sys.exit(1)
+
+        _log(f"Backup contains {len(backup_contents)} items", verbose)
+
         # Step 2: Wipe data dir
         print("\n--- Step 2: Wipe data directory ---")
-        if data_dir.exists():
-            for child in data_dir.iterdir():
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            _log("Data directory wiped", verbose)
+        try:
+            if data_dir.exists():
+                for child in data_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                _log("Data directory wiped", verbose)
 
-        # Step 3: Restore
-        print("\n--- Step 3: Restore ---")
-        do_restore(backup_dir, data_dir, verbose)
+            # Step 3: Restore
+            print("\n--- Step 3: Restore ---")
+            do_restore(backup_dir, data_dir, verbose)
+        except Exception:
+            print("ERROR: Restore failed! Attempting to recover from backup...", file=sys.stderr)
+            try:
+                do_restore(backup_dir, data_dir, verbose)
+                print("Recovery successful.", file=sys.stderr)
+            except Exception as recover_err:
+                print(f"CRITICAL: Recovery also failed: {recover_err}", file=sys.stderr)
+            raise
 
     # Step 4: Verify
     print("\n--- Step 4: Verify ---")

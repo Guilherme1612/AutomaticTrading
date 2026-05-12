@@ -11,8 +11,8 @@
     <h3 class="text-base font-semibold text-zinc-900 mb-2">{{ empty_title | default("No data yet") }}</h3>
     <p class="text-sm text-zinc-500 max-w-sm mb-6">{{ empty_message | default("This section will populate once data is available.") }}</p>
     {% if empty_cta_text %}
-    <button onclick="{{ empty_cta_action | default('') }}"
-            class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+    <button data-action="{{ empty_cta_action | default('') }}"
+            class="empty-cta-btn px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
         {{ empty_cta_text }}
     </button>
     {% endif %}

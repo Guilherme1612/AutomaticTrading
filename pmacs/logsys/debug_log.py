@@ -82,6 +82,7 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "CATASTROPHE_CANCEL_FAILED",
     "CATASTROPHE_CANCEL_NO_BROKER",
     "CATASTROPHE_NET_CANCELLED",
+    "CATASTROPHE_NET_PLACED",
     "EXECUTE_EXIT",
     # Storage layer (not cycle-scoped)
     "KUZU_QUERY",

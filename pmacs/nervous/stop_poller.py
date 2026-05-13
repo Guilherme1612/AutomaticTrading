@@ -11,6 +11,7 @@ Architecture.md Section 4.4: nervous orchestrates stop execution.
 """
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -96,11 +97,11 @@ class StopEventPoller:
 
         # Step 2: Execute exit (cancel catastrophe-net, submit SELL, audit)
         if holding is not None:
-            execute_exit(
+            asyncio.run(execute_exit(
                 holding=holding,
                 exit_reason=stop_type,
                 cycle_id=trig_cycle_id,
-            )
+            ))
 
         # Step 3: Update status to FILLED
         self._update_status(trigger_id, StopEventStatus.FILLED)

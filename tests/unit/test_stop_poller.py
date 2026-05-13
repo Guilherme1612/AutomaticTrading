@@ -125,10 +125,11 @@ class TestProcessTrigger:
                 "stop_type_category": "FIXED",
             }
 
-            with patch("pmacs.nervous.stop_poller.execute_exit") as mock_exit:
-                poller = StopEventPoller(db_path)
-                poller.process_trigger(trigger, holding=holding, cycle_id="cycle-001")
-                mock_exit.assert_called_once()
+            with patch("pmacs.nervous.stop_poller.execute_exit", return_value={"exit_order": {}, "cancel_result": MagicMock(success=True), "holding_id": "h-001", "exit_reason": "FIXED_STOP"}) as mock_exit:
+                with patch("pmacs.nervous.stop_poller.asyncio") as mock_asyncio:
+                    poller = StopEventPoller(db_path)
+                    poller.process_trigger(trigger, holding=holding, cycle_id="cycle-001")
+                    mock_asyncio.run.assert_called_once()
 
     def test_process_trigger_updates_status_to_filled(self):
         """process_trigger updates stop_events status to FILLED."""

@@ -82,7 +82,7 @@ class BrokerError(Exception):
     """Raised when broker communication fails."""
 
 
-def cancel_catastrophe_net(order_id: str, broker=None) -> CancelResult:
+async def cancel_catastrophe_net(order_id: str, broker=None) -> CancelResult:
     """Cancel a catastrophe-net stop order on the broker.
 
     Implements Architecture.md Section 11.5. On broker failure, engages
@@ -110,7 +110,7 @@ def cancel_catastrophe_net(order_id: str, broker=None) -> CancelResult:
         return CancelResult(success=True, order_id=order_id)
 
     try:
-        broker.cancel_order(order_id)
+        await broker.cancel_order(order_id)
         log_debug(
             "CATASTROPHE_NET_CANCELLED",
             payload={"order_id": order_id, "success": True},
@@ -136,7 +136,7 @@ def cancel_catastrophe_net(order_id: str, broker=None) -> CancelResult:
         ) from exc
 
 
-def execute_exit(
+async def execute_exit(
     holding,  # Holding model
     exit_reason: str,
     cycle_id: str,
@@ -173,7 +173,7 @@ def execute_exit(
     # Step 1: Cancel catastrophe-net stop
     cancel_result = CancelResult(success=True)  # Default: no-op
     if catastrophe_order_id:
-        cancel_result = cancel_catastrophe_net(catastrophe_order_id, broker=broker)
+        cancel_result = await cancel_catastrophe_net(catastrophe_order_id, broker=broker)
 
     # Step 2: Submit primary exit order
     exit_order = {

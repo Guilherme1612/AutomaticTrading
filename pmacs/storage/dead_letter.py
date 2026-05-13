@@ -74,14 +74,14 @@ class DeadLetterStore:
         Returns:
             The persisted DeadLetterEntry with its assigned id.
         """
-        import json
+        from pmacs.data.canonical import canonical_json
 
         now = datetime.now(timezone.utc).isoformat()
         entry = DeadLetterEntry(
             id=None,
             op_type=op_type,
             target_db=target_db,
-            payload=json.dumps(payload, sort_keys=True),
+            payload=canonical_json(payload),
             queued_at=now,
         )
 

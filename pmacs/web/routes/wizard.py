@@ -148,11 +148,19 @@ async def _execute_step(request: Request, step: int) -> dict:
         return {"ok": model_result.get("all_ok", False), "context": {"model_result": model_result}}
 
     elif step == 4:
-        # Keychain credential collection
-        creds = {k: v for k, v in form_data.items() if v}
+        # Keychain credential collection -- store via keyring
+        creds = {k: str(v) for k, v in form_data.items() if v}
+        stored_ok = True
+        if creds:
+            try:
+                import keyring
+                for key, value in creds.items():
+                    keyring.set_password("pmacs.credentials", key, value)
+            except Exception:
+                stored_ok = False
         return {
-            "ok": True,
-            "context": {},
+            "ok": stored_ok,
+            "context": {"credential_count": len(creds) if stored_ok else 0},
         }
 
     elif step == 5:

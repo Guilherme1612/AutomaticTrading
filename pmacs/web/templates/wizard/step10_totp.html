@@ -1,6 +1,6 @@
 {# Wizard Step 10 — TOTP enrollment (Source.md §12.1 Step 9)
    QR code display, authenticator scan, verify one TOTP code.
-   Expects: current_step, totp_result with {qr_data_uri, secret}, verify_result
+   Expects: current_step, totp_result with {qr_data_uri, _secret}, verify_result
 #}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">TOTP Enrollment</h1>
@@ -22,12 +22,12 @@
 
         <div class="p-3 bg-surface border border-border rounded mb-4">
             <p class="text-xs text-text-muted mb-1">Manual entry key:</p>
-            <p class="text-sm font-mono text-text-primary break-all select-all">{{ totp_result.get("secret", "") }}</p>
+            <p class="text-sm font-mono text-text-primary break-all select-all">{{ totp_result.get("_secret", "") }}</p>
         </div>
 
         <div class="border-t border-border pt-4">
             <form id="totp-verify-form" hx-post="/wizard/step/10" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
-                <input type="hidden" name="totp_secret" value="{{ totp_result.get('secret', '') }}">
+                <input type="hidden" name="totp_secret" value="{{ totp_result.get('_secret', '') }}">
                 <label class="text-sm font-medium text-text-primary block mb-2">Verify TOTP Code</label>
                 <p class="text-xs text-text-muted mb-3">Enter the 6-digit code from your authenticator app.</p>
                 <div class="flex gap-2 justify-center mb-4">
@@ -66,7 +66,7 @@
             <span class="text-positive text-lg">&#10003;</span>
             <div>
                 <p class="text-sm font-medium text-positive">TOTP enrollment complete</p>
-                <p class="text-xs text-text-muted">Secret stored in macOS Keychain as pmacs.system.totp_secret</p>
+                <p class="text-xs text-text-muted">Secret stored securely as pmacs.system.totp_secret</p>
             </div>
         </div>
     </div>

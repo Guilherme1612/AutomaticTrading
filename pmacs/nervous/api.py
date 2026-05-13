@@ -190,11 +190,36 @@ async def events(
     last_id_str = request.headers.get("Last-Event-ID")
     last_id = int(last_id_str) if last_id_str else 0
 
+    # Replay missed events from ring buffer before subscribing to live stream
+    replay_frames: list[str] = []
+    if last_id > 0:
+        replay_frames = _publisher.get_events_since(last_id)
+
     # Subscribe to publisher
     client_id, queue = _publisher.subscribe()
 
     async def event_generator():
         try:
+            # First: replay missed events from ring buffer
+            for frame in replay_frames:
+                try:
+                    event = json.loads(frame)
+                except (json.JSONDecodeError, ValueError):
+                    yield f"data: {frame}\n\n"
+                    continue
+                # Apply stream filter to replayed events too
+                if streams is not None and event.get("stream") not in streams:
+                    continue
+                evt_id = event.get("id", "0")
+                data_str = json.dumps(event.get("data", {}), separators=(",", ":"))
+                lines = [
+                    f"id: {evt_id}",
+                    f"event: {event.get('type', 'message')}",
+                    f"data: {data_str}",
+                ]
+                yield "\n".join(lines) + "\n\n"
+
+            # Then: live stream
             while True:
                 try:
                     frame = await asyncio.wait_for(queue.get(), timeout=30.0)

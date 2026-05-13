@@ -92,6 +92,8 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "QDRANT_COLLECTIONS_CREATED",
     "DUCKDB_TABLES_INITIALIZED",
     "DUCKDB_WRITE",
+    # Dead letter queue (system-level, not cycle-scoped)
+    "DEAD_LETTER_EXHAUSTED",
 })
 
 # Module-level log file path (set during initialization)

@@ -20,12 +20,19 @@ class SSEPublisher:
     Usage:
         publisher = SSEPublisher()
         publisher.publish("cycle", "cycle.open", {"cycle_id": "..."})
+
+    Supports Last-Event-ID reconnection via an internal ring buffer
+    of the last 1000 events.
     """
+
+    RING_BUFFER_SIZE = 1000
 
     def __init__(self) -> None:
         self._clients: dict[int, asyncio.Queue[str]] = {}
         self._lock = threading.Lock()
         self._next_id: int = 1
+        # Ring buffer: list of (event_id_int, frame_str) for Last-Event-ID resume
+        self._event_log: list[tuple[int, str]] = []
 
     def _next_event_id(self) -> str:
         with self._lock:
@@ -70,6 +77,11 @@ class SSEPublisher:
         frame = json.dumps(event, separators=(",", ":"))
 
         with self._lock:
+            # Append to ring buffer for Last-Event-ID resume
+            self._event_log.append((int(event_id), frame))
+            if len(self._event_log) > self.RING_BUFFER_SIZE:
+                self._event_log = self._event_log[-self.RING_BUFFER_SIZE:]
+
             dead: list[int] = []
             for cid, queue in self._clients.items():
                 try:
@@ -90,3 +102,18 @@ class SSEPublisher:
     def last_event_id(self) -> int:
         with self._lock:
             return self._next_id - 1
+
+    def get_events_since(self, last_id: int) -> list[str]:
+        """Return frames with event_id > last_id from the ring buffer.
+
+        Used for Last-Event-ID reconnection: the client sends the last
+        event ID it received, and this method returns all missed events.
+
+        Args:
+            last_id: The last event ID the client received.
+
+        Returns:
+            List of JSON-serialized event frames in order.
+        """
+        with self._lock:
+            return [frame for eid, frame in self._event_log if eid > last_id]

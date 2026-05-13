@@ -137,16 +137,17 @@ CREATE TABLE IF NOT EXISTS operator_overrides (
     cluster_id TEXT
 );
 
--- Dead letter queue
+-- Dead letter queue (Architecture.md §9, §14.1)
 CREATE TABLE IF NOT EXISTS dead_letter (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    target_store TEXT NOT NULL,
-    operation TEXT NOT NULL,
+    op_type TEXT NOT NULL,
+    target_db TEXT NOT NULL,
     payload TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
     retry_count INTEGER NOT NULL DEFAULT 0,
-    last_retry_at TEXT,
-    resolved INTEGER NOT NULL DEFAULT 0
+    last_attempt_at TEXT,
+    last_error TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING'
 );
 
 -- Mutation proposals
@@ -262,6 +263,19 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # op_idempotency migrations
     if not _column_exists(conn, "op_idempotency", "result_hash"):
         conn.execute("ALTER TABLE op_idempotency ADD COLUMN result_hash TEXT")
+
+    # dead_letter migrations — old schema had target_store/operation/resolved
+    if _column_exists(conn, "dead_letter", "target_store") and not _column_exists(conn, "dead_letter", "target_db"):
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN op_type TEXT")
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN target_db TEXT")
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN queued_at TEXT")
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN last_attempt_at TEXT")
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN last_error TEXT")
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
+        conn.execute("UPDATE dead_letter SET op_type = operation, target_db = target_store, queued_at = created_at, status = CASE WHEN resolved = 1 THEN 'RESOLVED' ELSE 'PENDING' END WHERE op_type IS NULL")
+    if _column_exists(conn, "dead_letter", "last_retry_at") and not _column_exists(conn, "dead_letter", "last_attempt_at"):
+        conn.execute("ALTER TABLE dead_letter ADD COLUMN last_attempt_at TEXT")
+        conn.execute("UPDATE dead_letter SET last_attempt_at = last_retry_at WHERE last_attempt_at IS NULL")
 
     conn.commit()
 

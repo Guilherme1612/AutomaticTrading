@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "macro_regime",
+  "description": "JSON Schema for macro_regime persona output (Agents.md §4)",
+  "type": "object",
+  "properties": {
+    "regime": {
+      "type": "string",
+      "enum": ["EXPANSION", "LATE_CYCLE", "CONTRACTION", "RECOVERY", "REGIME_SHIFT", "UNCERTAIN"]
+    },
+    "regime_confidence": {
+      "type": "number"
+    },
+    "regime_reasoning": {
+      "type": "string"
+    },
+    "yield_curve_signal": {
+      "type": "string",
+      "enum": ["NORMAL", "FLAT", "INVERTED"]
+    },
+    "vix_regime": {
+      "type": "string",
+      "enum": ["LOW", "MODERATE", "ELEVATED", "CRISIS"]
+    },
+    "sector_rotation_summary": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "regime",
+    "regime_confidence",
+    "regime_reasoning",
+    "yield_curve_signal",
+    "vix_regime",
+    "sector_rotation_summary",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

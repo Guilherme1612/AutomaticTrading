@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "insider_activity",
+  "description": "JSON Schema for insider_activity persona output (Agents.md §8)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "transactions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "insider_name": {
+            "type": "string"
+          },
+          "insider_role": {
+            "type": "string"
+          },
+          "transaction_type": {
+            "type": "string",
+            "enum": ["OPEN_MARKET_BUY", "OPEN_MARKET_SELL", "OPTION_EXERCISE", "10B5_1_SELL", "GIFT", "OTHER"]
+          },
+          "amount_usd": {
+            "type": "number"
+          },
+          "shares": {
+            "type": "integer"
+          },
+          "date": {
+            "type": "string"
+          },
+          "evidence_id": {
+            "type": "string"
+          }
+        },
+        "required": ["insider_name", "insider_role", "transaction_type", "amount_usd", "shares", "date", "evidence_id"],
+        "additionalProperties": false
+      }
+    },
+    "signal": {
+      "type": "string",
+      "enum": ["CLUSTER_BUY", "CLUSTER_SELL", "LARGE_BUY", "LARGE_SELL", "CEO_BUY", "ROUTINE", "NO_SIGNAL", "INSUFFICIENT_DATA"]
+    },
+    "signal_reasoning": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "transactions",
+    "signal",
+    "signal_reasoning",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

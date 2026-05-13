@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "moat_analyst",
+  "description": "JSON Schema for moat_analyst persona output (Agents.md §6)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "moat_components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "moat_type": {
+            "type": "string",
+            "enum": ["NETWORK_EFFECTS", "SWITCHING_COSTS", "INTANGIBLE_ASSETS", "COST_ADVANTAGE", "EFFICIENT_SCALE", "DATA_ADVANTAGE"]
+          },
+          "strength": {
+            "type": "number"
+          },
+          "trajectory": {
+            "type": "string",
+            "enum": ["WIDENING", "STABLE", "NARROWING"]
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["moat_type", "strength", "trajectory", "reasoning", "evidence_ids"],
+        "additionalProperties": false
+      }
+    },
+    "moat_strength": {
+      "type": "number"
+    },
+    "competitive_entry_risk": {
+      "type": "string",
+      "enum": ["LOW", "MODERATE", "HIGH"]
+    },
+    "competitive_entry_reasoning": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "moat_components",
+    "moat_strength",
+    "competitive_entry_risk",
+    "competitive_entry_reasoning",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

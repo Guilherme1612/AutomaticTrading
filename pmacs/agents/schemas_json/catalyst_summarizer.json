@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "catalyst_summarizer",
+  "description": "JSON Schema for catalyst_summarizer persona output (Agents.md §5)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "catalysts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "catalyst_type": {
+            "type": "string",
+            "enum": ["earnings", "fda_decision", "product_launch", "regulatory_ruling", "ma_close", "partnership", "guidance_update"]
+          },
+          "description": {
+            "type": "string"
+          },
+          "expected_date": {
+            "type": ["string", "null"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["PENDING", "RESOLVED_UP", "RESOLVED_DOWN", "RESOLVED_FLAT", "RESOLVED_MIXED"]
+          },
+          "thesis_impact": {
+            "type": "string",
+            "enum": ["STRONGLY_POSITIVE", "POSITIVE", "NEUTRAL", "NEGATIVE", "STRONGLY_NEGATIVE"]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["catalyst_type", "description", "expected_date", "status", "thesis_impact", "evidence_ids"],
+        "additionalProperties": false
+      }
+    },
+    "net_catalyst_outlook": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "catalysts",
+    "net_catalyst_outlook",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

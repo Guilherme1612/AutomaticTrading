@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "memo_writer",
+  "description": "JSON Schema for memo_writer persona output (Agents.md §13)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "verdict_line": {
+      "type": "string"
+    },
+    "thesis_summary": {
+      "type": "string"
+    },
+    "key_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "key_risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conviction": {
+      "type": "number"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "ev_multiple": {
+      "type": "number"
+    },
+    "sizing_usd": {
+      "type": "number"
+    },
+    "dissenting_personas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dissent_summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticker",
+    "verdict_line",
+    "thesis_summary",
+    "key_evidence",
+    "key_risks",
+    "conviction",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "dissenting_personas"
+  ],
+  "additionalProperties": false
+}

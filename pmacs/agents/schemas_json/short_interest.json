@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "short_interest",
+  "description": "JSON Schema for short_interest persona output (Agents.md §9)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "short_pct_float": {
+      "type": ["number", "null"]
+    },
+    "days_to_cover": {
+      "type": ["number", "null"]
+    },
+    "short_change_pct": {
+      "type": ["number", "null"]
+    },
+    "anomaly": {
+      "type": "string",
+      "enum": ["SPIKE_UP", "SPIKE_DOWN", "HIGH_SUSTAINED", "NORMAL", "INSUFFICIENT_DATA"]
+    },
+    "anomaly_reasoning": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "short_pct_float",
+    "days_to_cover",
+    "short_change_pct",
+    "anomaly",
+    "anomaly_reasoning",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

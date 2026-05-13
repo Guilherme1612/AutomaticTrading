@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "growth_hunter",
+  "description": "JSON Schema for growth_hunter persona output (Agents.md §7)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "revenue_yoy_pct": {
+      "type": ["number", "null"]
+    },
+    "revenue_acceleration": {
+      "type": "string",
+      "enum": ["ACCELERATING", "STABLE", "DECELERATING", "UNKNOWN"]
+    },
+    "gross_margin_pct": {
+      "type": ["number", "null"]
+    },
+    "gross_margin_trend": {
+      "type": "string",
+      "enum": ["EXPANDING", "STABLE", "CONTRACTING", "UNKNOWN"]
+    },
+    "tam_penetration_pct": {
+      "type": ["number", "null"]
+    },
+    "growth_durability": {
+      "type": "string",
+      "enum": ["HIGH", "MODERATE", "LOW", "UNKNOWN"]
+    },
+    "growth_durability_reasoning": {
+      "type": "string"
+    },
+    "key_risk_to_growth": {
+      "type": "string"
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "revenue_yoy_pct",
+    "revenue_acceleration",
+    "gross_margin_pct",
+    "gross_margin_trend",
+    "tam_penetration_pct",
+    "growth_durability",
+    "growth_durability_reasoning",
+    "key_risk_to_growth",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

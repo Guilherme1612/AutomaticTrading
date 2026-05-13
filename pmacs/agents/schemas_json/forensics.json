@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "forensics",
+  "description": "JSON Schema for forensics persona output (Agents.md §10)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "red_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": ["REVENUE_QUALITY", "EARNINGS_QUALITY", "CASH_FLOW_DIVERGENCE", "RELATED_PARTY", "AUDITOR_FLAGS", "DSO_DPO_ANOMALY", "MARGIN_ANOMALY", "GOODWILL_RISK"]
+          },
+          "severity": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["category", "severity", "description", "evidence_ids"],
+        "additionalProperties": false
+      }
+    },
+    "red_flag_count": {
+      "type": "integer"
+    },
+    "overall_accounting_quality": {
+      "type": "string",
+      "enum": ["CLEAN", "MINOR_CONCERNS", "MATERIAL_CONCERNS", "SEVERE_RISK", "INSUFFICIENT_DATA"]
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "ticker",
+    "red_flags",
+    "red_flag_count",
+    "overall_accounting_quality",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

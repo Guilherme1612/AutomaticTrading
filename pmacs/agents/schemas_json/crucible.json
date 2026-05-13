@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "crucible",
+  "description": "JSON Schema for crucible adversarial output (Agents.md §14)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "attacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attack_type": {
+            "type": "string",
+            "enum": ["LOGICAL_HOLE", "CITATION_GAP", "COUNTERARGUMENT", "OVERLOOKED_RISK", "BASE_RATE_NEGLECT"]
+          },
+          "severity": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_evidence": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["attack_type", "severity", "description", "evidence_ids"],
+        "additionalProperties": false
+      }
+    },
+    "attack_count": {
+      "type": "integer"
+    },
+    "severity": {
+      "type": "number"
+    },
+    "thesis_survives": {
+      "type": "boolean"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "rewrite_cycle": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "ticker",
+    "attacks",
+    "attack_count",
+    "severity",
+    "thesis_survives",
+    "summary",
+    "rewrite_cycle"
+  ],
+  "additionalProperties": false
+}

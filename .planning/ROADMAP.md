@@ -2,7 +2,7 @@
 
 ## Overview
 
-8 GSD phases implementing 15 PMACS build phases. Sequential execution with risk checkpoints at critical boundaries.
+9 GSD phases implementing 15 PMACS build phases + core orchestration. Sequential execution with risk checkpoints at critical boundaries.
 
 ## Phase Structure
 
@@ -16,20 +16,51 @@
 | [Phase 6](phases/phase-6.md) | 11-12: Calibration + FDE | Flywheel passive components, 18 taxonomy types | — |
 | [Phase 7](phases/phase-7.md) | 13-14: Episodic + Mutation | Active flywheel — **FLYWHEEL-READY** | **Checkpoint C** (after PMACS Phase 14) |
 | [Phase 8](phases/phase-8.md) | 15: Polish | Production-quality — **LIVE-READY** | — |
+| [Phase 9](phases/phase-9/PLAN.md) | Core Orchestration | Wire 30 canonical cycle steps into working end-to-end pipeline | — |
+| [Phase 10](phases/phase-10/PLAN.md) | Broker Integration + Ops | Replace mock fills with Alpaca paper API, complete wizard, operational gaps | — |
+| [Phase 11](phases/phase-11/PLAN.md) | Polish + Operator Experience | Dynamic sparklines, a11y audit, perf profiling, workflow validation — **LIVE-READY** | — |
 
-## Dependencies (linear chain) — ALL COMPLETE
+## Dependencies (linear chain)
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 ✓
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11
                      ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C
 ```
 
-All 8 phases complete. LIVE-READY.
+Phases 1-11 complete. System is LIVE-READY.
+
+## Phase 9 Plans
+
+- [ ] Wave 1: Core Skeleton -- flock lock, checkpoint resume, kill switch, close
+- [ ] Wave 2: Pre-Cycle Data + Queue -- FX, universe, gatekeeper, queue composition
+- [ ] Wave 3: Per-Symbol Pipeline -- personas, arbitration, crucible, sizing, mock execution
+- [ ] Wave 4: Post-Cycle Flywheel -- calibration, lessons, FDE, reconciliation
+- [ ] Wave 5: Hardening -- timeouts, graceful shutdown, kill switch mid-cycle
+- [ ] Wave 6: Performance Validation -- timing instrumentation, edge cases, exit test
+
+## Phase 10 Plans
+
+- [ ] Wave 1: BrokerAdapter ABC + AlpacaPaperAdapter
+- [ ] Wave 2: Catastrophe Net Wiring
+- [ ] Wave 3: Wizard UI (11-step templates + backend steps)
+- [ ] Wave 4: Operational Gaps (Ollama schemas, dead-letter, SSE resume)
+- [ ] Wave 5: Integration + Exit Test
+
+## Phase 11 Plans
+
+- [x] Wave 1: Dynamic Sparklines + HTMX Navigation
+- [x] Wave 2: Error State Integration + Notification Persistence
+- [x] Wave 3: Accessibility Audit + Keyboard Shortcuts Validation
+- [x] Wave 4: Performance Profiling + Ops Tool Validation
+- [x] Wave 5: Operator Workflow Validation + Documentation Polish
 
 ## Operator Milestones
 
 - **After Phase 4 (GSD):** System boots, runs stub cycles, kill switch works. Not usable yet.
 - **After Phase 8 (PMACS) / GSD Phase 4:** System is operationally usable. Paper trading works. Wizard complete. SHADOW + PAPER mode. **The operator can start using the system here.**
+- **After Phase 9 (GSD):** All 30 canonical cycle steps wired. Full end-to-end decision pipeline operational. System runs complete cycles from data fetch through flywheel post-processing.
+- **After Phase 10 (GSD):** Real Alpaca paper trading. System submits and fills real paper orders. Wizard operational. Dead-letter persistence and SSE resume work.
+- **After Phase 11 (GSD):** Production-quality polish. Dynamic sparklines, HTMX navigation, a11y verified, performance within budget, all 8 operator workflows ≤ 3 clicks. **LIVE-READY.**
 - **After Phase 12 (PMACS) / GSD Phase 6:** Flywheel learning begins. Calibration adjusts weights. Failures classified.
 - **After Phase 14 (PMACS) / GSD Phase 7:** Active flywheel. Mutation Engine proposes improvements. PAPER_VALIDATED eligible.
 - **After Phase 15 (PMACS) / GSD Phase 8:** Production-quality. LIVE_EARLY eligible.

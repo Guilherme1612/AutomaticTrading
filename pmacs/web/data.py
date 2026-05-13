@@ -156,6 +156,72 @@ def get_risk_metrics(db_path: str | Path) -> dict[str, Any]:
     return defaults
 
 
+# Window durations for sparkline queries (SQL interval fragments)
+_SPARKLINE_WINDOWS: dict[str, str] = {
+    "1D": "INTERVAL 1 DAY",
+    "1W": "INTERVAL 7 DAY",
+    "1M": "INTERVAL 30 DAY",
+    "3M": "INTERVAL 90 DAY",
+    "ALL": "",  # no time filter
+}
+
+
+def get_sparkline_data(
+    db_path: str | Path,
+    metric: str,
+    window: str = "1W",
+) -> list[tuple[str, float]]:
+    """Get time-series sparkline data for a single metric from DuckDB.
+
+    Args:
+        db_path: Path to DuckDB analytics database.
+        metric: Metric name (e.g. 'sharpe', 'win_rate_pct').
+        window: Time window key — one of 1D, 1W, 1M, 3M, ALL.
+
+    Returns:
+        List of (timestamp_iso, value) tuples ordered chronologically.
+        Empty list if DuckDB unavailable or table missing.
+    """
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+
+        adapter = DuckDBAdapter(db_path=Path(db_path))
+        interval = _SPARKLINE_WINDOWS.get(window.upper(), "INTERVAL 7 DAY")
+        if interval:
+            rows = adapter.execute(
+                """SELECT CAST(computed_at AS VARCHAR) AS ts, metric_value
+                   FROM rolling_metrics
+                   WHERE metric_name = ?
+                     AND computed_at >= (SELECT MAX(computed_at) FROM rolling_metrics) - ?
+                   ORDER BY computed_at ASC""",
+                [metric, interval],
+            )
+        else:
+            rows = adapter.execute(
+                """SELECT CAST(computed_at AS VARCHAR) AS ts, metric_value
+                   FROM rolling_metrics
+                   WHERE metric_name = ?
+                   ORDER BY computed_at ASC""",
+                [metric],
+            )
+        return [(r["ts"], r["metric_value"]) for r in rows if r.get("ts") and r.get("metric_value") is not None]
+    except Exception:
+        return []
+
+
+def get_all_sparkline_data(
+    db_path: str | Path,
+    window: str = "1W",
+) -> dict[str, list[tuple[str, float]]]:
+    """Get sparkline data for all dashboard metrics at once.
+
+    Returns:
+        Dict keyed by metric name, each value a list of (ts, value) tuples.
+    """
+    metrics = ["max_drawdown_pct", "sharpe", "win_rate_pct", "open_positions", "capital_used_pct"]
+    return {m: get_sparkline_data(db_path, m, window) for m in metrics}
+
+
 def get_system_health(heartbeat_dir: Path) -> dict[str, Any]:
     """Get system health from heartbeat files.
 
@@ -635,3 +701,110 @@ def get_agent_cycle_data(
         }
     except sqlite3.OperationalError:
         return {"cycle_id": cycle_id, "found": False}
+
+
+# ---------------------------------------------------------------------------
+# Error state helpers (Source.md §13.4)
+# ---------------------------------------------------------------------------
+
+PAGE_ERROR_CODES = {
+    "dashboard": "E_DASH_001",
+    "agents": "E_AGENTS_001",
+    "pipeline": "E_PIPE_001",
+    "universe": "E_UNIV_001",
+    "cortex": "E_CORTEX_001",
+    "settings": "E_SETTINGS_001",
+    "debug": "E_DEBUG_001",
+}
+
+
+def build_error_context(
+    page: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    """Build an error context dict for the error_state.html component.
+
+    Returns:
+        Dict with: code, description, explanation, actions, spec_ref.
+    """
+    code = PAGE_ERROR_CODES.get(page, "E_UNKNOWN")
+    description = f"Failed to load {page} page data"
+    explanation = f"What this means: {type(exc).__name__}: {exc}"
+    actions = [
+        "Check that pmacs-nervous is running (port 8000)",
+        "Verify the SQLite database exists and is readable",
+        "Reload the page",
+    ]
+    spec_ref = "Architecture.md §4.4"
+    return {
+        "code": code,
+        "description": description,
+        "explanation": explanation,
+        "actions": actions,
+        "spec_ref": spec_ref,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Notification level persistence (Source.md §13.5)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_settings_table(conn: sqlite3.Connection) -> None:
+    """Create the settings table if it doesn't exist."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )"""
+    )
+    conn.commit()
+
+
+def save_notification_level(
+    db_path: str | Path, event: str, level: str
+) -> bool:
+    """Save a notification level for a specific event to SQLite.
+
+    Args:
+        db_path: Path to the SQLite database.
+        event: Event key (e.g. 'cycle_complete', 'kill_switch').
+        level: Notification level string ('toast', 'toast+sound', 'modal', 'none').
+
+    Returns:
+        True if saved successfully.
+    """
+    conn = _sqlite_connect(db_path)
+    try:
+        _ensure_settings_table(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            (f"notif.{event}", level),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_notification_levels(db_path: str | Path) -> dict[str, str]:
+    """Read all saved notification levels from SQLite.
+
+    Returns:
+        Dict mapping event name (without 'notif.' prefix) to level string.
+        Only includes keys starting with 'notif.'.
+    """
+    conn = _sqlite_connect(db_path)
+    try:
+        _ensure_settings_table(conn)
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE 'notif.%'"
+        ).fetchall()
+        return {row[0].replace("notif.", "", 1): row[1] for row in rows}
+    except Exception:
+        return {}
+    finally:
+        conn.close()

@@ -146,3 +146,33 @@ class TestSettingsRoute:
         with TestClient(app) as client:
             response = client.get("/settings")
             assert response.status_code == 200
+
+
+class TestSparklineAPI:
+    """Tests for the /api/dashboard/sparkline endpoint."""
+
+    def test_sparkline_api_returns_json(self):
+        with TestClient(app) as client:
+            response = client.get("/api/dashboard/sparkline?metric=sharpe&window=1W")
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+
+    def test_sparkline_api_returns_empty_for_missing_metric(self):
+        with TestClient(app) as client:
+            response = client.get("/api/dashboard/sparkline?metric=nonexistent&window=1W")
+            assert response.status_code == 200
+            data = response.json()
+            assert data == []
+
+    def test_sparkline_api_uses_default_window(self):
+        with TestClient(app) as client:
+            response = client.get("/api/dashboard/sparkline?metric=sharpe")
+            assert response.status_code == 200
+
+    def test_dashboard_includes_sparkline_data(self):
+        with TestClient(app) as client:
+            response = client.get("/")
+            assert response.status_code == 200
+            # Should contain sparkline containers with data attributes
+            assert b"data-sparkline-metric" in response.content

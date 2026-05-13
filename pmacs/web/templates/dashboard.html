@@ -3,7 +3,14 @@
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
-{% if pre_first_cycle %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% elif pre_first_cycle %}
 <div class="flex flex-col items-center justify-center py-24 text-center">
     <h2 class="text-2xl font-semibold text-zinc-900 mb-3">Welcome to PMACS</h2>
     <p class="text-zinc-500 max-w-md mb-6">Your first cycle will populate this dashboard with portfolio data, risk metrics, and active positions.</p>
@@ -30,77 +37,62 @@
 <!-- Time-window selector -->
 <div class="flex items-center gap-2 mb-4">
     <span class="text-xs text-zinc-400">Period:</span>
-    <div class="flex gap-1">
-        <button class="px-2 py-1 text-xs rounded bg-blue-50 text-blue-600">1D</button>
-        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">1W</button>
-        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">1M</button>
-        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">3M</button>
-        <button class="px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100">ALL</button>
+    <div class="flex gap-1" id="sparkline-window-btns">
+        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
+                hx-get="/api/dashboard/sparkline?window=1D" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                data-window="1D">1D</button>
+        <button class="sparkline-window-btn px-2 py-1 text-xs rounded bg-blue-50 text-blue-600"
+                hx-get="/api/dashboard/sparkline?window=1W" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                data-window="1W">1W</button>
+        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
+                hx-get="/api/dashboard/sparkline?window=1M" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                data-window="1M">1M</button>
+        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
+                hx-get="/api/dashboard/sparkline?window=3M" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                data-window="3M">3M</button>
+        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
+                hx-get="/api/dashboard/sparkline?window=ALL" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                data-window="ALL">ALL</button>
     </div>
 </div>
 
 <!-- Risk metrics row (5 StatBlocks) -->
-<div class="grid grid-cols-5 gap-4 mb-6">
+{% set metric_cards = [
+    ("max_drawdown_pct", "Max Drawdown", "%.1f", "%", "max_drawdown_pct"),
+    ("sharpe", "Sharpe", "%.2f", "", "sharpe"),
+    ("win_rate_pct", "Win Rate", "%.1f", "%", "win_rate_pct"),
+    ("open_positions", "Open Positions", "%d", "", "open_positions"),
+    ("capital_used_pct", "Capital Used", "%.1f", "%", "capital_used_pct"),
+] %}
+<div class="grid grid-cols-5 gap-4 mb-6" id="sparkline-metrics">
+{% for metric_key, label, fmt, suffix, spark_key in metric_cards %}
     <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Max Drawdown</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.max_drawdown_pct) }}%</span>
-        <div class="sparkline-container w-full mt-2 relative">
+        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">{{ label }}</span>
+        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ fmt|format(risk_metrics[metric_key]) }}{{ suffix }}</span>
+        <div class="sparkline-container w-full mt-2 relative"
+             data-sparkline-metric="{{ spark_key }}">
+        {% set points = sparkline_data.get(spark_key, []) %}
+        {% if points and points|length > 1 %}
+            {% set values = points|map(attribute=1)|list %}
+            {% set vmin = values|min %}
+            {% set vmax = values|max %}
+            {% set vrange = [vmax - vmin, 0.001]|max %}
             <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
                 <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="0,20 10,18 20,15 30,17 40,12 50,14 60,10 70,8 80,11 90,6 100,4"/>
+                          points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(24 - (points[i][1] - vmin) / vrange * 20) }} {% endfor %}"/>
             </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.max_drawdown_pct) }}%</div>
+            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2"
+                 style="left:50%;top:{{ "%.0f"|format(24 - (points[-1][1] - vmin) / vrange * 20) }}px"></div>
+            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full"
+                 style="left:50%;top:{{ "%.0f"|format(24 - (points[-1][1] - vmin) / vrange * 20) }}px">{{ fmt|format(points[-1][1]) }}{{ suffix }}</div>
+        {% else %}
+            <div class="w-full h-6 flex items-center justify-center">
+                <span class="text-xs text-zinc-400">No data yet</span>
+            </div>
+        {% endif %}
         </div>
     </div>
-    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Sharpe</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.2f"|format(risk_metrics.sharpe) }}</span>
-        <div class="sparkline-container w-full mt-2 relative">
-            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
-                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="0,18 10,16 20,14 30,15 40,10 50,12 60,8 70,6 80,9 90,5 100,3"/>
-            </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.2f"|format(risk_metrics.sharpe) }}</div>
-        </div>
-    </div>
-    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Win Rate</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.win_rate_pct) }}%</span>
-        <div class="sparkline-container w-full mt-2 relative">
-            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
-                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="0,16 10,14 20,17 30,12 40,15 50,10 60,13 70,8 80,11 90,7 100,5"/>
-            </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.win_rate_pct) }}%</div>
-        </div>
-    </div>
-    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Open Positions</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ risk_metrics.open_positions }}</span>
-        <div class="sparkline-container w-full mt-2 relative">
-            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
-                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="0,12 10,14 20,10 30,16 40,12 50,8 60,14 70,10 80,12 90,6 100,10"/>
-            </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ risk_metrics.open_positions }}</div>
-        </div>
-    </div>
-    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">Capital Used</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ "%.1f"|format(risk_metrics.capital_used_pct) }}%</span>
-        <div class="sparkline-container w-full mt-2 relative">
-            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
-                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="0,20 10,19 20,17 30,18 40,14 50,15 60,12 70,10 80,13 90,8 100,6"/>
-            </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:41%"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full" style="left:50%;top:41%">{{ "%.1f"|format(risk_metrics.capital_used_pct) }}%</div>
-        </div>
-    </div>
+{% endfor %}
 </div>
 
 <div class="grid grid-cols-3 gap-6">

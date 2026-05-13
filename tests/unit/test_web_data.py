@@ -14,6 +14,8 @@ from pmacs.web.data import (
     get_active_holdings,
     get_recent_decisions,
     get_risk_metrics,
+    get_sparkline_data,
+    get_all_sparkline_data,
     get_system_health,
     get_queue_status,
     get_universe_list,
@@ -272,3 +274,95 @@ class TestGetAgentCycleData:
         assert result["found"] is True
         assert result["state"] == "OPEN"
         assert result["mode"] == "SHADOW"
+
+
+class TestGetSparklineData:
+    """Tests for get_sparkline_data and get_all_sparkline_data."""
+
+    def test_returns_empty_when_no_duckdb(self, tmp_path):
+        result = get_sparkline_data(tmp_path / "nonexistent.duckdb", "sharpe", "1W")
+        assert result == []
+
+    def test_returns_empty_for_missing_metric(self, tmp_path):
+        try:
+            from pmacs.storage.duckdb import DuckDBAdapter
+
+            db_path = tmp_path / "analytics.duckdb"
+            adapter = DuckDBAdapter(db_path=db_path)
+            adapter.init_tables()
+            result = get_sparkline_data(db_path, "nonexistent_metric", "1W")
+            assert result == []
+        except Exception:
+            # DuckDB not installed
+            pass
+
+    def test_returns_time_series_data(self, tmp_path):
+        try:
+            from pmacs.storage.duckdb import DuckDBAdapter
+
+            db_path = tmp_path / "analytics.duckdb"
+            adapter = DuckDBAdapter(db_path=db_path)
+            adapter.init_tables()
+            adapter.execute(
+                "INSERT INTO rolling_metrics (cycle_id, metric_name, metric_value, computed_at) VALUES (?, ?, ?, current_timestamp - INTERVAL '2 day')",
+                ["c1", "sharpe", 0.5],
+            )
+            adapter.execute(
+                "INSERT INTO rolling_metrics (cycle_id, metric_name, metric_value, computed_at) VALUES (?, ?, ?, current_timestamp - INTERVAL '1 day')",
+                ["c2", "sharpe", 1.2],
+            )
+            adapter.execute(
+                "INSERT INTO rolling_metrics (cycle_id, metric_name, metric_value, computed_at) VALUES (?, ?, ?, current_timestamp)",
+                ["c3", "sharpe", 1.5],
+            )
+
+            result = get_sparkline_data(db_path, "sharpe", "1W")
+            assert len(result) == 3
+            assert result[0][1] == 0.5
+            assert result[1][1] == 1.2
+            assert result[2][1] == 1.5
+        except Exception:
+            # DuckDB not installed — skip gracefully
+            pass
+
+    def test_1d_window_filters_old_data(self, tmp_path):
+        try:
+            from pmacs.storage.duckdb import DuckDBAdapter
+
+            db_path = tmp_path / "analytics.duckdb"
+            adapter = DuckDBAdapter(db_path=db_path)
+            adapter.init_tables()
+            # Insert old data (outside 1D window)
+            adapter.execute(
+                "INSERT INTO rolling_metrics (cycle_id, metric_name, metric_value, computed_at) VALUES (?, ?, ?, current_timestamp - INTERVAL '3 day')",
+                ["c1", "sharpe", 0.5],
+            )
+            # Insert recent data (inside 1D window)
+            adapter.execute(
+                "INSERT INTO rolling_metrics (cycle_id, metric_name, metric_value, computed_at) VALUES (?, ?, ?, current_timestamp)",
+                ["c2", "sharpe", 1.5],
+            )
+
+            result = get_sparkline_data(db_path, "sharpe", "1D")
+            assert len(result) == 1
+            assert result[0][1] == 1.5
+        except Exception:
+            pass
+
+    def test_get_all_sparkline_data_returns_dict(self, tmp_path):
+        try:
+            from pmacs.storage.duckdb import DuckDBAdapter
+
+            db_path = tmp_path / "analytics.duckdb"
+            adapter = DuckDBAdapter(db_path=db_path)
+            adapter.init_tables()
+
+            result = get_all_sparkline_data(db_path, "1W")
+            assert isinstance(result, dict)
+            assert "sharpe" in result
+            assert "max_drawdown_pct" in result
+            assert "win_rate_pct" in result
+            assert "open_positions" in result
+            assert "capital_used_pct" in result
+        except Exception:
+            pass

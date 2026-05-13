@@ -55,17 +55,18 @@
                     {% for event_key, event_label in notification_events | default([
                         ("cycle_start", "Cycle Start"),
                         ("cycle_complete", "Cycle Complete"),
-                        ("trade_signed", "Trade Signed"),
-                        ("kill_switch", "Kill Switch"),
-                        ("error", "Error"),
-                        ("mutation_proposed", "Mutation Proposed"),
-                        ("crucible_attack", "Crucible Attack"),
+                        ("trade_filled_paper", "Trade Filled (Paper)"),
+                        ("trade_filled_live", "Trade Filled (Live)"),
+                        ("kill_switch_engaged", "Kill Switch"),
+                        ("audit_chain_failure", "Audit Chain Failure"),
+                        ("stop_loss_triggered", "Stop Loss Triggered"),
+                        ("mutation_candidate_ready", "Mutation Candidate"),
                     ]) %}
                     <div class="flex items-center justify-between py-1">
                         <span class="text-sm text-zinc-700">{{ event_label }}</span>
                         <select class="text-xs font-mono border border-zinc-200 rounded px-2 py-1 bg-white notification-level-select"
                                 data-event="{{ event_key }}"
-                                {% if event_key == "kill_switch" or event_key == "error" %}disabled{% endif %}>
+                                {% if event_key in ("kill_switch_engaged", "audit_chain_failure") %}disabled{% endif %}>
                             <option value="toast" {{ 'selected' if notification_levels.get(event_key, 'toast') == 'toast' else '' }}>Toast</option>
                             <option value="toast+sound" {{ 'selected' if notification_levels.get(event_key) == 'toast+sound' else '' }}>Toast + Sound</option>
                             <option value="modal" {{ 'selected' if notification_levels.get(event_key) == 'modal' else '' }}>Modal</option>

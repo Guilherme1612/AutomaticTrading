@@ -6,13 +6,21 @@
  * Spec: Source.md §13.2 (chrome), §13.5 (notifications), §13.6 (shortcuts), §13.7 (a11y)
  */
 
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // ─── Feature Detection ─────────────────────────────────────────────────────
 
 var prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ─── SSE Connection ─────────────────────────────────────────────────────────
 
-var SSE_URL = "http://127.0.0.1:8000/events";
+var SSE_URL = "/events";
 var eventSource = null;
 var eventHandlers = {};
 var sseRetryCount = 0;
@@ -369,9 +377,10 @@ function renderCmdKResults(query) {
 
     // If query looks like a ticker (1-5 uppercase letters), add ticker search
     if (/^[A-Z]{1,5}$/i.test(query)) {
+        var safeQuery = query.toUpperCase().replace(/[^A-Z]/g, "");
         filtered.unshift({
-            name: 'Go to Pipeline filtered: ' + query.toUpperCase(),
-            href: '/pipeline?ticker=' + query.toUpperCase(),
+            name: 'Go to Pipeline filtered: ' + safeQuery,
+            href: '/pipeline?ticker=' + encodeURIComponent(safeQuery),
             category: "ticker",
         });
     }
@@ -379,7 +388,7 @@ function renderCmdKResults(query) {
     // If query looks like audit/cycle search
     if (/^(cycle|c-|CYCLE)/i.test(query)) {
         filtered.unshift({
-            name: 'Search audit: ' + query,
+            name: 'Search audit: ' + query.replace(/[<>"'&]/g, ""),
             href: '/debug?q=' + encodeURIComponent(query),
             category: "audit",
         });
@@ -416,7 +425,7 @@ function renderCmdKResults(query) {
             (item.category === "ticker" ? "bg-amber-50 text-amber-600" : "") +
             (item.category === "audit" ? "bg-purple-50 text-purple-600" : "") +
             '">' + (categoryLabel[item.category] || "") + '</span>' +
-            '<span class="flex-1">' + item.name + '</span>';
+            '<span class="flex-1">' + escapeHtml(item.name) + '</span>';
 
         li.addEventListener("click", function () {
             executeCmdKItem(item);
@@ -461,7 +470,7 @@ function executeCmdKItem(item) {
 
 function runCycleNow() {
     showToast("Starting new cycle...", "info");
-    fetch("http://127.0.0.1:8000/api/cycle/start", {
+    fetch("/api/cycle/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trigger: "manual" })
@@ -519,16 +528,27 @@ function fetchCycleComparison() {
     var resultDiv = document.getElementById("compare-result");
     if (!resultDiv) return;
     resultDiv.classList.remove("hidden");
-    resultDiv.innerHTML = '<p class="text-sm text-zinc-600">Comparing ' + a + ' vs ' + b + '...</p>';
-    fetch("http://127.0.0.1:8000/api/cycle/compare?cycle_a=" + encodeURIComponent(a) + "&cycle_b=" + encodeURIComponent(b))
+    resultDiv.textContent = "";
+    var loading = document.createElement("p");
+    loading.className = "text-sm text-zinc-600";
+    loading.textContent = "Comparing " + a + " vs " + b + "...";
+    resultDiv.appendChild(loading);
+    fetch("/api/cycle/compare?cycle_a=" + encodeURIComponent(a) + "&cycle_b=" + encodeURIComponent(b))
         .then(function(r) {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.json();
         }).then(function(data) {
-            resultDiv.innerHTML = '<pre class="text-xs font-mono bg-zinc-50 p-3 rounded overflow-auto">' +
-                JSON.stringify(data, null, 2) + '</pre>';
+            resultDiv.textContent = "";
+            var pre = document.createElement("pre");
+            pre.className = "text-xs font-mono bg-zinc-50 p-3 rounded overflow-auto";
+            pre.textContent = JSON.stringify(data, null, 2);
+            resultDiv.appendChild(pre);
         }).catch(function(err) {
-            resultDiv.innerHTML = '<p class="text-sm text-red-600">Comparison failed: ' + err.message + '</p>';
+            resultDiv.textContent = "";
+            var errP = document.createElement("p");
+            errP.className = "text-sm text-red-600";
+            errP.textContent = "Comparison failed: " + err.message;
+            resultDiv.appendChild(errP);
         });
 }
 
@@ -717,10 +737,22 @@ function handleKillSwitch() {
                 label: "Engage",
                 primary: true,
                 action: function () {
-                    // TODO: POST to pmacs-nervous /api/kill-switch/engage
-                    document.getElementById("kill-switch-btn").classList.add("bg-red-600");
-                    document.getElementById("kill-switch-btn").classList.remove("bg-zinc-700");
-                    showToast("Kill switch ENGAGED. To disengage: Cortex page.", "error", 0);
+                    fetch("/api/kill-switch/engage", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" }
+                    }).then(function (resp) {
+                        if (!resp.ok) throw new Error("HTTP " + resp.status);
+                        return resp.json();
+                    }).then(function () {
+                        var btn = document.getElementById("kill-switch-btn");
+                        if (btn) {
+                            btn.classList.add("bg-red-600");
+                            btn.classList.remove("bg-zinc-700");
+                        }
+                        showToast("Kill switch ENGAGED. To disengage: Cortex page.", "error", 0);
+                    }).catch(function (err) {
+                        showToast("Kill switch engage failed: " + err.message, "critical", 0);
+                    });
                 },
             },
         ]
@@ -1241,6 +1273,67 @@ onSSE("sparkline_update", function (data) {
 });
 
 // ─── Viewport Guard (Source.md §13.7: minimum 1024px) ──────────────────────
+
+/**
+ * Refresh all sparkline metrics for a given time window.
+ * Called by sparkline window buttons on dashboard.
+ * @param {string} window - Time window (1D, 1W, 1M, 3M, ALL).
+ * @param {HTMLElement} clickedBtn - The button that was clicked (for active state).
+ */
+function refreshAllSparklines(window, clickedBtn) {
+    // Update active button state
+    var container = document.getElementById("sparkline-window-btns");
+    if (container) {
+        container.querySelectorAll(".sparkline-window-btn").forEach(function (btn) {
+            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.add("text-zinc-500");
+        });
+    }
+    if (clickedBtn) {
+        clickedBtn.classList.remove("text-zinc-500");
+        clickedBtn.classList.add("bg-blue-50", "text-blue-600");
+    }
+
+    // Fetch and update each sparkline metric
+    var metrics = document.querySelectorAll("[data-sparkline-metric]");
+    metrics.forEach(function (el) {
+        var metric = el.getAttribute("data-sparkline-metric");
+        fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(window))
+            .then(function (resp) {
+                if (!resp.ok) return null;
+                return resp.json();
+            })
+            .then(function (points) {
+                if (!points || points.length < 2) {
+                    el.innerHTML = '<div class="w-full h-6 flex items-center justify-center">' +
+                        '<span class="text-xs text-zinc-400">No data yet</span></div>';
+                    return;
+                }
+                var values = points.map(function (p) { return p.v; });
+                var vmin = Math.min.apply(null, values);
+                var vmax = Math.max.apply(null, values);
+                var vrange = Math.max(vmax - vmin, 0.001);
+                var n = points.length;
+                var pts = [];
+                for (var i = 0; i < n; i++) {
+                    var x = (i / (n - 1) * 100).toFixed(1);
+                    var y = (24 - (points[i].v - vmin) / vrange * 20).toFixed(1);
+                    pts.push(x + "," + y);
+                }
+                var lastY = (24 - (values[n - 1] - vmin) / vrange * 20).toFixed(0);
+                el.innerHTML =
+                    '<svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">' +
+                    '<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="' + pts.join(" ") + '"/>' +
+                    '</svg>' +
+                    '<div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:' + lastY + 'px"></div>';
+            })
+            .catch(function () {
+                // Leave existing sparkline unchanged on fetch failure
+            });
+    });
+}
+
+// ─── Viewport Guard End ────────────────────────────────────────────────────
 
 function checkViewportWidth() {
     var guard = document.getElementById("viewport-guard");

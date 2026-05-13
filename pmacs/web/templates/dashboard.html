@@ -39,19 +39,19 @@
     <span class="text-xs text-zinc-400">Period:</span>
     <div class="flex gap-1" id="sparkline-window-btns">
         <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                hx-get="/api/dashboard/sparkline?window=1D" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                onclick="refreshAllSparklines('1D', this)"
                 data-window="1D">1D</button>
         <button class="sparkline-window-btn px-2 py-1 text-xs rounded bg-blue-50 text-blue-600"
-                hx-get="/api/dashboard/sparkline?window=1W" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                onclick="refreshAllSparklines('1W', this)"
                 data-window="1W">1W</button>
         <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                hx-get="/api/dashboard/sparkline?window=1M" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                onclick="refreshAllSparklines('1M', this)"
                 data-window="1M">1M</button>
         <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                hx-get="/api/dashboard/sparkline?window=3M" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                onclick="refreshAllSparklines('3M', this)"
                 data-window="3M">3M</button>
         <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                hx-get="/api/dashboard/sparkline?window=ALL" hx-target="#sparkline-metrics" hx-swap="innerHTML"
+                onclick="refreshAllSparklines('ALL', this)"
                 data-window="ALL">ALL</button>
     </div>
 </div>

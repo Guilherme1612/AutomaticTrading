@@ -1,5 +1,7 @@
 """Dashboard route — portfolio overview page."""
 
+import shutil
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -39,9 +41,24 @@ async def dashboard_page(request: Request):
             for h in holdings
         ]
 
-        # Compute portfolio value from holdings
-        position_value = sum(h.get("position_size_usd") or 0 for h in holdings)
-        portfolio_value = 5000.0 - position_value + position_value  # cash + positions
+        # Compute portfolio value: initial_capital + unrealized P&L
+        config = data_layer.get_settings(cfg.config_dir)
+        risk_cfg = config.get("risk", {})
+        initial_capital = float(
+            risk_cfg.get("paper_capital", risk_cfg.get("initial_capital", 5000.0))
+        )
+        position_cost = sum(h.get("position_size_usd") or 0 for h in holdings)
+        # Unrealized P&L: when current_price diverges from entry, mark to market
+        unrealized_pnl = 0.0
+        for h in holdings:
+            entry = h.get("entry_price_usd") or 0.0
+            current = h.get("current_price_usd") or entry  # fallback to cost
+            size = h.get("position_size_usd") or 0
+            if entry > 0 and current != entry:
+                shares = size / entry
+                unrealized_pnl += (current - entry) * shares
+        # TODO: integrate with cash_ledger once Architecture.md §9 CashLedger is built
+        portfolio_value = initial_capital + unrealized_pnl
 
         return templates.TemplateResponse(
             request=request,
@@ -57,7 +74,7 @@ async def dashboard_page(request: Request):
                 "sparkline_data": sparkline_data,
                 "system_health": {
                     "audit_chain": health.get("audit_chain_status", "unknown"),
-                    "disk_free_gb": 50,
+                    "disk_free_gb": round(shutil.disk_usage("/").free / (1024**3), 1),
                     "inference_ok": health.get("inference_ok", False),
                     "last_cycle": decisions[0]["opened_at"] if decisions else "--",
                 },

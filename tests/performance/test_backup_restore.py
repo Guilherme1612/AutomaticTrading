@@ -19,7 +19,8 @@ from pmacs.storage.audit import AuditWriter
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROFILER_DIR := PROJECT_ROOT / "ops"))
+_OPS_DIR = PROJECT_ROOT / "ops"
+sys.path.insert(0, str(_OPS_DIR))
 from backup_verify import do_backup, do_restore, do_verify, STORES
 
 

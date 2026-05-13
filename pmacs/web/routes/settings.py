@@ -80,7 +80,7 @@ async def save_notification_level(req: NotificationLevelRequest):
     Kill switch and audit chain failure levels are non-disableable.
     """
     # Enforce non-disableable events
-    if req.event in ("kill_switch", "audit_chain_failure"):
+    if req.event in ("kill_switch_engaged", "audit_chain_failure"):
         return JSONResponse(
             {"ok": False, "error": f"'{req.event}' notification level cannot be changed"},
             status_code=403,

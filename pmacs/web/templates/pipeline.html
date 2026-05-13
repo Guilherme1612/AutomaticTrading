@@ -240,7 +240,7 @@ function onDrop(e, verdict) {
     e.preventDefault();
     e.currentTarget.classList.remove('drag-over');
     var ticker = e.dataTransfer.getData('text/plain');
-    console.log('Move', ticker, 'to verdict', verdict);
+    e.currentTarget.classList.remove('drag-over');
 }
 
 // --- Drag and drop for priority bands (P1-P4) ---

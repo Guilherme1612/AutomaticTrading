@@ -6,6 +6,7 @@ Routes remain synchronous reads — SSE handles live updates.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -668,7 +669,7 @@ def get_cortex_status(
         "cross_db": cross_db,
         "processes": processes,
         "disk_clock_network": {
-            "disk_free_gb": 50,
+            "disk_free_gb": round(shutil.disk_usage("/").free / (1024**3), 1),
             "clock_skew_ms": 0,
             "network_ok": True,
         },

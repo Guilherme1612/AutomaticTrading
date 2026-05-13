@@ -27,27 +27,37 @@ async def agents_page(request: Request):
     """Render the agents analysis page with persona cards."""
     cfg = get_config()
 
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
-        queue = data_layer.get_queue_status(db)
-        decisions = data_layer.get_recent_decisions(db, limit=1)
-    finally:
-        db.close()
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            queue = data_layer.get_queue_status(db)
+            decisions = data_layer.get_recent_decisions(db, limit=1)
+        finally:
+            db.close()
 
-    current_ticker = queue[0]["ticker"] if queue else None
+        current_ticker = queue[0]["ticker"] if queue else None
 
-    return templates.TemplateResponse(
-        request=request,
-        name="agents.html",
-        context={
-            "page": "agents",
-            "mode": "SHADOW + PAPER",
-            "personas": PERSONAS,
-            "queue": queue,
-            "current_ticker": current_ticker,
-            "cycle_log": decisions,
-        },
-    )
+        return templates.TemplateResponse(
+            request=request,
+            name="agents.html",
+            context={
+                "page": "agents",
+                "mode": "SHADOW + PAPER",
+                "personas": PERSONAS,
+                "queue": queue,
+                "current_ticker": current_ticker,
+                "cycle_log": decisions,
+            },
+        )
+    except Exception as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="agents.html",
+            context={
+                "page": "agents",
+                "error": data_layer.build_error_context("agents", exc),
+            },
+        )
 
 
 @router.get("/agents/sankey-data")

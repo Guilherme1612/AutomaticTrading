@@ -3,6 +3,14 @@
 {% block title %}Agents{% endblock %}
 
 {% block content %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% else %}
 {% if not current_ticker %}
 <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 flex items-center justify-between">
     <span class="text-sm text-blue-700">No active cycle. Showing last completed cycle.</span>
@@ -153,4 +161,5 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 });
 </script>
+{% endif %}
 {% endblock %}

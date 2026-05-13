@@ -40,66 +40,76 @@ async def pipeline_page(request: Request):
     """Render the pipeline kanban page with verdict columns and P1-P4 queue rail."""
     cfg = get_config()
 
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
-        decisions = data_layer.get_recent_decisions(db, limit=20)
-        holdings = data_layer.get_active_holdings(db)
-        queue = data_layer.get_queue_status(db)
-        banded = data_layer.get_priority_banded_queue(db)
-    finally:
-        db.close()
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            decisions = data_layer.get_recent_decisions(db, limit=20)
+            holdings = data_layer.get_active_holdings(db)
+            queue = data_layer.get_queue_status(db)
+            banded = data_layer.get_priority_banded_queue(db)
+        finally:
+            db.close()
 
-    # Bin holdings by verdict for kanban columns
-    verdict_cards = {"STRONG_BUY": [], "BUY": [], "HOLD": [], "SKIP": []}
-    for h in holdings:
-        verdict = h.get("verdict") or "SKIP"
-        card = {
-            "ticker": h["ticker"],
-            "conviction": h.get("conviction_score") or 0.0,
+        # Bin holdings by verdict for kanban columns
+        verdict_cards = {"STRONG_BUY": [], "BUY": [], "HOLD": [], "SKIP": []}
+        for h in holdings:
+            verdict = h.get("verdict") or "SKIP"
+            card = {
+                "ticker": h["ticker"],
+                "conviction": h.get("conviction_score") or 0.0,
+            }
+            if verdict in verdict_cards:
+                verdict_cards[verdict].append(card)
+
+        columns = [
+            {"verdict": "STRONG_BUY", "color": "green", "cards": verdict_cards["STRONG_BUY"]},
+            {"verdict": "BUY", "color": "blue", "cards": verdict_cards["BUY"]},
+            {"verdict": "HOLD", "color": "amber", "cards": verdict_cards["HOLD"]},
+            {"verdict": "SKIP", "color": "red", "cards": verdict_cards["SKIP"]},
+        ]
+
+        # Priority bands for the right rail
+        band_labels = {
+            "P1": {"label": "P1 — Highest Priority", "color": "red"},
+            "P2": {"label": "P2 — Standard", "color": "amber"},
+            "P3": {"label": "P3 — Low Priority", "color": "blue"},
+            "P4": {"label": "P4 — Background", "color": "zinc"},
         }
-        if verdict in verdict_cards:
-            verdict_cards[verdict].append(card)
 
-    columns = [
-        {"verdict": "STRONG_BUY", "color": "green", "cards": verdict_cards["STRONG_BUY"]},
-        {"verdict": "BUY", "color": "blue", "cards": verdict_cards["BUY"]},
-        {"verdict": "HOLD", "color": "amber", "cards": verdict_cards["HOLD"]},
-        {"verdict": "SKIP", "color": "red", "cards": verdict_cards["SKIP"]},
-    ]
+        priority_bands = []
+        for band_key in ("P1", "P2", "P3", "P4"):
+            meta = band_labels[band_key]
+            items = banded.get(band_key, [])
+            priority_bands.append({
+                "band": band_key,
+                "label": meta["label"],
+                "color": meta["color"],
+                "tickers": items,
+                "count": len(items),
+            })
 
-    # Priority bands for the right rail
-    band_labels = {
-        "P1": {"label": "P1 — Highest Priority", "color": "red"},
-        "P2": {"label": "P2 — Standard", "color": "amber"},
-        "P3": {"label": "P3 — Low Priority", "color": "blue"},
-        "P4": {"label": "P4 — Background", "color": "zinc"},
-    }
-
-    priority_bands = []
-    for band_key in ("P1", "P2", "P3", "P4"):
-        meta = band_labels[band_key]
-        items = banded.get(band_key, [])
-        priority_bands.append({
-            "band": band_key,
-            "label": meta["label"],
-            "color": meta["color"],
-            "tickers": items,
-            "count": len(items),
-        })
-
-    return templates.TemplateResponse(
-        request=request,
-        name="pipeline.html",
-        context={
-            "page": "pipeline",
-            "mode": "SHADOW + PAPER",
-            "columns": columns,
-            "queue_size": len(queue),
-            "cycles_today": len(decisions),
-            "priority_bands": priority_bands,
-            "active_tickers": [h["ticker"] for h in holdings],
-        },
-    )
+        return templates.TemplateResponse(
+            request=request,
+            name="pipeline.html",
+            context={
+                "page": "pipeline",
+                "mode": "SHADOW + PAPER",
+                "columns": columns,
+                "queue_size": len(queue),
+                "cycles_today": len(decisions),
+                "priority_bands": priority_bands,
+                "active_tickers": [h["ticker"] for h in holdings],
+            },
+        )
+    except Exception as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="pipeline.html",
+            context={
+                "page": "pipeline",
+                "error": data_layer.build_error_context("pipeline", exc),
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,14 @@
 {% block title %}Pipeline{% endblock %}
 
 {% block content %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% else %}
 <!-- Top filter bar -->
 <div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
     <div class="flex items-center justify-between">
@@ -421,4 +429,5 @@ function loadScheme(name) {
         });
 }
 </script>
+{% endif %}
 {% endblock %}

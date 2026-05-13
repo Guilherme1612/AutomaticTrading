@@ -14,31 +14,41 @@ async def universe_page(request: Request):
     """Render the universe ticker management page."""
     cfg = get_config()
 
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
-        ticker_rows = data_layer.get_universe_list(db)
-    finally:
-        db.close()
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            ticker_rows = data_layer.get_universe_list(db)
+        finally:
+            db.close()
 
-    # Map to template-expected field names
-    tickers = [
-        {
-            "symbol": t["ticker"],
-            "name": t["ticker"],  # Universe has ticker, not company name
-            "sector": t.get("sector") or "--",
-            "status": "Active",
-            "last_cycle": "--",
-        }
-        for t in ticker_rows
-    ]
+        # Map to template-expected field names
+        tickers = [
+            {
+                "symbol": t["ticker"],
+                "name": t["ticker"],  # Universe has ticker, not company name
+                "sector": t.get("sector") or "--",
+                "status": "Active",
+                "last_cycle": "--",
+            }
+            for t in ticker_rows
+        ]
 
-    return templates.TemplateResponse(
-        request=request,
-        name="universe.html",
-        context={
-            "page": "universe",
-            "mode": "SHADOW + PAPER",
-            "tickers": tickers,
-            "groups": ["All", "Watchlist", "Portfolio", "Sectors"],
-        },
-    )
+        return templates.TemplateResponse(
+            request=request,
+            name="universe.html",
+            context={
+                "page": "universe",
+                "mode": "SHADOW + PAPER",
+                "tickers": tickers,
+                "groups": ["All", "Watchlist", "Portfolio", "Sectors"],
+            },
+        )
+    except Exception as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="universe.html",
+            context={
+                "page": "universe",
+                "error": data_layer.build_error_context("universe", exc),
+            },
+        )

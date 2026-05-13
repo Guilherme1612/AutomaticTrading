@@ -198,6 +198,28 @@ var NOTIFICATION_POLICY = {
     source_recovered: { surface: "toast", type: "info", duration: 5000, sound: false },
 };
 
+// Events that ALWAYS show modal regardless of saved level
+var NON_DISABLEABLE_EVENTS = {
+    kill_switch_engaged: true,
+    audit_chain_failure: true
+};
+
+// Saved notification levels from backend (populated on page load)
+var savedNotificationLevels = {};
+
+// Fetch saved notification levels from backend on page load
+document.addEventListener("DOMContentLoaded", function () {
+    fetch("/api/settings/notifications")
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+            savedNotificationLevels = data || {};
+        })
+        .catch(function () {
+            // Fallback: use defaults from NOTIFICATION_POLICY
+            savedNotificationLevels = {};
+        });
+});
+
 function playSound(type) {
     if (!type || prefersReducedMotion) return;
     try {
@@ -226,9 +248,36 @@ function handleNotification(eventType, data) {
     var policy = NOTIFICATION_POLICY[eventType];
     if (!policy || policy.surface === "silent") return;
 
-    playSound(policy.sound);
+    // Kill switch and audit chain failure ALWAYS show modal — bypass saved level
+    var isNonDisableable = !!NON_DISABLEABLE_EVENTS[eventType];
 
-    if (policy.surface === "modal") {
+    // Check saved notification level from backend
+    var savedLevel = savedNotificationLevels[eventType] || null;
+    if (savedLevel === "none" && !isNonDisableable) {
+        // Silently suppressed by operator preference
+        return;
+    }
+
+    // Determine effective surface and sound from saved level
+    var effectiveSurface = policy.surface;
+    var effectiveSound = policy.sound;
+
+    if (!isNonDisableable && savedLevel) {
+        if (savedLevel === "toast") {
+            effectiveSurface = "toast";
+            effectiveSound = false;
+        } else if (savedLevel === "toast+sound") {
+            effectiveSurface = "toast";
+            effectiveSound = policy.sound || "click";
+        } else if (savedLevel === "modal") {
+            effectiveSurface = "modal";
+            effectiveSound = "alert";
+        }
+    }
+
+    playSound(effectiveSound);
+
+    if (effectiveSurface === "modal") {
         showBlockingModal(
             eventType === "kill_switch_engaged" ? "KILL SWITCH ENGAGED" : "CRITICAL ALERT",
             data.message || "A critical event occurred.",
@@ -236,7 +285,7 @@ function handleNotification(eventType, data) {
                 { label: "Acknowledge", primary: true },
             ]
         );
-    } else if (policy.surface === "toast") {
+    } else if (effectiveSurface === "toast") {
         showToast(data.message || eventType, policy.type, policy.duration);
     }
 
@@ -1143,6 +1192,52 @@ onSSE("trade", function (data) {
     if (data.event === "filled") {
         handleNotification(data.mode === "LIVE" ? "trade_filled_live" : "trade_filled_paper", data);
     }
+});
+
+// Sparkline update events — refresh individual metric sparklines during cycle
+onSSE("sparkline_update", function (data) {
+    if (!data || !data.metric) return;
+    var metric = data.metric;
+    var container = document.querySelector('[data-sparkline-metric="' + metric + '"]');
+    if (!container) return;
+
+    // Determine current active window from button state
+    var activeBtn = document.querySelector(".sparkline-window-btn.bg-blue-50");
+    var windowParam = activeBtn ? (activeBtn.getAttribute("data-window") || "1W") : "1W";
+
+    // Fetch fresh sparkline data and swap SVG content
+    fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(windowParam))
+        .then(function (resp) {
+            if (!resp.ok) return null;
+            return resp.json();
+        })
+        .then(function (points) {
+            if (!points || points.length < 2) {
+                container.innerHTML = '<div class="w-full h-6 flex items-center justify-center">' +
+                    '<span class="text-xs text-zinc-400">No data yet</span></div>';
+                return;
+            }
+            var values = points.map(function (p) { return p.v; });
+            var vmin = Math.min.apply(null, values);
+            var vmax = Math.max.apply(null, values);
+            var vrange = Math.max(vmax - vmin, 0.001);
+            var n = points.length;
+            var pts = [];
+            for (var i = 0; i < n; i++) {
+                var x = (i / (n - 1) * 100).toFixed(1);
+                var y = (24 - (points[i].v - vmin) / vrange * 20).toFixed(1);
+                pts.push(x + "," + y);
+            }
+            var lastY = (24 - (values[n - 1] - vmin) / vrange * 20).toFixed(0);
+            container.innerHTML =
+                '<svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">' +
+                '<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="' + pts.join(" ") + '"/>' +
+                '</svg>' +
+                '<div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:' + lastY + 'px"></div>';
+        })
+        .catch(function () {
+            // Graceful degradation — leave existing sparkline unchanged
+        });
 });
 
 // ─── Viewport Guard (Source.md §13.7: minimum 1024px) ──────────────────────

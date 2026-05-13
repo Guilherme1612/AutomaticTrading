@@ -3,6 +3,14 @@
 {% block title %}Cortex{% endblock %}
 
 {% block content %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% else %}
 <h2 class="text-lg font-semibold text-zinc-900 mb-6">System Health</h2>
 
 <!-- 2x3 grid -->
@@ -124,4 +132,5 @@
         </dl>
     </div>
 </div>
+{% endif %}
 {% endblock %}

@@ -3,6 +3,14 @@
 {% block title %}Settings{% endblock %}
 
 {% block content %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% else %}
 <h2 class="text-lg font-semibold text-zinc-900 mb-6">Settings</h2>
 
 <!-- Scrollable sections -->
@@ -56,11 +64,12 @@
                     <div class="flex items-center justify-between py-1">
                         <span class="text-sm text-zinc-700">{{ event_label }}</span>
                         <select class="text-xs font-mono border border-zinc-200 rounded px-2 py-1 bg-white notification-level-select"
-                                data-event="{{ event_key }}">
-                            <option value="toast">Toast</option>
-                            <option value="toast+sound">Toast + Sound</option>
-                            <option value="modal">Modal</option>
-                            <option value="none">Silent</option>
+                                data-event="{{ event_key }}"
+                                {% if event_key == "kill_switch" or event_key == "error" %}disabled{% endif %}>
+                            <option value="toast" {{ 'selected' if notification_levels.get(event_key, 'toast') == 'toast' else '' }}>Toast</option>
+                            <option value="toast+sound" {{ 'selected' if notification_levels.get(event_key) == 'toast+sound' else '' }}>Toast + Sound</option>
+                            <option value="modal" {{ 'selected' if notification_levels.get(event_key) == 'modal' else '' }}>Modal</option>
+                            <option value="none" {{ 'selected' if notification_levels.get(event_key) == 'none' else '' }}>Silent</option>
                         </select>
                     </div>
                     {% endfor %}
@@ -249,8 +258,21 @@ document.querySelectorAll(".notification-level-select").forEach(function(sel) {
     sel.addEventListener("change", function() {
         var eventKey = this.getAttribute("data-event");
         var level = this.value;
-        console.log("[PMACS] Notification level changed:", eventKey, "->", level);
-        // When backend exists: POST to /api/settings/notifications with {event: eventKey, level: level}
+        fetch("/api/settings/notifications", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({event: eventKey, level: level})
+        }).then(function(resp) {
+            return resp.json();
+        }).then(function(data) {
+            if (data.ok) {
+                showToast("Notification level saved: " + eventKey, "success", 2000);
+            } else {
+                showToast("Failed to save: " + (data.error || "Unknown error"), "error");
+            }
+        }).catch(function(err) {
+            showToast("Save failed: " + err.message, "error");
+        });
     });
 });
 </script>
@@ -296,4 +318,5 @@ function rollbackMutation(candidateId) {
     });
 }
 </script>
+{% endif %}
 {% endblock %}

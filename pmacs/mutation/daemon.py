@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pmacs.constants import MUTATION_ACTIVATION_CYCLES
 from pmacs.logsys import log_debug
 from pmacs.mutation.ab_runner import ABRunner
 from pmacs.mutation.candidate_generator import generate_candidates
@@ -23,12 +24,10 @@ from pmacs.mutation.stat_test import welch_t_test
 
 logger = logging.getLogger(__name__)
 
-ACTIVATION_CYCLE_THRESHOLD = 50  # fallback; prefer config.mutation.min_paper_cycles
-
 
 def mode_too_early(paper_cycle_count: int, config: Any | None = None) -> bool:
     """Check if mutation engine should remain dormant."""
-    threshold = config.min_paper_cycles if config is not None else ACTIVATION_CYCLE_THRESHOLD
+    threshold = config.min_paper_cycles if config is not None else MUTATION_ACTIVATION_CYCLES
     return paper_cycle_count < threshold
 
 
@@ -464,6 +463,40 @@ def main_loop() -> None:
     )
 
     while True:
-        # In production: await next cycle event from nervous
-        # For now: sleep and poll
+        cycle_id = f"mutation-{int(time.time())}"
+
+        # Read paper cycle count from SQLite
+        paper_cycle_count = 0
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM cycles WHERE state = 'CLOSED'"
+                ).fetchone()
+                if row is not None:
+                    paper_cycle_count = row[0]
+            finally:
+                conn.close()
+        except Exception:
+            pass  # DB unavailable -- treat as 0 cycles
+
+        log_debug(
+            "MUTATION_DAEMON_ITERATION",
+            payload={"cycle_id": cycle_id, "paper_cycle_count": paper_cycle_count},
+            level="INFO",
+            msg=f"Mutation daemon iteration {cycle_id}",
+        )
+
+        try:
+            daemon.run_cycle(cycle_id, paper_cycle_count)
+        except Exception as exc:
+            log_debug(
+                "MUTATION_DAEMON_LOOP_ERROR",
+                payload={"error": str(exc), "cycle_id": cycle_id},
+                level="WARN",
+                error_code="MUTATION_DAEMON_LOOP_ERROR",
+                cycle_id=cycle_id,
+                msg=f"Mutation daemon loop error: {exc}",
+            )
+
         time.sleep(60)

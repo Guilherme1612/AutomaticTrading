@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-PROBATION_CYCLES = 30  # fallback; prefer config.mutation.probation_cycles
+from pmacs.constants import MUTATION_PROBATION_CYCLES
 
 
 def _resolve_verify_fn(
@@ -80,7 +80,7 @@ def operator_promote(
     if not resolved_verify(totp_code):
         raise PermissionError("Invalid TOTP code")
 
-    probation = getattr(config, "probation_cycles", PROBATION_CYCLES)
+    probation = getattr(config, "probation_cycles", MUTATION_PROBATION_CYCLES)
     now = datetime.now(timezone.utc).isoformat()
 
     result: dict[str, Any] = {

@@ -16,14 +16,8 @@ from unittest.mock import patch
 import pytest
 
 
-def _make_client(tmp_path, with_data: bool = False):
-    """Create a TestClient. If with_data=False, simulates pre-first-cycle state."""
-    from fastapi.testclient import TestClient
-
-    db_path = tmp_path / "pmacs.db"
-    conn = sqlite3.connect(str(db_path))
-
-    # Always create tables
+def _create_tables(conn: sqlite3.Connection, with_data: bool = False) -> None:
+    """Create minimal tables and optionally insert test data."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS holdings (id TEXT, ticker TEXT, state TEXT, "
         "entry_price_usd REAL, position_size_usd REAL, sector TEXT, "
@@ -61,7 +55,6 @@ def _make_client(tmp_path, with_data: bool = False):
     )
 
     if with_data:
-        # Simulate post-cycle state (Week 1+)
         conn.execute("INSERT INTO universe VALUES ('AAPL', 'Tech', 'Software', 'earnings', 0, 0, '2026-01-01')")
         conn.execute("INSERT INTO universe VALUES ('MSFT', 'Tech', 'Cloud', 'earnings', 0, 0, '2026-01-01')")
         conn.execute(
@@ -78,34 +71,48 @@ def _make_client(tmp_path, with_data: bool = False):
         )
 
     conn.commit()
-    conn.close()
 
+
+def _make_config(tmp_path):
+    """Create test config and config directory."""
     from pmacs.web.config import DashboardConfig
 
-    test_config = DashboardConfig(
-        sqlite_path=str(db_path),
+    (tmp_path / "config").mkdir()
+    return DashboardConfig(
+        sqlite_path=str(tmp_path / "pmacs.db"),
         duckdb_path=str(tmp_path / "analytics.duckdb"),
         audit_path=str(tmp_path / "audit.log"),
         heartbeat_dir=tmp_path / "heartbeats",
         config_dir=str(tmp_path / "config"),
     )
-    (tmp_path / "config").mkdir()
-
-    with patch("pmacs.web.config.get_config", return_value=test_config):
-        from pmacs.web.app import app
-        yield TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
 def empty_client(tmp_path):
     """Client with no data — simulates Day 1 pre-first-cycle."""
-    yield from _make_client(tmp_path, with_data=False)
+    from fastapi.testclient import TestClient
+
+    conn = sqlite3.connect(str(tmp_path / "pmacs.db"))
+    _create_tables(conn, with_data=False)
+    conn.close()
+
+    with patch("pmacs.web.config.get_config", return_value=_make_config(tmp_path)):
+        from pmacs.web.app import app
+        yield TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
 def populated_client(tmp_path):
     """Client with data — simulates Week 1+ post-cycle."""
-    yield from _make_client(tmp_path, with_data=True)
+    from fastapi.testclient import TestClient
+
+    conn = sqlite3.connect(str(tmp_path / "pmacs.db"))
+    _create_tables(conn, with_data=True)
+    conn.close()
+
+    with patch("pmacs.web.config.get_config", return_value=_make_config(tmp_path)):
+        from pmacs.web.app import app
+        yield TestClient(app, raise_server_exceptions=False)
 
 
 class TestDay1:
@@ -183,7 +190,14 @@ class TestStateRendering:
         """Dashboard shows graceful empty state when no holdings."""
         response = empty_client.get("/")
         assert response.status_code == 200
-        # Should not show broken tables or error messages
+        html = response.text.lower()
+        # Should show empty state message, not a broken table with missing rows
+        has_empty_state = (
+            "no active" in html or "empty" in html or "welcome" in html
+            or "no data" in html or "pre-first-cycle" in html or "run smoke" in html
+        )
+        assert has_empty_state, \
+            "Empty holdings should show an empty-state message, not a broken table"
 
     def test_empty_universe_state(self, empty_client):
         """Universe page shows graceful empty state."""

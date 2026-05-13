@@ -8,6 +8,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+try:
+    from scipy.stats import t as scipy_t
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 
 @dataclass
 class StatTestResult:
@@ -109,7 +115,18 @@ def _var(data: list[float]) -> float:
 
 
 def _t_cdf(t: float, df: float) -> float:
-    """CDF of Student's t-distribution via regularized incomplete beta.
+    """CDF of Student's t-distribution.
+
+    Uses scipy.stats.t.cdf when available (exact), otherwise falls back
+    to the Lentz continued-fraction approximation.
+    """
+    if _HAS_SCIPY:
+        return float(scipy_t.cdf(t, df))
+    return _t_cdf_lentz(t, df)
+
+
+def _t_cdf_lentz(t: float, df: float) -> float:
+    """CDF of Student's t-distribution via Lentz continued-fraction approximation.
 
     Uses the relation: CDF(t, df) = 1 - 0.5 * I_{df/(df+t^2)}(df/2, 0.5)
     For negative t, uses symmetry: CDF(-t) = 1 - CDF(t).

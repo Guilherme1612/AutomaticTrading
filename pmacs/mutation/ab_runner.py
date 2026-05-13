@@ -53,6 +53,7 @@ class ABRunner:
         self._db_path = db_path
         self._active: dict[str, ABState] = {}
         if db_path is not None:
+            self._ensure_outcomes_table()
             self._restore_from_db()
 
     def start(self, proposal_id: str) -> bool:
@@ -67,7 +68,7 @@ class ABRunner:
         self._persist_start(proposal_id)
         return True
 
-    def record_outcome(self, proposal_id: str, arm: str, value: float) -> None:
+    def record_outcome(self, proposal_id: str, arm: str, value: float, *, cycle_id: str = "") -> None:
         """Record an outcome for an A/B test arm."""
         if proposal_id not in self._active:
             return
@@ -76,6 +77,9 @@ class ABRunner:
             state.control_outcomes.append(value)
         else:
             state.candidate_outcomes.append(value)
+
+        # Persist to SQLite for crash recovery
+        self._persist_outcome(proposal_id, cycle_id, arm, value)
 
     def get_state(self, proposal_id: str) -> ABState | None:
         """Get the current state of an A/B test."""
@@ -110,11 +114,64 @@ class ABRunner:
             ).fetchall()
             for (pid,) in rows:
                 if pid not in self._active:
-                    self._active[pid] = ABState(
+                    state = ABState(
                         proposal_id=pid, status="RUNNING"
                     )
+                    # Load accumulated outcomes from mutation_outcomes
+                    try:
+                        outcome_rows = conn.execute(
+                            "SELECT arm, metric_value FROM mutation_outcomes "
+                            "WHERE proposal_id = ?",
+                            (pid,),
+                        ).fetchall()
+                        for arm, value in outcome_rows:
+                            if arm == "control":
+                                state.control_outcomes.append(value)
+                            else:
+                                state.candidate_outcomes.append(value)
+                    except sqlite3.OperationalError:
+                        pass  # Table may not exist yet
+                    self._active[pid] = state
         finally:
             conn.close()
+
+    def _ensure_outcomes_table(self) -> None:
+        """Create mutation_outcomes table if it doesn't exist."""
+        if self._db_path is None:
+            return
+        import sqlite3
+
+        conn = sqlite3.connect(str(self._db_path))
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS mutation_outcomes "
+                "(proposal_id TEXT, cycle_id TEXT, arm TEXT, "
+                "metric_name TEXT, metric_value REAL, recorded_at TEXT)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _persist_outcome(self, proposal_id: str, cycle_id: str, arm: str, value: float) -> None:
+        """Write a single outcome to mutation_outcomes table."""
+        if self._db_path is None:
+            return
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                conn.execute(
+                    "INSERT INTO mutation_outcomes "
+                    "(proposal_id, cycle_id, arm, metric_name, metric_value, recorded_at) "
+                    "VALUES (?, ?, ?, 'brier', ?, ?)",
+                    (proposal_id, cycle_id, arm, value, datetime.utcnow().isoformat()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            pass  # Table may not exist yet
 
     def _persist_start(self, proposal_id: str) -> None:
         """Record A/B start in SQLite."""

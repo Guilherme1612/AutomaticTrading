@@ -10,7 +10,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-ACTIVATION_THRESHOLD = 50  # PAPER cycles before mutation activates
+from pmacs.constants import MUTATION_ACTIVATION_CYCLES
+from pmacs.schemas.mutation import MutationDimension
 
 # Rule-based candidate generation (Agents.md §17.2)
 GENERATION_RULES: list[dict] = [
@@ -18,7 +19,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "MOAT_DRIFT_OVERESTIMATE",
         "min_count": 5,
         "window_cycles": 30,
-        "dimension": "prompts",
+        "dimension": MutationDimension.PERSONA_PROMPT,
         "target": "moat_analyst.system_prompt",
         "candidate_change": (
             "Add 'consider competitive entry risk with specific evidence' directive"
@@ -28,7 +29,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "GROWTH_STALL_MISSED",
         "min_count": 5,
         "window_cycles": 30,
-        "dimension": "prompts",
+        "dimension": MutationDimension.PERSONA_PROMPT,
         "target": "growth_hunter.system_prompt",
         "candidate_change": (
             "Add 'compare current growth rate to 2-quarter-ago rate; flag deceleration'"
@@ -38,7 +39,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "FORENSICS_FLAG_IGNORED",
         "min_count": 5,
         "window_cycles": 30,
-        "dimension": "source_weights",
+        "dimension": MutationDimension.PERSONA_WEIGHT,
         "target": "forensics.weight",
         "candidate_change": "Increase Forensics weight by 15%",
     },
@@ -46,7 +47,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "STOP_HUNTED",
         "min_count": 3,
         "window_cycles": 30,
-        "dimension": "thresholds",
+        "dimension": MutationDimension.SIZING_FRACTION,
         "target": "stop_loss.atr_multiplier",
         "candidate_change": "Widen stop by 0.1 ATR",
     },
@@ -54,7 +55,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "CATALYST_FALSE_POSITIVE",
         "min_count": 5,
         "window_cycles": 30,
-        "dimension": "prompts",
+        "dimension": MutationDimension.PERSONA_PROMPT,
         "target": "catalyst_summarizer.system_prompt",
         "candidate_change": (
             "Add 'require >1 corroborating source for positive catalyst resolution'"
@@ -64,7 +65,7 @@ GENERATION_RULES: list[dict] = [
         "taxonomy": "SIZING_OVERLEVERAGED",
         "min_count": 5,
         "window_cycles": 30,
-        "dimension": "thresholds",
+        "dimension": MutationDimension.SIZING_FRACTION,
         "target": "sizing.half_kelly_multiplier",
         "candidate_change": "Reduce from 0.5 to 0.4",
     },
@@ -98,7 +99,7 @@ def generate_candidates(
     Each rule matches a failure taxonomy and requires a minimum count
     within a window of recent cycles.
     """
-    threshold = config.min_paper_cycles if config is not None else ACTIVATION_THRESHOLD
+    threshold = config.min_paper_cycles if config is not None else MUTATION_ACTIVATION_CYCLES
     if paper_cycle_count < threshold:
         return []
 

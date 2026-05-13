@@ -38,18 +38,33 @@ class TestReducedMotion:
         """Transitions should be instant or disabled under reduced-motion."""
         rm_idx = self.css.find("prefers-reduced-motion")
         rm_block = self.css[rm_idx:rm_idx + 2000]
-        # Should have transition-duration: 0s or transition: none
-        assert "0s" in rm_block or "none" in rm_block, \
-               "Reduced-motion should set transition-duration: 0s"
+        # Must specifically set transition-duration: 0s or transition: none
+        has_override = (
+            "transition-duration: 0s" in rm_block
+            or "transition-duration:0s" in rm_block
+            or "transition: none" in rm_block
+            or "transition:none" in rm_block
+        )
+        assert has_override, \
+            "Reduced-motion block should set transition-duration: 0s or transition: none"
 
     def test_sparkline_hover_respects_reduced_motion(self):
         """Sparkline hover tooltips should be hidden/instant with reduced-motion."""
-        # Sparklines use .sparkline class; hover tooltips in reduced-motion
-        assert "sparkline" in self.css.lower(), "Sparkline CSS class not found"
+        rm_idx = self.css.find("prefers-reduced-motion")
+        rm_block = self.css[rm_idx:rm_idx + 2000]
+        # Reduced-motion block should reference sparkline or disable tooltips
+        assert "sparkline" in rm_block.lower() or "tooltip" in rm_block.lower() or \
+               "transition-duration: 0s" in rm_block, \
+               "Reduced-motion should disable sparkline tooltip transitions"
 
     def test_toast_animation_respects_reduced_motion(self):
         """Toast animations should be instant with reduced-motion."""
-        assert "toast" in self.css.lower(), "Toast CSS class not found"
+        rm_idx = self.css.find("prefers-reduced-motion")
+        rm_block = self.css[rm_idx:rm_idx + 2000]
+        # Reduced-motion block should reference toast or apply blanket override
+        assert "toast" in rm_block.lower() or "animation: none" in rm_block or \
+               "animation-duration: 0s" in rm_block or "transition-duration: 0s" in rm_block, \
+               "Reduced-motion should disable toast animations"
 
 
 class TestReducedMotionJS:
@@ -64,8 +79,8 @@ class TestReducedMotionJS:
 
     def test_js_detects_reduced_motion(self):
         """JavaScript should detect prefers-reduced-motion."""
-        assert "prefers-reduced-motion" in self.js or "matchMedia" in self.js, \
-               "JS should detect prefers-reduced-motion preference"
+        assert "prefers-reduced-motion" in self.js, \
+               "JS should reference prefers-reduced-motion explicitly (not just matchMedia)"
 
     def test_js_sankey_respects_reduced_motion(self):
         """Sankey D3 transitions should be skipped with reduced-motion."""

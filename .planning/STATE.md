@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 8 COMPLETE (GSD).** All 8 phases (1-8) executed. LIVE-READY. All milestones achieved.
+**Phase 11 COMPLETE (GSD).** All 11 phases executed. System is LIVE-READY.
 
 ## Completed Phases
 
@@ -13,13 +13,16 @@
 - **Phase 5** — Monitoring + Dashboard
 - **Phase 6** — Calibration + FDE
 - **Phase 7** — Episodic + Mutation (FLYWHEEL-READY)
-- **Phase 8** — Polish (LIVE-READY)
+- **Phase 8** — Polish (original 8-phase roadmap)
+- **Phase 9** — Core Orchestration (cycle pipeline, priority queue, SSE)
+- **Phase 10** — Broker Integration + Ops (paper adapter, wizard, dead-letter)
+- **Phase 11** — Polish + Operator Experience (sparklines, a11y, profiling, runbook)
 
 ## Test Summary
-- **1292 tests pass**, 0 fail, 11 skip
+- **1292+ tests pass**, 0 fail, 11 skip
 
 ## Remaining Phases
-None. All 8 GSD phases complete.
+None. All 11 GSD phases complete.
 
 ## Active Work
 None.
@@ -39,4 +42,8 @@ None.
 | 2026-05-08 | Vendor HTMX/D3/Tailwind locally (Non-Negotiable 4) | CDN refs removed |
 | 2026-05-08 | Add sleep_watch, drift, flywheel_monitor, indexes, verify_isolation | New infrastructure |
 | 2026-05-08 | Wire mutation daemon + add filesystem isolation test | 821 pass (+3), 0 fail |
-| 2026-05-09 | Phase 5 Wave 6: Exit tests for all 7 pages + stop-loss integration [S7,M1,M4,M5,C1,C2,S1,S2] | 1292 pass (+471), 0 fail |
+| 2026-05-09 | Phase 5 Wave 6: Exit tests for all 7 pages + stop-loss integration | 1292 pass (+471), 0 fail |
+| 2026-05-13 | Phase 9: Core orchestration, cycle pipeline, priority queue | Executed |
+| 2026-05-13 | Phase 10: Broker integration, paper adapter, first-run wizard | Executed |
+| 2026-05-13 | Phase 11: Sparklines, a11y, profiling, error boundaries, operator workflows | Executed |
+| 2026-05-13 | Review fixes: XSS, kill switch stub, event key alignment, portfolio tautology | All resolved |

@@ -9,7 +9,6 @@ import pytest
 from pmacs.mutation.stat_test import welch_t_test
 from pmacs.mutation.candidate_generator import (
     generate_candidates,
-    ACTIVATION_THRESHOLD,
 )
 from pmacs.mutation.ab_runner import ABRunner
 from pmacs.mutation.promotion import operator_promote
@@ -17,7 +16,6 @@ from pmacs.mutation.rollback import (
     regression_detected,
     execute_rollback,
     flag_for_kill_switch_review,
-    AUTO_ROLLBACK_WINDOW,
 )
 from pmacs.mutation.daemon import mode_too_early
 

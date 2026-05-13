@@ -369,8 +369,10 @@ class TestMacroRegimeStored:
         assert orchestrator._macro_regime_result is not None
         assert orchestrator._macro_regime_result is mock_output
 
-        # Verify runner was called
-        mock_runner_instance.run.assert_called_once()
+        # Verify runner was called (at least once: step 6 macro regime)
+        # Note: _dispatch_personas also instantiates MacroRegimeRunner per ticker,
+        # so run() may be called multiple times across the full cycle.
+        mock_runner_instance.run.assert_called()
 
         # Verify op_idempotency
         ops = _get_op_idempotency(tmp_db, cycle_id)
@@ -475,7 +477,8 @@ class TestPreCycleIdempotency:
             assert count == 1, f"op_seq {seq} recorded {count} times (expected 1)"
 
         # Verify the full expected op_seq set
-        expected_seqs = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 29}
+        # Steps 0-12: pre-cycle, 14-28: post-cycle flywheel, 29: close cycle
+        expected_seqs = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} | set(range(14, 29)) | {29}
         actual_seqs = {o["op_seq"] for o in ops}
         assert expected_seqs == actual_seqs, (
             f"Op seq mismatch: expected {expected_seqs}, got {actual_seqs}"

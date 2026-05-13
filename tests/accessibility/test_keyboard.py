@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+import pytest
+
 
 # Source.md §13.6 keyboard shortcuts
 SHORTCUTS = {
@@ -105,5 +107,7 @@ class TestKeyboardShortcuts:
     def test_kill_switch_button_exists(self, dashboard_client):
         """Kill switch button must exist in base template."""
         response = dashboard_client.get("/")
-        html = response.text
-        assert "kill" in html.lower() and ("switch" in html.lower() or "engage" in html.lower())
+        html = response.text.lower()
+        # Must find kill switch button/element, not just the word in other contexts
+        assert re.search(r'kill[\s-]?switch|kill-switch-btn|data-action.*kill', html), \
+               "Kill switch button element not found in base template"

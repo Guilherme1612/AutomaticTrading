@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-AUTO_ROLLBACK_WINDOW = 50  # cycles after probation; prefer config.mutation.auto_rollback_window
+from pmacs.constants import MUTATION_AUTO_ROLLBACK_WINDOW
 
 
 def regression_detected(
@@ -25,7 +25,7 @@ def regression_detected(
     Only checks after probation period ends.
     Stops checking after rollback_window beyond probation.
     """
-    window = rollback_window if rollback_window is not None else AUTO_ROLLBACK_WINDOW
+    window = rollback_window if rollback_window is not None else MUTATION_AUTO_ROLLBACK_WINDOW
     if promoted_cycles_ago < probation_cycles:
         return False
 

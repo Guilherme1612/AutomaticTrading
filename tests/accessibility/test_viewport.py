@@ -16,9 +16,10 @@ class TestViewportGuard:
     def test_viewport_guard_in_base_template(self, dashboard_client):
         """Base template must include viewport guard overlay."""
         response = dashboard_client.get("/")
-        html = response.text
-        # The guard should mention 1024px or "wider window"
-        assert "1024" in html or "wider" in html.lower() or "viewport" in html.lower()
+        html = response.text.lower()
+        # Must have a dedicated viewport guard element (not just the meta tag)
+        assert "viewport-guard" in html or ("1024" in html and "wider" in html), \
+            "Viewport guard overlay not found — need element referencing 1024px minimum"
 
     def test_viewport_guard_css_exists(self):
         """CSS must style the viewport guard."""
@@ -42,16 +43,23 @@ class TestViewportGuard:
             Path(__file__).resolve().parents[2]
             / "pmacs" / "web" / "static" / "style.css"
         )
-        css = css_path.read_text()
-        # Should have overflow-x: hidden or overflow: hidden on body
-        assert "overflow" in css.lower(), "CSS should handle overflow"
+        css = css_path.read_text().lower()
+        # Must have overflow-x: hidden or overflow-x: clip to prevent horizontal scroll
+        has_overflow_x = (
+            "overflow-x" in css and ("hidden" in css or "clip" in css)
+        ) or "overflow: hidden" in css or "overflow:hidden" in css
+        assert has_overflow_x, \
+            "CSS should use overflow-x: hidden or clip to prevent horizontal scroll"
 
     def test_sidebar_collapse_at_narrow_widths(self):
-        """Sidebar should collapse or adapt at narrow widths."""
+        """Sidebar should have collapse styles."""
         css_path = (
             Path(__file__).resolve().parents[2]
             / "pmacs" / "web" / "static" / "style.css"
         )
-        css = css_path.read_text()
-        # Should have responsive breakpoints
-        assert "sidebar" in css.lower() or "collapse" in css.lower()
+        css = css_path.read_text().lower()
+        # Should have .collapsed class or sidebar transition/width rules
+        has_sidebar_rules = (
+            "sidebar" in css and ("collapsed" in css or "width" in css or "transition" in css)
+        )
+        assert has_sidebar_rules, "CSS should define sidebar collapse rules"

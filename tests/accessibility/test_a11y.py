@@ -94,12 +94,17 @@ class TestAccessibilityStructural:
     def test_keyboard_shortcuts_have_aria(self, dashboard_client):
         """Keyboard shortcut elements must be accessible."""
         response = dashboard_client.get("/")
-        html = response.text
-        # Check for keyboard shortcut overlay / command palette
-        # These should have aria-labels for accessibility
-        if 'cmd-k' in html.lower() or 'command-palette' in html.lower():
-            # If command palette exists, verify it has accessible attributes
-            assert 'aria-label' in html or 'role=' in html
+        html = response.text.lower()
+        # Find command palette element and verify it has accessibility attributes
+        palette_match = re.search(r'<[^>]*(command-palette|cmd-k)[^>]*>', html, re.IGNORECASE)
+        if palette_match:
+            element = palette_match.group()
+            assert 'aria-label' in element or 'role=' in element, \
+                "Command palette element lacks aria-label or role: " + element
+        else:
+            # If no explicit palette element, verify input has accessible attributes
+            assert 'cmd-k-input' in html or 'aria-label="command' in html, \
+                "Command palette input missing accessible attributes"
 
     def test_focus_visible_styles_exist(self):
         """CSS must define focus-visible styles (2px accent outline)."""
@@ -123,9 +128,10 @@ class TestAccessibilityStructural:
     def test_viewport_guard_exists(self, dashboard_client):
         """1024px minimum viewport guard must exist in base template."""
         response = dashboard_client.get("/")
-        html = response.text
-        # Check for viewport guard overlay
-        assert "1024" in html or "wider window" in html.lower() or "viewport-guard" in html.lower()
+        html = response.text.lower()
+        # Must have the viewport guard element with 1024px reference
+        assert "viewport-guard" in html or ("1024" in html and "wider" in html), \
+            "Viewport guard overlay not found in base template"
 
     def test_color_contrast_tokens_defined(self):
         """CSS must define color tokens that meet WCAG AA contrast."""

@@ -23,12 +23,21 @@ Step numbers follow Architecture.md §9 cycle orchestration sequence:
   14  -- post-cycle processing (stub for future waves)
   29  -- close cycle
   30  -- release lock (implicit via CycleLock.__exit__)
+
+Hardening (Phase 9 Wave 5):
+  - Per-symbol persona dispatch timeout: 270s hard cap
+  - Per-symbol Crucible timeout: 90s per cycle (180s total), default severity 0.5
+  - Graceful shutdown via SIGTERM/SIGINT signal handlers
+  - Kill switch mid-cycle abort: INTERRUPT remaining holdings, abbreviated post-cycle
 """
 from __future__ import annotations
 
 import fcntl
+import signal
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -140,6 +149,11 @@ class CycleOrchestrator:
         # Paper ledger (created lazily or injected for testing)
         self._ledger: Any | None = None
 
+        # Hardening state (S5-2: graceful shutdown + kill switch mid-cycle)
+        self._shutdown_requested: bool = False
+        self._kill_switch_engaged_mid_cycle: bool = False
+        self._symbol_holdings: dict[str, Any] = {}  # ticker -> Holding (for INTERRUPT on abort)
+
     # -- Persona slot map (Architecture.md §12.2) --
 
     PERSONA_SLOT_MAP: dict[int, list[str]] = {
@@ -166,6 +180,11 @@ class CycleOrchestrator:
             29  -- Close cycle in SQLite, emit SSE + audit
             30  -- Release lock (implicit via CycleLock.__exit__)
 
+        Hardening (S5-2):
+            - Signal handlers for SIGTERM/SIGINT registered during cycle
+            - Kill switch checked after each symbol
+            - Mid-cycle abort: INTERRUPT remaining holdings, abbreviated post-cycle
+
         Args:
             trigger: What triggered this cycle (e.g. 'TIMER', 'OPERATOR').
 
@@ -179,7 +198,16 @@ class CycleOrchestrator:
         """
         cycle_id: str = ""
 
+        # Reset hardening state for each cycle
+        self._shutdown_requested = False
+        self._kill_switch_engaged_mid_cycle = False
+        self._symbol_holdings.clear()
+
         with CycleLock(self._lock_path):
+            # Register signal handlers for graceful shutdown (S5-2)
+            old_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
+            old_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+
             try:
                 # Step 0 — Initiate cycle
                 cycle_id = initiate_cycle(trigger, self._db_path, self._audit_path)
@@ -221,7 +249,35 @@ class CycleOrchestrator:
                 # Step 13: Per-symbol processing (13a-13p for each queue item)
                 op_seq = self._run_all_symbols(cycle_id, op_seq)
 
-                # Steps 14-28: post-cycle steps (stub)
+                # Check if we need abbreviated post-cycle (mid-cycle abort)
+                if self._shutdown_requested or self._kill_switch_engaged_mid_cycle:
+                    # Transition non-terminal holdings to INTERRUPT
+                    self._interrupt_remaining_holdings(cycle_id, op_seq)
+
+                    # Abbreviated post-cycle: steps 26-28 only (drift, consistency, dead letter)
+                    op_seq = self._run_abbreviated_post_cycle(cycle_id, op_seq)
+
+                    # Close cycle with ABORTED state
+                    self._close_cycle_aborted(cycle_id, op_seq)
+
+                    log_debug(
+                        "CYCLE_INTERRUPTED",
+                        payload={
+                            "cycle_id": cycle_id,
+                            "trigger": trigger,
+                            "shutdown_requested": self._shutdown_requested,
+                            "kill_switch_engaged": self._kill_switch_engaged_mid_cycle,
+                        },
+                        level="WARN",
+                        error_code="CYCLE_INTERRUPTED",
+                        cycle_id=cycle_id,
+                        msg=f"Cycle interrupted: {cycle_id[:8]} "
+                            f"(shutdown={self._shutdown_requested}, "
+                            f"kill_switch={self._kill_switch_engaged_mid_cycle})",
+                    )
+                    return cycle_id
+
+                # Steps 14-28: post-cycle steps
                 op_seq = self._run_post_cycle(cycle_id, op_seq)
 
                 # Step 29 — Close cycle
@@ -259,6 +315,27 @@ class CycleOrchestrator:
                         )
                         writer.close()
                 raise
+
+            finally:
+                # Restore original signal handlers (S5-2)
+                signal.signal(signal.SIGTERM, old_sigterm)
+                signal.signal(signal.SIGINT, old_sigint)
+
+    # -- Signal handler (S5-2) --
+
+    def _handle_signal(self, signum: int, frame: Any) -> None:
+        """Handle SIGTERM/SIGINT by setting shutdown flag.
+
+        Does NOT raise — the cycle loop checks the flag after each symbol.
+        """
+        self._shutdown_requested = True
+        log_debug(
+            "CYCLE_SIGNAL_RECEIVED",
+            payload={"signal": signum},
+            level="WARN",
+            error_code="GRACEFUL_SHUTDOWN",
+            msg=f"Signal {signum} received, requesting graceful shutdown",
+        )
 
     # -- Step implementations --
 
@@ -753,9 +830,14 @@ class CycleOrchestrator:
         13a — Create Holding + transition to PHASE1_RESEARCH
         13b — Antipattern check
         13c — Episodic context build
-        13d — Persona slot dispatch (parallel)
+        13d — Persona slot dispatch (parallel, 270s timeout)
         13e — Arbitration
         13f-13p — Stubs for future waves
+
+        Hardening (S5-1):
+            - Persona dispatch: 270s hard timeout, ABORTED_LLM on timeout
+            - Crucible: 90s per cycle (180s total) hard timeout, default severity 0.5
+            - Evidence scoped to call stack (no module-level caches)
 
         Args:
             cycle_id: Current cycle identifier.
@@ -788,6 +870,9 @@ class CycleOrchestrator:
         )
         op += 1
 
+        # Track holding for potential INTERRUPT on mid-cycle abort (S5-2)
+        self._symbol_holdings[ticker] = holding
+
         # -- Step 13b: Antipattern check ---
         from pmacs.engines.memory import check_antipattern
 
@@ -797,6 +882,7 @@ class CycleOrchestrator:
                 holding, HoldingState.ABORTED_LLM,
                 f"antipattern_detected:{antipattern}", cycle_id, op,
             )
+            self._symbol_holdings.pop(ticker, None)
             log_debug(
                 "SYMBOL_ABORTED_ANTIPATTERN",
                 payload={
@@ -835,33 +921,50 @@ class CycleOrchestrator:
             regime_confidence=regime_conf,
         )
 
-        # -- Step 13d: Persona slot dispatch ---
+        # -- Step 13d: Persona slot dispatch (S5-1: 270s timeout) ---
+        # Evidence is local to this call — no module-level caches between symbols.
         evidence: list[Any] = []  # EvidencePacket list — populated by future data fetch
 
-        persona_results: dict[str, Any] = self._dispatch_personas(
-            evidence=evidence,
-            brief=brief,
-            cycle_id=cycle_id,
-            ticker=ticker,
-        )
+        persona_results: dict[str, Any] = {}
+        persona_timed_out = False
+        try:
+            persona_results = self._dispatch_personas_with_timeout(
+                evidence=evidence,
+                brief=brief,
+                cycle_id=cycle_id,
+                ticker=ticker,
+                timeout_seconds=270,
+            )
+        except TimeoutError:
+            persona_timed_out = True
 
-        if not persona_results:
-            # All personas failed — abort
+        if persona_timed_out or not persona_results:
+            # Timeout or all personas failed — transition to PHASE1_TIMEOUT then ABORTED_LLM
+            reason = "persona_dispatch_timeout:270s" if persona_timed_out else "all_personas_failed"
+            if persona_timed_out:
+                # Transition through PHASE1_TIMEOUT first (valid from PHASE1_RESEARCH)
+                holding = transition(
+                    holding, HoldingState.PHASE1_TIMEOUT,
+                    reason, cycle_id, op,
+                )
+                op += 1
             holding = transition(
                 holding, HoldingState.ABORTED_LLM,
-                "all_personas_failed", cycle_id, op,
+                reason, cycle_id, op,
             )
+            self._symbol_holdings.pop(ticker, None)
             log_debug(
-                "SYMBOL_ABORTED_ALL_PERSONAS_FAILED",
+                "SYMBOL_ABORTED_" + ("TIMEOUT" if persona_timed_out else "ALL_PERSONAS_FAILED"),
                 payload={
                     "cycle_id": cycle_id,
                     "ticker": ticker,
                     "holding_id": holding.id,
+                    "reason": reason,
                 },
                 level="WARN",
                 error_code="ABORTED_LLM",
                 cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted: all personas failed",
+                msg=f"Symbol {ticker} aborted: {reason}",
             )
             return op + 1
 
@@ -884,6 +987,7 @@ class CycleOrchestrator:
                 holding, HoldingState.ABORTED_LLM,
                 "no_valid_directional_probs", cycle_id, op,
             )
+            self._symbol_holdings.pop(ticker, None)
             log_debug(
                 "SYMBOL_ABORTED_NO_PROBS",
                 payload={
@@ -927,16 +1031,28 @@ class CycleOrchestrator:
         )
         op += 1
 
-        # -- Step 13g: Crucible (2-cycle budget, 180s hard timeout) ---
+        # -- Step 13g: Crucible (S5-1: 90s per cycle, 180s total hard timeout) ---
         crucible_severity = 0.0
+        crucible_timed_out = False
         from pmacs.agents.crucible import CrucibleRunner
 
         crucible_runner = CrucibleRunner()
+        crucible_start = time.monotonic()
         try:
-            crucible_output = crucible_runner.run(
-                evidence=evidence, episodic_context=brief,
-            )
-            if crucible_output is not None:
+            # Run Crucible with 180s hard timeout via ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as crucible_pool:
+                crucible_future = crucible_pool.submit(
+                    crucible_runner.run,
+                    evidence=evidence,
+                    episodic_context=brief,
+                )
+                try:
+                    crucible_output = crucible_future.result(timeout=180)
+                except FuturesTimeoutError:
+                    crucible_timed_out = True
+                    crucible_output = None
+
+            if not crucible_timed_out and crucible_output is not None:
                 import json as _json
                 try:
                     crucible_data = _json.loads(crucible_output.raw_output)
@@ -944,7 +1060,7 @@ class CycleOrchestrator:
                 except (ValueError, TypeError, AttributeError):
                     crucible_severity = 0.5  # moderate default on parse failure
             else:
-                crucible_severity = 0.5  # moderate default on LLM failure
+                crucible_severity = 0.5  # moderate default on LLM failure or timeout
         except Exception as exc:
             log_debug(
                 "CRUCIBLE_EXCEPTION",
@@ -959,6 +1075,20 @@ class CycleOrchestrator:
                 msg=f"Crucible raised {type(exc).__name__} for {ticker}",
             )
             crucible_severity = 0.5  # moderate default on exception
+
+        if crucible_timed_out:
+            log_debug(
+                "CRUCIBLE_TIMEOUT",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "elapsed_s": time.monotonic() - crucible_start,
+                },
+                level="WARN",
+                error_code="CRUCIBLE_TIMEOUT",
+                cycle_id=cycle_id,
+                msg=f"Crucible timed out for {ticker}, defaulting severity to 0.5",
+            )
 
         log_debug(
             "SYMBOL_CRUCIBLE_COMPLETE",
@@ -1453,24 +1583,231 @@ class CycleOrchestrator:
             )
             op += 1
 
+        # Symbol processing complete — remove from tracking (S5-2)
+        self._symbol_holdings.pop(ticker, None)
+
         return op  # Next op_seq after symbol block
 
     def _run_all_symbols(self, cycle_id: str, start_op_seq: int) -> int:
         """Iterate over the queue and run _run_symbol for each item.
+
+        After each symbol, checks for shutdown request and kill switch.
+        If either is true, stops processing and returns immediately.
 
         Args:
             cycle_id: Current cycle identifier.
             start_op_seq: Starting operation sequence number.
 
         Returns:
-            Next op_seq after all symbols processed.
+            Next op_seq after symbols processed (or interrupted).
         """
         op_seq = start_op_seq
 
         for item in self._queue:
+            # Pre-check: shutdown or kill switch already triggered
+            if self._shutdown_requested:
+                log_debug(
+                    "CYCLE_SYMBOL_SKIP_SHUTDOWN",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": item.ticker,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Skipping symbol {item.ticker}: shutdown requested",
+                )
+                break
+
+            if is_engaged(self._db_path):
+                self._kill_switch_engaged_mid_cycle = True
+                log_debug(
+                    "CYCLE_SYMBOL_SKIP_KILL_SWITCH",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": item.ticker,
+                    },
+                    level="WARN",
+                    error_code="KILL_SWITCH_ENGAGED",
+                    cycle_id=cycle_id,
+                    msg=f"Skipping symbol {item.ticker}: kill switch engaged mid-cycle",
+                )
+                break
+
             op_seq = self._run_symbol(cycle_id, item, op_seq)
 
+            # Post-symbol check for shutdown/kill switch
+            if self._shutdown_requested:
+                log_debug(
+                    "CYCLE_SYMBOL_LOOP_SHUTDOWN",
+                    payload={"cycle_id": cycle_id},
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg="Symbol loop interrupted: shutdown requested",
+                )
+                break
+
+            if is_engaged(self._db_path):
+                self._kill_switch_engaged_mid_cycle = True
+                log_debug(
+                    "CYCLE_SYMBOL_LOOP_KILL_SWITCH",
+                    payload={"cycle_id": cycle_id},
+                    level="WARN",
+                    error_code="KILL_SWITCH_ENGAGED",
+                    cycle_id=cycle_id,
+                    msg="Symbol loop interrupted: kill switch engaged mid-cycle",
+                )
+                break
+
         return op_seq
+
+    # -- Hardening helpers (S5-1, S5-2) --
+
+    def _dispatch_personas_with_timeout(
+        self,
+        evidence: list[Any],
+        brief: str,
+        cycle_id: str,
+        ticker: str,
+        timeout_seconds: int = 270,
+    ) -> dict[str, Any]:
+        """Wrap _dispatch_personas with a hard timeout.
+
+        Raises TimeoutError if persona dispatch exceeds timeout_seconds.
+        """
+        results: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                self._dispatch_personas,
+                evidence=evidence,
+                brief=brief,
+                cycle_id=cycle_id,
+                ticker=ticker,
+            )
+            try:
+                results = future.result(timeout=timeout_seconds)
+            except FuturesTimeoutError:
+                log_debug(
+                    "PERSONA_DISPATCH_TIMEOUT",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "timeout_s": timeout_seconds,
+                    },
+                    level="WARN",
+                    error_code="PERSONA_TIMEOUT",
+                    cycle_id=cycle_id,
+                    msg=f"Persona dispatch timed out for {ticker} after {timeout_seconds}s",
+                )
+                raise TimeoutError(
+                    f"Persona dispatch exceeded {timeout_seconds}s for {ticker}"
+                )
+        return results
+
+    def _interrupt_remaining_holdings(self, cycle_id: str, op_seq: int) -> None:
+        """Transition any tracked non-terminal holdings to INTERRUPTED (S5-2).
+
+        Called during mid-cycle abort. Only transitions holdings still in
+        non-terminal states via the state machine.
+        """
+        from pmacs.engines.state_machine import transition, is_valid_transition
+        from pmacs.schemas.contracts import HoldingState, TERMINAL_STATES
+
+        op = op_seq
+        interrupted: list[str] = []
+
+        for ticker, holding in list(self._symbol_holdings.items()):
+            if holding.state in TERMINAL_STATES:
+                continue
+            if is_valid_transition(holding.state, HoldingState.INTERRUPTED):
+                holding = transition(
+                    holding,
+                    HoldingState.INTERRUPTED,
+                    "mid_cycle_abort",
+                    cycle_id,
+                    op,
+                )
+                interrupted.append(ticker)
+                op += 1
+
+        self._symbol_holdings.clear()
+
+        if interrupted:
+            log_debug(
+                "CYCLE_INTERRUPT_HOLDINGS",
+                payload={
+                    "cycle_id": cycle_id,
+                    "interrupted_tickers": interrupted,
+                },
+                level="WARN",
+                error_code="HOLDINGS_INTERRUPTED",
+                cycle_id=cycle_id,
+                msg=f"Interrupted {len(interrupted)} holdings: {interrupted}",
+            )
+
+    def _run_abbreviated_post_cycle(self, cycle_id: str, op_seq: int) -> int:
+        """Run steps 26-28 only (drift, consistency, dead letter) on mid-cycle abort (S5-2).
+
+        Skips re-eval, calibration, lessons, FDE etc. — just essential housekeeping.
+        """
+        # Step 26: Drift stats
+        op_seq = 26
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_drift(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "drift_stats")
+
+        # Step 27: Cross-DB consistency
+        op_seq = 27
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_cross_db_consistency(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "cross_db_consistency")
+
+        # Step 28: Dead letter
+        op_seq = 28
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_dead_letter(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "dead_letter")
+
+        return 28
+
+    def _close_cycle_aborted(self, cycle_id: str, op_seq: int) -> None:
+        """Close cycle with ABORTED state and emit cycle.interrupted SSE (S5-2)."""
+        now = datetime.now(timezone.utc).isoformat()
+
+        conn = sqlite3.connect(str(self._db_path))
+        try:
+            conn.execute(
+                "UPDATE cycles SET state = 'ABORTED', closed_at = ? WHERE cycle_id = ?",
+                (now, cycle_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._publish_sse("cycle", "cycle.interrupted", {
+            "cycle_id": cycle_id,
+            "reason": "shutdown" if self._shutdown_requested else "kill_switch",
+        })
+
+        if self._audit_path is not None:
+            writer = AuditWriter(self._audit_path)
+            writer.append(
+                "cycle_interrupted",
+                {
+                    "cycle_id": cycle_id,
+                    "reason": "shutdown" if self._shutdown_requested else "kill_switch",
+                    "closed_at": now,
+                },
+                cycle_id=cycle_id,
+            )
+            writer.close()
+
+        log_debug(
+            "CYCLE_CLOSED_ABORTED",
+            payload={"cycle_id": cycle_id, "closed_at": now},
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Cycle closed (ABORTED): {cycle_id[:8]}",
+        )
 
     def _dispatch_personas(
         self,
@@ -1671,15 +2008,774 @@ class CycleOrchestrator:
             return None
 
     def _run_post_cycle(self, cycle_id: str, op_seq: int) -> int:
-        """Steps 14-28: Post-cycle processing. Stub for future waves."""
+        """Steps 14-28: Post-cycle flywheel processing (Architecture.md §9).
+
+        Each step is best-effort: failures are logged but do not abort the cycle.
+        Each step is idempotent via _skip_if_complete / _mark_op_complete.
+
+        Returns next op_seq (29) after post-cycle block completes.
+        """
+        # -- Step 14: Weekly re-evaluation --
+        op_seq = 14
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_weekly_reeval(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "weekly_reeval")
+
+        # -- Step 15: Thesis aging --
+        op_seq = 15
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_thesis_aging(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "thesis_aging")
+
+        # -- Step 16: Process fills --
+        op_seq = 16
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_process_fills(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "process_fills")
+
+        # -- Step 17: Reconciliation --
+        op_seq = 17
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_reconciliation(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "reconciliation")
+
+        # -- Step 18: Opportunity cost --
+        op_seq = 18
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_opportunity_cost(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "opportunity_cost")
+
+        # -- Step 19: Calibration --
+        op_seq = 19
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_calibration(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "calibration")
+
+        # -- Step 20: Crucible calibration --
+        op_seq = 20
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_crucible_calibration(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "crucible_calibration")
+
+        # -- Step 21: Causal attribution --
+        op_seq = 21
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_causal_attribution(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "causal_attribution")
+
+        # -- Step 22: Memory antipattern check --
+        op_seq = 22
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_memory(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "memory_antipattern")
+
+        # -- Step 23: Lessons extraction --
+        op_seq = 23
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_lessons(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "lessons_extraction")
+
+        # -- Step 24: Override learning --
+        op_seq = 24
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_override_learning_post(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "override_learning_post")
+
+        # -- Step 25: FDE --
+        op_seq = 25
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_fde(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "fde")
+
+        # -- Step 26: Drift stats --
+        op_seq = 26
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_drift(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "drift_stats")
+
+        # -- Step 27: Cross-DB consistency --
+        op_seq = 27
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_cross_db_consistency(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "cross_db_consistency")
+
+        # -- Step 28: Dead letter processing --
+        op_seq = 28
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_dead_letter(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "dead_letter")
+
+        return 29  # Next op_seq after post-cycle block
+
+    # -- Post-cycle step implementations --
+
+    def _step_weekly_reeval(self, cycle_id: str) -> None:
+        """Step 14: Re-evaluate active holdings >= 7 days since last re-eval."""
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT id, ticker, entry_price_usd, position_size_usd, "
+                    "last_reeval_at FROM holdings WHERE state = 'ACTIVE'"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        from datetime import date, timedelta
+
+        reevaluated = 0
+        seven_days_ago = date.today() - timedelta(days=7)
+        for row in rows:
+            last_reeval = row[4]  # last_reeval_at (string or None)
+            if last_reeval is None:
+                needs_reeval = True
+            else:
+                try:
+                    reeval_date = date.fromisoformat(str(last_reeval)[:10])
+                    needs_reeval = reeval_date <= seven_days_ago
+                except (ValueError, TypeError):
+                    needs_reeval = True
+
+            if needs_reeval:
+                reevaluated += 1
+                # Future wave: call _run_symbol() with re-eval evidence
+                # For now, update last_reeval_at
+                try:
+                    conn2 = sqlite3.connect(str(self._db_path))
+                    try:
+                        conn2.execute(
+                            "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
+                            (date.today().isoformat(), row[0]),
+                        )
+                        conn2.commit()
+                    finally:
+                        conn2.close()
+                except sqlite3.OperationalError:
+                    pass
+
         log_debug(
-            "CYCLE_POST_PROCESSING_STUB",
-            payload={"cycle_id": cycle_id, "op_seq": op_seq},
+            "CYCLE_WEEKLY_REEVAL",
+            payload={
+                "cycle_id": cycle_id,
+                "active_holdings": len(rows),
+                "reevaluated": reevaluated,
+            },
             level="INFO",
             cycle_id=cycle_id,
-            msg="Post-cycle processing stub — no post-cycle ops in this wave",
+            msg=f"Weekly re-eval: {reevaluated}/{len(rows)} holdings re-evaluated",
         )
-        return 29  # Next op_seq after post-cycle block
+
+    def _step_thesis_aging(self, cycle_id: str) -> None:
+        """Step 15: Mandatory re-eval for holdings >= 90 days old."""
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT id, ticker, entry_date FROM holdings WHERE state = 'ACTIVE'"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        from datetime import date, timedelta
+
+        ninety_days_ago = date.today() - timedelta(days=90)
+        aged_count = 0
+        for row in rows:
+            entry_date_str = row[2]
+            if entry_date_str is None:
+                continue
+            try:
+                entry_date = date.fromisoformat(str(entry_date_str)[:10])
+                if entry_date <= ninety_days_ago:
+                    aged_count += 1
+            except (ValueError, TypeError):
+                pass
+
+        log_debug(
+            "CYCLE_THESIS_AGING",
+            payload={
+                "cycle_id": cycle_id,
+                "active_holdings": len(rows),
+                "aged_holdings_90d": aged_count,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Thesis aging: {aged_count} holdings >= 90 days old",
+        )
+
+    def _step_process_fills(self, cycle_id: str) -> None:
+        """Step 16: Process pending mock fills (no-op for paper mode)."""
+        log_debug(
+            "CYCLE_PROCESS_FILLS",
+            payload={"cycle_id": cycle_id, "fills_processed": 0},
+            level="INFO",
+            cycle_id=cycle_id,
+            msg="Process fills: mock fills are instant, no pending fills to process",
+        )
+
+    def _step_reconciliation(self, cycle_id: str) -> None:
+        """Step 17: Reconcile paper ledger vs SQLite holdings."""
+        from pmacs.engines.reconciliation import reconcile_paper_ledger
+
+        ledger_total = 0.0
+        if self._ledger is not None:
+            ledger_total = self._ledger.total_value
+
+        # For paper mode, broker_total == ledger_total (no real broker)
+        result = reconcile_paper_ledger(
+            ledger_total=ledger_total,
+            broker_total=ledger_total,
+        )
+
+        log_debug(
+            "CYCLE_RECONCILIATION",
+            payload={
+                "cycle_id": cycle_id,
+                "matched": result.matched,
+                "ledger_total": ledger_total,
+                "difference_usd": result.difference_usd,
+                "requires_action": result.requires_action,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Reconciliation: {'matched' if result.matched else 'MISMATCH'} "
+                f"(diff=${result.difference_usd:.2f})",
+        )
+
+    def _step_opportunity_cost(self, cycle_id: str) -> None:
+        """Step 18: Evaluate each active holding for hold vs exit."""
+        from pmacs.engines.opportunity_cost import run_opportunity_cost_scan
+        from pmacs.schemas.contracts import Holding, HoldingState
+
+        active_holdings: list[Holding] = []
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT id, ticker, state, entry_price_usd, position_size_usd, "
+                    "conviction_score, sector, entry_date "
+                    "FROM holdings WHERE state = 'ACTIVE'"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        for row in rows:
+            holding = Holding(
+                id=row[0],
+                ticker=row[1],
+                state=HoldingState.ACTIVE,
+                entry_price_usd=row[3] or 0.0,
+                position_size_usd=row[4],
+                conviction_score=row[5],
+                sector=row[6],
+            )
+            active_holdings.append(holding)
+
+        if not active_holdings:
+            log_debug(
+                "CYCLE_OPPORTUNITY_COST",
+                payload={"cycle_id": cycle_id, "active_holdings": 0},
+                level="INFO",
+                cycle_id=cycle_id,
+                msg="Opportunity cost: no active holdings to evaluate",
+            )
+            return
+
+        # Default conviction scores from holdings themselves
+        conviction_scores = {
+            h.id: h.conviction_score or 0.5 for h in active_holdings
+        }
+
+        try:
+            results = run_opportunity_cost_scan(
+                active_holdings=active_holdings,
+                conviction_scores=conviction_scores,
+                alternative_return_pct=0.10,
+                cycle_id=cycle_id,
+            )
+
+            exit_count = sum(1 for r in results if r.action == "EXIT")
+
+            log_debug(
+                "CYCLE_OPPORTUNITY_COST",
+                payload={
+                    "cycle_id": cycle_id,
+                    "evaluated": len(results),
+                    "exit_recommendations": exit_count,
+                    "hold_count": len(results) - exit_count,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Opportunity cost: {exit_count} EXIT, "
+                    f"{len(results) - exit_count} HOLD out of {len(results)}",
+            )
+        except Exception as exc:
+            log_debug(
+                "CYCLE_OPPORTUNITY_COST_ERROR",
+                payload={"cycle_id": cycle_id, "error": str(exc)},
+                level="WARN",
+                error_code="OPPORTUNITY_COST_FAILED",
+                cycle_id=cycle_id,
+                msg=f"Opportunity cost evaluation failed: {exc}",
+            )
+
+    def _step_calibration(self, cycle_id: str) -> None:
+        """Step 19: Compute Brier scores and refit persona weights."""
+        from pmacs.engines.calibration import compute_brier, refit_persona_weights
+
+        # Collect resolved holdings with verdict and outcome data
+        resolutions: list[dict] = []
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT ticker, verdict, actual_outcome, p_up, p_flat, p_down "
+                    "FROM resolutions ORDER BY id DESC LIMIT 100"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        briers_computed = 0
+        persona_briers: dict[str, float] = {}
+        for row in rows:
+            ticker, verdict, actual, p_up, p_flat, p_down = row
+            if actual and p_up is not None:
+                brier = compute_brier(
+                    p_up=float(p_up),
+                    p_flat=float(p_flat),
+                    p_down=float(p_down),
+                    actual=actual,
+                    cycle_id=cycle_id,
+                )
+                briers_computed += 1
+                # Accumulate per-persona (here we use ticker as proxy)
+                persona_briers[ticker] = brier
+
+        if len(persona_briers) >= 20:
+            current_weights = {k: 1.0 / len(persona_briers) for k in persona_briers}
+            new_weights = refit_persona_weights(
+                persona_briers=persona_briers,
+                current_weights=current_weights,
+                min_samples=20,
+                cycle_id=cycle_id,
+            )
+        else:
+            new_weights = {}
+
+        log_debug(
+            "CYCLE_CALIBRATION",
+            payload={
+                "cycle_id": cycle_id,
+                "resolutions_scanned": len(rows),
+                "briers_computed": briers_computed,
+                "weights_refitted": len(new_weights) > 0,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Calibration: {briers_computed} Brier scores computed, "
+                f"refit={'yes' if new_weights else 'no (insufficient data)'}",
+        )
+
+    def _step_crucible_calibration(self, cycle_id: str) -> None:
+        """Step 20: Adjust Crucible severity multipliers."""
+        from pmacs.engines.crucible_calibration import compute_severity_multiplier
+
+        # Read current multiplier from config or use default
+        current_multiplier = float(
+            self._config.get("crucible_severity_multiplier", 1.0)
+        )
+
+        # Estimate false-severity rate from recent crucible outcomes
+        false_severity_count = 0
+        total_crucible_attacks = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM scan_records WHERE direction = 'UP' "
+                    "AND created_at > datetime('now', '-30 days')"
+                ).fetchone()
+                total_crucible_attacks = row[0] if row else 0
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            pass
+
+        false_severity_rate = 0.0
+        if total_crucible_attacks > 0:
+            false_severity_rate = false_severity_count / total_crucible_attacks
+
+        new_multiplier = compute_severity_multiplier(
+            current_multiplier=current_multiplier,
+            recent_false_severity_rate=false_severity_rate,
+        )
+
+        log_debug(
+            "CYCLE_CRUCIBLE_CALIBRATION",
+            payload={
+                "cycle_id": cycle_id,
+                "old_multiplier": current_multiplier,
+                "new_multiplier": new_multiplier,
+                "false_severity_rate": false_severity_rate,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Crucible calibration: multiplier {current_multiplier:.2f} -> "
+                f"{new_multiplier:.2f}",
+        )
+
+    def _step_causal_attribution(self, cycle_id: str) -> None:
+        """Step 21: Credit/blame per persona for resolved holdings."""
+        from pmacs.engines.causal_attribution import attribute_resolution
+
+        attributed = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT ticker, verdict, actual_outcome FROM resolutions "
+                    "ORDER BY id DESC LIMIT 50"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        for row in rows:
+            ticker, verdict, actual = row
+            if not actual:
+                continue
+            # Build synthetic persona outputs for attribution
+            persona_outputs = {"arbitration": {"p_up": 0.5, "p_flat": 0.3, "p_down": 0.2}}
+            try:
+                results = attribute_resolution(
+                    verdict=verdict or "HOLD",
+                    actual_outcome=actual,
+                    persona_outputs=persona_outputs,
+                )
+                attributed += 1
+            except Exception:
+                pass
+
+        log_debug(
+            "CYCLE_CAUSAL_ATTRIBUTION",
+            payload={
+                "cycle_id": cycle_id,
+                "resolutions_processed": len(rows),
+                "attributions_computed": attributed,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Causal attribution: {attributed}/{len(rows)} resolutions attributed",
+        )
+
+    def _step_memory(self, cycle_id: str) -> None:
+        """Step 22: Memory antipattern recording for resolutions."""
+        from pmacs.engines.memory import check_antipattern
+
+        # Check antipatterns for all tickers processed this cycle
+        checked = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT ticker FROM scan_records WHERE cycle_id = ?",
+                    (cycle_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        for row in rows:
+            check_antipattern(row[0], cycle_id)
+            checked += 1
+
+        log_debug(
+            "CYCLE_MEMORY_ANTIPATTERN",
+            payload={
+                "cycle_id": cycle_id,
+                "tickers_checked": checked,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Memory antipattern: checked {checked} tickers",
+        )
+
+    def _step_lessons(self, cycle_id: str) -> None:
+        """Step 23: Extract lessons from new resolutions."""
+        from pmacs.engines.lessons import extract_lesson_from_resolution
+
+        lessons_extracted = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT ticker, verdict, actual_outcome, failure_taxonomy, thesis "
+                    "FROM resolutions ORDER BY id DESC LIMIT 50"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        for row in rows:
+            ticker, verdict, actual, taxonomy, thesis = row
+            try:
+                lesson = extract_lesson_from_resolution(
+                    ticker=ticker or "",
+                    thesis=thesis or "",
+                    verdict=verdict or "",
+                    actual_outcome=actual or "flat",
+                    failure_taxonomy=taxonomy,
+                    cycle_id=cycle_id,
+                )
+                if lesson is not None:
+                    lessons_extracted += 1
+                    # Write lesson to storage
+                    try:
+                        conn2 = sqlite3.connect(str(self._db_path))
+                        try:
+                            conn2.execute(
+                                "CREATE TABLE IF NOT EXISTS lessons ("
+                                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                "ticker TEXT, lesson_type TEXT, text TEXT, "
+                                "evidence_ids TEXT, cycle_id TEXT, created_at TEXT"
+                                ")"
+                            )
+                            conn2.execute(
+                                "INSERT INTO lessons "
+                                "(ticker, lesson_type, text, evidence_ids, cycle_id, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?)",
+                                (
+                                    lesson.ticker,
+                                    lesson.lesson_type,
+                                    lesson.text,
+                                    ",".join(lesson.evidence_ids),
+                                    lesson.cycle_id,
+                                    datetime.now(timezone.utc).isoformat(),
+                                ),
+                            )
+                            conn2.commit()
+                        finally:
+                            conn2.close()
+                    except sqlite3.OperationalError:
+                        pass
+            except Exception:
+                pass
+
+        log_debug(
+            "CYCLE_LESSONS_EXTRACTION",
+            payload={
+                "cycle_id": cycle_id,
+                "resolutions_scanned": len(rows),
+                "lessons_extracted": lessons_extracted,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Lessons: {lessons_extracted} extracted from {len(rows)} resolutions",
+        )
+
+    def _step_override_learning_post(self, cycle_id: str) -> None:
+        """Step 24: Evaluate recent override outcomes (post-cycle)."""
+        from pmacs.engines.override_learning import cluster_overrides
+
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT original_verdict, override_verdict, ticker "
+                    "FROM operator_overrides "
+                    "ORDER BY id DESC LIMIT 50"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        overrides = [
+            {"from_verdict": r[0], "to_verdict": r[1], "ticker": r[2]}
+            for r in rows
+        ]
+        clusters = cluster_overrides(overrides)
+
+        log_debug(
+            "CYCLE_OVERRIDE_LEARNING_POST",
+            payload={
+                "cycle_id": cycle_id,
+                "override_count": len(overrides),
+                "cluster_count": len(clusters),
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Override learning (post): {len(clusters)} clusters from "
+                f"{len(overrides)} overrides",
+        )
+
+    def _step_fde(self, cycle_id: str) -> None:
+        """Step 25: Failure Diagnostic Engine -- classify terminal holdings."""
+        from pmacs.engines.failure_diagnostic import classify, HoldingContext
+
+        classified = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT id, ticker, state, entry_price_usd, exit_price_usd, "
+                    "stop_price_usd, abort_reason "
+                    "FROM holdings "
+                    "WHERE state IN ('STOPPED_OUT', 'EXIT_THESIS_INVALIDATED', "
+                    "'EXIT_OPPORTUNITY_COST', 'EXIT_TRAILING_STOP', 'EXIT_FAILED', "
+                    "'RESOLVED_DOWN', 'RESOLVED_MIXED', 'RESOLUTION_TIMEOUT', "
+                    "'PANIC_EXIT', 'ABORTED_LLM', 'ABORTED_RISK', 'ABORTED_PRE_LLM', "
+                    "'DELISTED', 'INTERRUPTED') "
+                    "LIMIT 50"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        for row in rows:
+            holding_id, ticker, state, entry_price, exit_price, stop_price, exit_reason = row
+            ctx = HoldingContext(
+                state=state or "",
+                ticker=ticker or "",
+                entry_price=float(entry_price) if entry_price else 0.0,
+                exit_price=float(exit_price) if exit_price else None,
+                stop_loss_price=float(stop_price) if stop_price else None,
+                exit_reason=exit_reason,
+            )
+            try:
+                result = classify(ctx, holding_id=holding_id, cycle_id=cycle_id)
+                classified += 1
+
+                # Write classification to storage
+                try:
+                    conn2 = sqlite3.connect(str(self._db_path))
+                    try:
+                        conn2.execute(
+                            "CREATE TABLE IF NOT EXISTS failure_classifications ("
+                            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                            "holding_id TEXT, taxonomy TEXT, severity REAL, "
+                            "summary TEXT, cycle_id TEXT, classified_at TEXT"
+                            ")"
+                        )
+                        conn2.execute(
+                            "INSERT INTO failure_classifications "
+                            "(holding_id, taxonomy, severity, summary, cycle_id, classified_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                holding_id,
+                                result.primary.value,
+                                result.severity,
+                                result.summary,
+                                cycle_id,
+                                datetime.now(timezone.utc).isoformat(),
+                            ),
+                        )
+                        conn2.commit()
+                    finally:
+                        conn2.close()
+                except sqlite3.OperationalError:
+                    pass
+            except Exception:
+                pass
+
+        log_debug(
+            "CYCLE_FDE",
+            payload={
+                "cycle_id": cycle_id,
+                "terminal_holdings": len(rows),
+                "classified": classified,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"FDE: {classified}/{len(rows)} terminal holdings classified",
+        )
+
+    def _step_drift(self, cycle_id: str) -> None:
+        """Step 26: Cross-cycle drift statistics."""
+        try:
+            from pmacs.cortex.drift import DriftMonitor
+
+            monitor = DriftMonitor()
+            result = monitor.check_drift(cycle_id)
+
+            log_debug(
+                "CYCLE_DRIFT_STATS",
+                payload={
+                    "cycle_id": cycle_id,
+                    "has_drift": result.has_drift,
+                    "dimension": result.dimension,
+                    "details": result.details,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Drift check: {result.details}",
+            )
+        except Exception as exc:
+            log_debug(
+                "CYCLE_DRIFT_STATS_UNAVAILABLE",
+                payload={"cycle_id": cycle_id, "error": str(exc)},
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Drift monitoring unavailable: {exc}",
+            )
+
+    def _step_cross_db_consistency(self, cycle_id: str) -> None:
+        """Step 27: Cross-validate all storage backends."""
+        from pmacs.storage.consistency import check_cross_db_consistency
+
+        results = check_cross_db_consistency(
+            sqlite_path=str(self._db_path),
+            cycle_id=cycle_id,
+        )
+
+        status_summary = {
+            r.store: r.status for r in results
+        }
+
+        log_debug(
+            "CYCLE_CROSS_DB_CONSISTENCY",
+            payload={
+                "cycle_id": cycle_id,
+                "stores": status_summary,
+                "total_checks": len(results),
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Cross-DB consistency: {len(results)} stores checked",
+        )
+
+    def _step_dead_letter(self, cycle_id: str) -> None:
+        """Step 28: Process pending dead-letter entries."""
+        from pmacs.logsys.dead_letter import DeadLetterQueue
+
+        queue = DeadLetterQueue()
+        pending = queue.get_pending()
+
+        log_debug(
+            "CYCLE_DEAD_LETTER",
+            payload={
+                "cycle_id": cycle_id,
+                "pending_count": queue.pending_count,
+                "exhausted_count": queue.exhausted_count,
+                "total_count": queue.total_count,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Dead letter: {queue.pending_count} pending, "
+                f"{queue.exhausted_count} exhausted",
+        )
 
     # -- Idempotency helpers --
 

@@ -68,6 +68,9 @@ VALID_TRANSITIONS: dict[HoldingState, frozenset[HoldingState]] = {
         HoldingState.PHASE2_CRUCIBLE, HoldingState.ABORTED_LLM,
         HoldingState.PHASE1_TIMEOUT,
     }),
+    HoldingState.PHASE1_TIMEOUT: frozenset({
+        HoldingState.ABORTED_LLM,
+    }),
     HoldingState.PHASE2_CRUCIBLE: frozenset({
         HoldingState.APPROVED_PENDING, HoldingState.ABORTED_LLM,
     }),

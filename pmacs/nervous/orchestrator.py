@@ -927,22 +927,533 @@ class CycleOrchestrator:
         )
         op += 1
 
-        # -- Steps 13g-13p: Stubs for future waves ---
+        # -- Step 13g: Crucible (2-cycle budget, 180s hard timeout) ---
+        crucible_severity = 0.0
+        from pmacs.agents.crucible import CrucibleRunner
+
+        crucible_runner = CrucibleRunner()
+        try:
+            crucible_output = crucible_runner.run(
+                evidence=evidence, episodic_context=brief,
+            )
+            if crucible_output is not None:
+                import json as _json
+                try:
+                    crucible_data = _json.loads(crucible_output.raw_output)
+                    crucible_severity = float(crucible_data.get("severity_score", 0.5))
+                except (ValueError, TypeError, AttributeError):
+                    crucible_severity = 0.5  # moderate default on parse failure
+            else:
+                crucible_severity = 0.5  # moderate default on LLM failure
+        except Exception as exc:
+            log_debug(
+                "CRUCIBLE_EXCEPTION",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="ABORTED_LLM",
+                cycle_id=cycle_id,
+                msg=f"Crucible raised {type(exc).__name__} for {ticker}",
+            )
+            crucible_severity = 0.5  # moderate default on exception
+
         log_debug(
-            "SYMBOL_STEPS_13G_13P_STUB",
+            "SYMBOL_CRUCIBLE_COMPLETE",
             payload={
                 "cycle_id": cycle_id,
                 "ticker": ticker,
                 "holding_id": holding.id,
-                "arbitrated_decision": arbitrated.decision.value,
+                "crucible_severity": crucible_severity,
             },
             level="INFO",
             cycle_id=cycle_id,
-            msg=f"Symbol {ticker}: steps 13g-13p stub — arbitration complete, "
-                "remaining steps deferred to future wave",
+            msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}",
+        )
+        op += 1
+
+        # -- Step 13h: EV computation ---
+        from pmacs.engines.pricing import compute_ev, EvInputs
+
+        ev_result = compute_ev(EvInputs(
+            p_up=arbitrated.p_up,
+            p_down=arbitrated.p_down,
+            target_gain_pct=0.10,
+            stop_loss_pct=0.15,
+        ))
+
+        log_debug(
+            "SYMBOL_EV_COMPUTED",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "ev_pct": ev_result.expected_value_pct,
+                "ev_multiple": ev_result.ev_multiple,
+                "is_positive": ev_result.is_positive,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Symbol {ticker} EV: {ev_result.expected_value_pct:.4f} "
+                f"(multiple={ev_result.ev_multiple:.2f})",
+        )
+        op += 1
+
+        # -- Step 13i: Transition to APPROVED_PENDING ---
+        holding = transition(
+            holding, HoldingState.APPROVED_PENDING,
+            "pipeline_approved", cycle_id, op,
+        )
+        op += 1
+
+        # -- Step 13j: Sizing ---
+        from pmacs.engines.sizing import size_position, SizingInputs
+
+        portfolio_value = 5000.0
+        if self._ledger is not None:
+            portfolio_value = self._ledger.total_value
+
+        is_bootstrap = (
+            arbitrated.decision.value == "PROCEED_BOOTSTRAP_LOW_CONFIDENCE"
         )
 
-        return 14  # Next op_seq after symbol block
+        sizing_result = size_position(SizingInputs(
+            p_up=arbitrated.p_up,
+            p_down=arbitrated.p_down,
+            target_gain_pct=0.10,
+            stop_loss_pct=0.15,
+            matured_sources_used=arbitrated.matured_sources_used,
+            is_limited_history=is_bootstrap,
+            portfolio_value_usd=portfolio_value,
+            current_price=1.0,  # real price from data fetch in future wave
+        ))
+
+        if sizing_result.abort_reason:
+            holding = transition(
+                holding, HoldingState.ABORTED_RISK,
+                f"sizing_abort:{sizing_result.abort_reason}", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_SIZING",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "abort_reason": sizing_result.abort_reason,
+                },
+                level="WARN",
+                error_code="ABORTED_RISK",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: sizing {sizing_result.abort_reason}",
+            )
+            return op + 1
+
+        log_debug(
+            "SYMBOL_SIZING_COMPLETE",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "target_usd": sizing_result.target_usd,
+                "target_shares": sizing_result.target_shares,
+                "haircuts": sizing_result.applied_haircuts,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Symbol {ticker} sizing: ${sizing_result.target_usd:.2f} "
+                f"({sizing_result.target_shares:.2f} shares)",
+        )
+        op += 1
+
+        # -- Step 13k: Conviction + Verdict ---
+        from pmacs.engines.conviction import compute_conviction, verdict_tier
+        from pmacs.schemas.conviction import VerdictTier
+
+        conviction_score = compute_conviction(
+            arb=arbitrated,
+            crucible_severity=crucible_severity,
+            ev_multiple=ev_result.ev_multiple,
+            is_bootstrap=is_bootstrap,
+        )
+        verdict = verdict_tier(conviction_score)
+
+        log_debug(
+            "SYMBOL_CONVICTION_COMPUTED",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "conviction_score": conviction_score,
+                "verdict": verdict.value,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Symbol {ticker} conviction: {conviction_score:.4f} "
+                f"-> {verdict.value}",
+        )
+
+        if verdict == VerdictTier.SKIP:
+            holding = transition(
+                holding, HoldingState.ABORTED_RISK,
+                f"verdict_skip:conviction={conviction_score:.4f}", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_VERDICT_SKIP",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "conviction_score": conviction_score,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: verdict SKIP "
+                    f"(conviction={conviction_score:.4f})",
+            )
+            return op + 1
+
+        op += 1
+
+        # -- Step 13l: Risk gate ---
+        from pmacs.engines.portfolio_risk_gate import (
+            evaluate_risk_gate, RiskGateInputs,
+        )
+
+        current_position_count = 0
+        if self._ledger is not None:
+            current_position_count = self._ledger.position_count
+
+        risk_result = evaluate_risk_gate(RiskGateInputs(
+            current_position_count=current_position_count,
+            max_concurrent_positions=5,
+            target_usd=sizing_result.target_usd,
+            portfolio_value_usd=portfolio_value,
+            max_position_pct=0.20,
+            sector=holding.sector,
+        ))
+
+        if not risk_result.passed:
+            holding = transition(
+                holding, HoldingState.ABORTED_RISK,
+                f"risk_gate:{','.join(risk_result.reasons)}", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_RISK_GATE",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "reasons": risk_result.reasons,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: risk gate blocked "
+                    f"({', '.join(risk_result.reasons)})",
+            )
+            return op + 1
+
+        log_debug(
+            "SYMBOL_RISK_GATE_PASSED",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "position_count": current_position_count,
+                "target_usd": sizing_result.target_usd,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Symbol {ticker} risk gate: passed",
+        )
+        op += 1
+
+        # -- Step 13m: Memo (best effort) ---
+        from pmacs.agents.memo_writer import MemoWriterRunner
+
+        try:
+            memo_runner = MemoWriterRunner()
+            memo_output = memo_runner.run(
+                evidence=evidence, episodic_context=brief,
+            )
+            if memo_output is not None:
+                log_debug(
+                    "SYMBOL_MEMO_WRITTEN",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "holding_id": holding.id,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} memo: written",
+                )
+            else:
+                log_debug(
+                    "SYMBOL_MEMO_SKIPPED",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} memo: skipped (LLM returned None)",
+                )
+        except Exception as exc:
+            log_debug(
+                "SYMBOL_MEMO_EXCEPTION",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="MEMO_WRITER_FAILED",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), "
+                    "continuing (best effort)",
+            )
+        op += 1
+
+        # -- Step 13n: Scan record ---
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS scan_records ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "ticker TEXT NOT NULL, "
+                    "cycle_id TEXT NOT NULL, "
+                    "verdict TEXT NOT NULL, "
+                    "conviction_score REAL, "
+                    "direction TEXT, "
+                    "created_at TEXT NOT NULL"
+                    ")"
+                )
+                conn.execute(
+                    "INSERT INTO scan_records "
+                    "(ticker, cycle_id, verdict, conviction_score, direction, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        ticker,
+                        cycle_id,
+                        verdict.value,
+                        conviction_score,
+                        "UP" if arbitrated.p_up > arbitrated.p_down else "DOWN",
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            log_debug(
+                "SCAN_RECORD_WRITE_FAILED",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="DB_WRITE_FAILED",
+                cycle_id=cycle_id,
+                msg=f"Scan record write failed for {ticker}: {exc}",
+            )
+        op += 1
+
+        # -- Step 13o: Execution (mock fill) ---
+        # Only execute if verdict is BUY or STRONG_BUY AND risk gate passed
+        if verdict in (VerdictTier.BUY, VerdictTier.STRONG_BUY) and risk_result.passed:
+            holding = transition(
+                holding, HoldingState.ACTIVE,
+                "execution_approved", cycle_id, op,
+            )
+
+            # Determine entry price (placeholder: 1.0 until real price data)
+            entry_price = 1.0
+            shares = sizing_result.target_shares
+            stop_price = round(entry_price * (1 - 0.15), 2)  # catastrophe-net
+
+            # Update holding fields
+            holding.entry_price_usd = entry_price
+            holding.position_size_usd = sizing_result.target_usd
+            holding.stop_price_usd = stop_price
+            holding.verdict = verdict.value
+            holding.conviction_score = conviction_score
+            holding.sector = holding.sector
+
+            # Mock fill via paper ledger
+            if self._ledger is not None:
+                try:
+                    self._ledger.open_position(
+                        ticker=ticker,
+                        shares=shares,
+                        price=entry_price,
+                        sector=holding.sector,
+                        stop_price=stop_price,
+                    )
+                except ValueError as exc:
+                    log_debug(
+                        "LEDGER_OPEN_POSITION_FAILED",
+                        payload={
+                            "cycle_id": cycle_id,
+                            "ticker": ticker,
+                            "error": str(exc),
+                        },
+                        level="WARN",
+                        error_code="LEDGER_CONSTRAINT",
+                        cycle_id=cycle_id,
+                        msg=f"Ledger rejected position for {ticker}: {exc}",
+                    )
+
+            # Create TradePlan and write to audit
+            from pmacs.schemas.trade import TradePlan, TradeDirection, OrderType
+
+            trade_plan = TradePlan(
+                id=str(uuid4()),
+                ticker=ticker,
+                direction=TradeDirection.BUY,
+                order_type=OrderType.LIMIT,
+                quantity=max(1, int(shares)),
+                price_usd=entry_price,
+                stop_price_usd=stop_price,
+                cycle_id=cycle_id,
+                holding_id=holding.id,
+                conviction_score=conviction_score,
+                verdict=verdict.value,
+            )
+
+            # Sign the trade plan
+            if self._audit_path is not None:
+                try:
+                    from pmacs.execution.signing import sign_bytes
+                    import hashlib
+
+                    plan_bytes = trade_plan.model_dump_json().encode()
+                    # Use a deterministic key for paper mode (no real signing key)
+                    # In production, keys come from config
+                    dummy_key = hashlib.sha256(b"pmacs_paper_mode").digest()
+                    signature = sign_bytes(plan_bytes, dummy_key)
+                    trade_plan = trade_plan.model_copy(update={
+                        "signature_b64": signature.hex(),
+                    })
+                except Exception:
+                    pass  # Best effort signing for paper mode
+
+                # Write trade to audit log
+                try:
+                    writer = AuditWriter(self._audit_path)
+                    writer.append(
+                        "trade_executed",
+                        {
+                            "trade_plan_id": trade_plan.id,
+                            "ticker": ticker,
+                            "direction": trade_plan.direction.value,
+                            "quantity": trade_plan.quantity,
+                            "price_usd": trade_plan.price_usd,
+                            "stop_price_usd": trade_plan.stop_price_usd,
+                            "conviction_score": conviction_score,
+                            "verdict": verdict.value,
+                            "holding_id": holding.id,
+                        },
+                        cycle_id=cycle_id,
+                    )
+                    writer.close()
+                except Exception:
+                    pass  # Best effort audit write
+
+            log_debug(
+                "SYMBOL_EXECUTED",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "verdict": verdict.value,
+                    "conviction_score": conviction_score,
+                    "target_usd": sizing_result.target_usd,
+                    "shares": trade_plan.quantity,
+                    "entry_price": entry_price,
+                    "stop_price": stop_price,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} executed: {verdict.value} "
+                    f"${sizing_result.target_usd:.2f} @ {entry_price}",
+            )
+
+            # -- Step 13p: Catastrophe net stop --
+            try:
+                conn = sqlite3.connect(str(self._db_path))
+                try:
+                    conn.execute(
+                        "INSERT INTO stop_events "
+                        "(holding_id, ticker, stop_type, trigger_price_usd, "
+                        "stop_price_usd, detected_at, cycle_id, status, stop_type_category) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            holding.id,
+                            ticker,
+                            "catastrophe_net",
+                            entry_price,
+                            stop_price,
+                            now_iso,
+                            cycle_id,
+                            "PENDING",
+                            "FIXED",
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as exc:
+                log_debug(
+                    "STOP_EVENT_WRITE_FAILED",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "error": str(exc),
+                    },
+                    level="WARN",
+                    error_code="DB_WRITE_FAILED",
+                    cycle_id=cycle_id,
+                    msg=f"Stop event write failed for {ticker}: {exc}",
+                )
+
+            log_debug(
+                "SYMBOL_CATASTROPHE_NET_SET",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "stop_price": stop_price,
+                    "entry_price": entry_price,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} catastrophe-net stop set at {stop_price}",
+            )
+            op += 1
+        else:
+            # Verdict was HOLD or risk gate blocked — no execution
+            log_debug(
+                "SYMBOL_NO_EXECUTION",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "verdict": verdict.value,
+                    "risk_gate_passed": risk_result.passed,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker}: no execution "
+                    f"(verdict={verdict.value}, risk_gate={risk_result.passed})",
+            )
+            op += 1
+
+        return op  # Next op_seq after symbol block
 
     def _run_all_symbols(self, cycle_id: str, start_op_seq: int) -> int:
         """Iterate over the queue and run _run_symbol for each item.

@@ -16,6 +16,10 @@ class NotificationLevelRequest(BaseModel):
     level: str
 
 
+class MutationActionRequest(BaseModel):
+    candidate_id: str
+
+
 @router.get("/settings")
 async def settings_page(request: Request):
     """Render the settings configuration page."""
@@ -109,3 +113,95 @@ async def get_notification_levels():
     cfg = get_config()
     levels = data_layer.get_notification_levels(cfg.sqlite_path)
     return JSONResponse(levels)
+
+
+# ---------------------------------------------------------------------------
+# Mutation API endpoints (Source.md §6 — TOTP-gated for promote/reject)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/mutation/promote")
+async def mutation_promote(req: MutationActionRequest):
+    """Promote a mutation candidate to production (TOTP-gated).
+
+    The JS side calls open_totp_modal() first, then posts here on verification.
+    Updates candidate status to 'approved' and records the promotion.
+    """
+    cfg = get_config()
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
+    try:
+        cursor = db.execute(
+            "UPDATE mutation_candidates SET status = 'approved' "
+            "WHERE candidate_id = ? AND status = 'pending'",
+            (req.candidate_id,),
+        )
+        db.commit()
+        if cursor.rowcount == 0:
+            return JSONResponse(
+                {"ok": False, "error": "Candidate not found or not pending"},
+                status_code=404,
+            )
+        # Log the promotion
+        db.execute(
+            "INSERT INTO mutation_log (candidate_id, dimension, target, promoted_at, status) "
+            "SELECT candidate_id, dimension, target, datetime('now'), 'promoted' "
+            "FROM mutation_candidates WHERE candidate_id = ?",
+            (req.candidate_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return JSONResponse({"ok": True, "candidate_id": req.candidate_id, "action": "promoted"})
+
+
+@router.post("/api/mutation/reject")
+async def mutation_reject(req: MutationActionRequest):
+    """Reject a mutation candidate."""
+    cfg = get_config()
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
+    try:
+        cursor = db.execute(
+            "UPDATE mutation_candidates SET status = 'rejected' "
+            "WHERE candidate_id = ? AND status IN ('pending', 'approved')",
+            (req.candidate_id,),
+        )
+        db.commit()
+        if cursor.rowcount == 0:
+            return JSONResponse(
+                {"ok": False, "error": "Candidate not found"},
+                status_code=404,
+            )
+    finally:
+        db.close()
+    return JSONResponse({"ok": True, "candidate_id": req.candidate_id, "action": "rejected"})
+
+
+@router.post("/api/mutation/rollback")
+async def mutation_rollback(req: MutationActionRequest):
+    """Rollback a promoted mutation (TOTP-gated).
+
+    Reverts the candidate to 'rolled_back' status and records in mutation_log.
+    """
+    cfg = get_config()
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
+    try:
+        cursor = db.execute(
+            "UPDATE mutation_candidates SET status = 'rolled_back' "
+            "WHERE candidate_id = ? AND status = 'approved'",
+            (req.candidate_id,),
+        )
+        db.commit()
+        if cursor.rowcount == 0:
+            return JSONResponse(
+                {"ok": False, "error": "Candidate not found or not approved"},
+                status_code=404,
+            )
+        db.execute(
+            "UPDATE mutation_log SET rolled_back_at = datetime('now'), status = 'rolled_back' "
+            "WHERE candidate_id = ? AND status = 'promoted'",
+            (req.candidate_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return JSONResponse({"ok": True, "candidate_id": req.candidate_id, "action": "rolled_back"})

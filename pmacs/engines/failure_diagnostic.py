@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from pmacs.schemas.failure import FailureClassification, FailedAssumption, FailureTaxonomy
+from pmacs.schemas.contracts import HoldingState
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     cycle_id: str = kwargs.get("cycle_id", "")
 
     # --- Abort states — not failures, they're prevention -------------------
-    if holding.state in ("ABORTED_PRE_LLM", "ABORTED_LLM", "ABORTED_RISK"):
+    if holding.state in (HoldingState.ABORTED_PRE_LLM, HoldingState.ABORTED_LLM, HoldingState.ABORTED_RISK):
         return ClassifyResult(
             primary=FailureTaxonomy.UNCLASSIFIED,
             severity=0.0,
@@ -86,15 +87,15 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
         )
 
     # --- STOPPED_OUT / EXIT_TRAILING_STOP ----------------------------------
-    if holding.state in ("STOPPED_OUT", "EXIT_TRAILING_STOP"):
+    if holding.state in (HoldingState.STOPPED_OUT, HoldingState.EXIT_TRAILING_STOP):
         return _classify_stop(holding, holding_id=holding_id, cycle_id=cycle_id)
 
     # --- EXIT_THESIS_INVALIDATED -------------------------------------------
-    if holding.state == "EXIT_THESIS_INVALIDATED":
+    if holding.state == HoldingState.EXIT_THESIS_INVALIDATED:
         return _classify_thesis_invalidation(holding, holding_id=holding_id, cycle_id=cycle_id)
 
     # --- EXIT_OPPORTUNITY_COST ---------------------------------------------
-    if holding.state == "EXIT_OPPORTUNITY_COST":
+    if holding.state == HoldingState.EXIT_OPPORTUNITY_COST:
         return ClassifyResult(
             primary=FailureTaxonomy.OPPORTUNITY_COST_EXIT_CORRECT,
             severity=0.2,
@@ -104,11 +105,11 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
         )
 
     # --- RESOLVED_DOWN / actual_outcome == "down" --------------------------
-    if holding.actual_outcome == "down" or holding.state in ("RESOLVED_DOWN", "RESOLVED_MIXED"):
+    if holding.actual_outcome == "down" or holding.state in (HoldingState.RESOLVED_DOWN, HoldingState.RESOLVED_MIXED):
         return _classify_persona_failure(holding, holding_id=holding_id, cycle_id=cycle_id)
 
     # --- RESOLUTION_TIMEOUT ------------------------------------------------
-    if holding.state == "RESOLUTION_TIMEOUT":
+    if holding.state == HoldingState.RESOLUTION_TIMEOUT:
         return ClassifyResult(
             primary=FailureTaxonomy.CATALYST_TIMEOUT,
             severity=0.5,
@@ -118,7 +119,7 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
         )
 
     # --- PANIC_EXIT / EXIT_FAILED ------------------------------------------
-    if holding.state in ("PANIC_EXIT", "EXIT_FAILED"):
+    if holding.state in (HoldingState.PANIC_EXIT, HoldingState.EXIT_FAILED):
         return ClassifyResult(
             primary=FailureTaxonomy.UNCLASSIFIED,
             severity=0.6,
@@ -363,8 +364,8 @@ def _classify_persona_failure(
 
     # CATALYST_FALSE_POSITIVE — catalyst happened but market disagreed
     if holding.actual_outcome == "down" and holding.state in (
-        "RESOLVED_DOWN",
-        "RESOLVED_MIXED",
+        HoldingState.RESOLVED_DOWN,
+        HoldingState.RESOLVED_MIXED,
     ):
         return ClassifyResult(
             primary=FailureTaxonomy.CATALYST_FALSE_POSITIVE,

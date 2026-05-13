@@ -120,7 +120,7 @@ async def pipeline_page(request: Request):
 async def queue_reorder(req: ReorderRequest):
     """Move a ticker from one priority band to another."""
     cfg = get_config()
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
         ok = data_layer.reorder_queue_item(db, req.ticker, req.from_band, req.to_band)
     finally:
@@ -135,7 +135,7 @@ async def queue_reorder(req: ReorderRequest):
 async def queue_pin(req: PinRequest):
     """Pin or unpin a ticker in the queue."""
     cfg = get_config()
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
         ok = data_layer.pin_queue_item(db, req.ticker, req.pinned)
     finally:
@@ -150,7 +150,7 @@ async def queue_pin(req: PinRequest):
 async def queue_promote_all():
     """Promote all P1 items to head of next cycle (pin them)."""
     cfg = get_config()
-    db = data_layer.get_readonly_db(cfg.sqlite_path)
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
         count = data_layer.promote_all_p1(db)
     finally:

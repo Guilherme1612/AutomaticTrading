@@ -6,7 +6,7 @@ candidate (shadow) arms. Max 3 concurrent tests.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +63,7 @@ class ABRunner:
         self._active[proposal_id] = ABState(
             proposal_id=proposal_id,
             status="RUNNING",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         self._persist_start(proposal_id)
         return True
@@ -165,7 +165,7 @@ class ABRunner:
                     "INSERT INTO mutation_outcomes "
                     "(proposal_id, cycle_id, arm, metric_name, metric_value, recorded_at) "
                     "VALUES (?, ?, ?, 'brier', ?, ?)",
-                    (proposal_id, cycle_id, arm, value, datetime.utcnow().isoformat()),
+                    (proposal_id, cycle_id, arm, value, datetime.now(timezone.utc).isoformat()),
                 )
                 conn.commit()
             finally:
@@ -184,7 +184,7 @@ class ABRunner:
             conn.execute(
                 "UPDATE mutation_proposals SET status = 'RUNNING_AB', "
                 "started_at = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), proposal_id),
+                (datetime.now(timezone.utc).isoformat(), proposal_id),
             )
             conn.commit()
         finally:
@@ -201,7 +201,7 @@ class ABRunner:
             conn.execute(
                 "UPDATE mutation_proposals SET status = 'AB_COMPLETE', "
                 "completed_at = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), proposal_id),
+                (datetime.now(timezone.utc).isoformat(), proposal_id),
             )
             conn.commit()
         finally:

@@ -31,14 +31,16 @@ PROCESS_NAMES = [
 ]
 
 
-def _sqlite_connect(db_path: str | Path) -> sqlite3.Connection:
-    """Get a read-only SQLite connection. Returns in-memory DB if file missing."""
+def _sqlite_connect(db_path: str | Path, *, readonly: bool = True) -> sqlite3.Connection:
+    """Get a SQLite connection. Returns in-memory DB if file missing."""
     path = Path(db_path)
     if not path.exists():
         # Return in-memory connection for tests / no-DB scenarios
         return sqlite3.connect(":memory:")
-    uri = f"file:{path}?mode=ro"
-    return sqlite3.connect(uri, uri=True)
+    if readonly:
+        uri = f"file:{path}?mode=ro"
+        return sqlite3.connect(uri, uri=True)
+    return sqlite3.connect(str(path))
 
 
 def get_readonly_db(sqlite_path: str | Path) -> sqlite3.Connection:
@@ -47,7 +49,16 @@ def get_readonly_db(sqlite_path: str | Path) -> sqlite3.Connection:
     Returns an in-memory database if the file does not exist.
     Callers should close the connection after use.
     """
-    return _sqlite_connect(sqlite_path)
+    return _sqlite_connect(sqlite_path, readonly=True)
+
+
+def get_readwrite_db(sqlite_path: str | Path) -> sqlite3.Connection:
+    """Get a read-write connection to the SQLite database.
+
+    Returns an in-memory database if the file does not exist.
+    Callers should close the connection after use.
+    """
+    return _sqlite_connect(sqlite_path, readonly=False)
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +354,7 @@ def reorder_queue_item(db: sqlite3.Connection, ticker: str, from_band: str, to_b
     """Move a queue item from one priority band to another.
 
     Returns True if the row was updated, False otherwise.
+    Caller must provide a read-write connection.
     """
     valid_bands = {"P1", "P2", "P3", "P4"}
     if from_band not in valid_bands or to_band not in valid_bands:
@@ -362,6 +374,7 @@ def pin_queue_item(db: sqlite3.Connection, ticker: str, pinned: bool) -> bool:
     """Set or clear the pinned flag on a queue item.
 
     Returns True if the row was updated.
+    Caller must provide a read-write connection.
     """
     try:
         cursor = db.execute(
@@ -379,6 +392,7 @@ def promote_all_p1(db: sqlite3.Connection) -> int:
 
     Sets a 'promoted' flag so the next cycle picks them first.
     Returns count of promoted items.
+    Caller must provide a read-write connection.
     """
     try:
         cursor = db.execute(
@@ -396,7 +410,7 @@ def save_priority_scheme(db_path: str | Path, name: str, config: dict[str, Any])
 
     Creates the priority_schemes table if it doesn't exist.
     """
-    conn = _sqlite_connect(db_path)
+    conn = _sqlite_connect(db_path, readonly=False)
     try:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS priority_schemes (
@@ -422,7 +436,7 @@ def load_priority_scheme(db_path: str | Path, name: str) -> dict[str, Any] | Non
 
     Returns the parsed config dict, or None if not found.
     """
-    conn = _sqlite_connect(db_path)
+    conn = _sqlite_connect(db_path, readonly=True)
     try:
         row = conn.execute(
             "SELECT config_json FROM priority_schemes WHERE name = ?", (name,)
@@ -776,7 +790,7 @@ def save_notification_level(
     Returns:
         True if saved successfully.
     """
-    conn = _sqlite_connect(db_path)
+    conn = _sqlite_connect(db_path, readonly=False)
     try:
         _ensure_settings_table(conn)
         conn.execute(
@@ -798,7 +812,7 @@ def get_notification_levels(db_path: str | Path) -> dict[str, str]:
         Dict mapping event name (without 'notif.' prefix) to level string.
         Only includes keys starting with 'notif.'.
     """
-    conn = _sqlite_connect(db_path)
+    conn = _sqlite_connect(db_path, readonly=True)
     try:
         _ensure_settings_table(conn)
         rows = conn.execute(

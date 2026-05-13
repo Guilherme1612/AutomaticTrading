@@ -26,6 +26,7 @@ var eventHandlers = {};
 var sseRetryCount = 0;
 var SSE_MAX_RETRIES = 20;
 var sseReconnectTimer = null;
+var sseLastEventId = "";
 
 /**
  * Register a handler for a named SSE stream.
@@ -52,13 +53,22 @@ function connectSSE() {
     }
 
     try {
-        eventSource = new EventSource(SSE_URL);
+        var sseUrl = SSE_URL;
+        // Resume from last received event on reconnect
+        if (sseLastEventId) {
+            sseUrl = SSE_URL + "?last_event_id=" + encodeURIComponent(sseLastEventId);
+        }
+        eventSource = new EventSource(sseUrl);
 
         eventSource.onopen = function () {
             sseRetryCount = 0;
         };
 
         eventSource.onmessage = function (event) {
+            // Track last event ID for reconnection resume
+            if (event.lastEventId) {
+                sseLastEventId = event.lastEventId;
+            }
             try {
                 var data = JSON.parse(event.data);
                 var stream = data.stream || "";

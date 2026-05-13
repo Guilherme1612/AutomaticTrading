@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -23,7 +23,7 @@ class DeadLetterEntry:
     error: str
     attempts: int = 0
     max_attempts: int = 3
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_attempt_at: datetime | None = None
     status: str = "PENDING"  # PENDING | RETRYING | COMPLETED | EXHAUSTED
 
@@ -99,7 +99,7 @@ class DeadLetterQueue:
         for entry in self._queue:
             if entry.id == entry_id:
                 entry.attempts += 1
-                entry.last_attempt_at = datetime.utcnow()
+                entry.last_attempt_at = datetime.now(timezone.utc)
                 if entry.attempts >= entry.max_attempts:
                     entry.status = "EXHAUSTED"
                 else:

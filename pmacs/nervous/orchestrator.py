@@ -2,7 +2,7 @@
 
 Full CycleOrchestrator class with CycleLock, step dispatch, checkpoint resume,
 kill switch guard, clock drift check, flywheel health, pre-cycle pipeline
-(steps 2-3, 6-12), and audit chain.
+(steps 2-3, 6-12), per-symbol pipeline (steps 13a-13p), and audit chain.
 
 Step numbers follow Architecture.md §9 cycle orchestration sequence:
   0   -- initiate_cycle
@@ -19,7 +19,7 @@ Step numbers follow Architecture.md §9 cycle orchestration sequence:
   10  -- lessons flagger
   11  -- override learning
   12  -- queue composition
-  13  -- symbol processing (stub for future waves)
+  13  -- symbol processing (13a-13p per ticker)
   14  -- post-cycle processing (stub for future waves)
   29  -- close cycle
   30  -- release lock (implicit via CycleLock.__exit__)
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import fcntl
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -136,6 +137,17 @@ class CycleOrchestrator:
         self._queue: list[Any] = []
         self._universe_tickers: list[str] = []
 
+        # Paper ledger (created lazily or injected for testing)
+        self._ledger: Any | None = None
+
+    # -- Persona slot map (Architecture.md §12.2) --
+
+    PERSONA_SLOT_MAP: dict[int, list[str]] = {
+        0: ["macro_regime", "catalyst_summarizer"],
+        1: ["moat_analyst", "growth_hunter"],
+        2: ["insider_activity", "short_interest", "forensics"],
+    }
+
     # -- Public API --
 
     def run_cycle(self, trigger: str) -> str:
@@ -206,8 +218,8 @@ class CycleOrchestrator:
                 # pre-cycle data pipeline + queue composition
                 op_seq = self._run_pre_cycle(cycle_id, 3)
 
-                # Steps 13a-13p: symbol processing (stub)
-                op_seq = self._run_symbol(cycle_id, None, op_seq)
+                # Step 13: Per-symbol processing (13a-13p for each queue item)
+                op_seq = self._run_all_symbols(cycle_id, op_seq)
 
                 # Steps 14-28: post-cycle steps (stub)
                 op_seq = self._run_post_cycle(cycle_id, op_seq)
@@ -734,17 +746,418 @@ class CycleOrchestrator:
             return _MockConfig()
 
     def _run_symbol(
-        self, cycle_id: str, queue_item: Any | None, op_seq: int
+        self, cycle_id: str, item: Any | None, op_seq: int
     ) -> int:
-        """Steps 13a-13p: Symbol processing. Stub for future waves."""
+        """Steps 13a-13p: Per-symbol processing pipeline.
+
+        13a — Create Holding + transition to PHASE1_RESEARCH
+        13b — Antipattern check
+        13c — Episodic context build
+        13d — Persona slot dispatch (parallel)
+        13e — Arbitration
+        13f-13p — Stubs for future waves
+
+        Args:
+            cycle_id: Current cycle identifier.
+            item: QueueItem for the symbol to process.
+            op_seq: Current operation sequence number.
+
+        Returns:
+            Next op_seq after symbol processing.
+        """
+        from pmacs.schemas.contracts import Holding, HoldingState
+        from pmacs.schemas.queue import QueueItem
+        from pmacs.engines.state_machine import transition
+
+        if item is None:
+            return op_seq
+
+        ticker = item.ticker
+        op = op_seq
+
+        # -- Step 13a: Create Holding + transition to PHASE1_RESEARCH ---
+        holding = Holding(
+            id=str(uuid4()),
+            ticker=ticker,
+            state=HoldingState.CANDIDATE,
+            cycle_id_opened=cycle_id,
+        )
+        holding = transition(
+            holding, HoldingState.PHASE1_RESEARCH,
+            "phase1_start", cycle_id, op,
+        )
+        op += 1
+
+        # -- Step 13b: Antipattern check ---
+        from pmacs.engines.memory import check_antipattern
+
+        antipattern = check_antipattern(ticker, cycle_id)
+        if antipattern is not None:
+            holding = transition(
+                holding, HoldingState.ABORTED_PRE_LLM,
+                f"antipattern_detected:{antipattern}", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_ANTIPATTERN",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "antipattern": antipattern,
+                    "holding_id": holding.id,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: antipattern '{antipattern}' detected",
+            )
+            return op + 1  # Skip to next symbol
+
+        # -- Step 13c: Episodic context build ---
+        from pmacs.agents.episodic_context import build_context_brief
+
+        regime_label = "UNCERTAIN"
+        regime_conf = 0.0
+        if self._macro_regime_result is not None:
+            # MacroRegimeOutput has regime and regime_confidence fields
+            raw = getattr(self._macro_regime_result, "raw_output", "")
+            if raw:
+                import json as _json
+                try:
+                    parsed = _json.loads(raw)
+                    regime_label = parsed.get("regime", "UNCERTAIN")
+                    regime_conf = parsed.get("regime_confidence", 0.0)
+                except (ValueError, TypeError):
+                    pass
+
+        brief = build_context_brief(
+            persona="all",
+            ticker=ticker,
+            regime=regime_label,
+            regime_confidence=regime_conf,
+        )
+
+        # -- Step 13d: Persona slot dispatch ---
+        evidence: list[Any] = []  # EvidencePacket list — populated by future data fetch
+
+        persona_results: dict[str, Any] = self._dispatch_personas(
+            evidence=evidence,
+            brief=brief,
+            cycle_id=cycle_id,
+            ticker=ticker,
+        )
+
+        if not persona_results:
+            # All personas failed — abort
+            holding = transition(
+                holding, HoldingState.ABORTED_LLM,
+                "all_personas_failed", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_ALL_PERSONAS_FAILED",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                },
+                level="WARN",
+                error_code="ABORTED_LLM",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: all personas failed",
+            )
+            return op + 1
+
+        op += 1
+
+        # -- Step 13e: Arbitration ---
+        from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
+        from pmacs.schemas.agents import DirectionalProbability, PersonaName
+
+        signals: list[ArbitrationSignal] = []
+        for persona_name_str, raw_output in persona_results.items():
+            dp = self._extract_directional_probability(
+                persona_name_str, ticker, cycle_id, raw_output,
+            )
+            if dp is not None:
+                signals.append(ArbitrationSignal(dp))
+
+        if not signals:
+            holding = transition(
+                holding, HoldingState.ABORTED_LLM,
+                "no_valid_directional_probs", cycle_id, op,
+            )
+            log_debug(
+                "SYMBOL_ABORTED_NO_PROBS",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                },
+                level="WARN",
+                error_code="ABORTED_LLM",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: no valid directional probabilities",
+            )
+            return op + 1
+
+        arbitrated = arbitrate(signals, cycle_id=cycle_id)
+
         log_debug(
-            "CYCLE_SYMBOL_PROCESSING_STUB",
-            payload={"cycle_id": cycle_id, "op_seq": op_seq},
+            "SYMBOL_ARBITRATION_COMPLETE",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "decision": arbitrated.decision.value,
+                "p_up": arbitrated.p_up,
+                "p_flat": arbitrated.p_flat,
+                "p_down": arbitrated.p_down,
+                "signals_count": len(signals),
+            },
             level="INFO",
             cycle_id=cycle_id,
-            msg="Symbol processing stub — no symbols processed in this wave",
+            msg=f"Symbol {ticker} arbitration: {arbitrated.decision.value} "
+                f"(p_up={arbitrated.p_up:.2f}, p_down={arbitrated.p_down:.2f})",
         )
+
+        op += 1
+
+        # -- Step 13f: Transition to PHASE2_CRUCIBLE ---
+        holding = transition(
+            holding, HoldingState.PHASE2_CRUCIBLE,
+            "phase2_crucible_start", cycle_id, op,
+        )
+        op += 1
+
+        # -- Steps 13g-13p: Stubs for future waves ---
+        log_debug(
+            "SYMBOL_STEPS_13G_13P_STUB",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "holding_id": holding.id,
+                "arbitrated_decision": arbitrated.decision.value,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Symbol {ticker}: steps 13g-13p stub — arbitration complete, "
+                "remaining steps deferred to future wave",
+        )
+
         return 14  # Next op_seq after symbol block
+
+    def _run_all_symbols(self, cycle_id: str, start_op_seq: int) -> int:
+        """Iterate over the queue and run _run_symbol for each item.
+
+        Args:
+            cycle_id: Current cycle identifier.
+            start_op_seq: Starting operation sequence number.
+
+        Returns:
+            Next op_seq after all symbols processed.
+        """
+        op_seq = start_op_seq
+
+        for item in self._queue:
+            op_seq = self._run_symbol(cycle_id, item, op_seq)
+
+        return op_seq
+
+    def _dispatch_personas(
+        self,
+        evidence: list[Any],
+        brief: str,
+        cycle_id: str,
+        ticker: str,
+    ) -> dict[str, Any]:
+        """Run persona runners in parallel slot groups.
+
+        Slot layout (Architecture.md §12.2):
+          Slot 0: [MacroRegimeRunner, CatalystSummarizerRunner]
+          Slot 1: [MoatAnalystRunner, GrowthHunterRunner]
+          Slot 2: [InsiderActivityRunner, ShortInterestRunner, ForensicsRunner]
+
+        Within each slot: sequential. Across slots: parallel (3 futures).
+        Total timeout: 270s. Individual persona failures are logged and skipped.
+
+        Args:
+            evidence: EvidencePacket list for the ticker.
+            brief: Episodic context brief.
+            cycle_id: Current cycle identifier.
+            ticker: Ticker being analysed.
+
+        Returns:
+            Dict mapping persona name -> raw_output (str) for successful runs.
+        """
+        from pmacs.agents.macro_regime import MacroRegimeRunner
+        from pmacs.agents.catalyst_summarizer import CatalystSummarizerRunner
+        from pmacs.agents.moat_analyst import MoatAnalystRunner
+        from pmacs.agents.growth_hunter import GrowthHunterRunner
+        from pmacs.agents.insider_activity import InsiderActivityRunner
+        from pmacs.agents.short_interest import ShortInterestRunner
+        from pmacs.agents.forensics import ForensicsRunner
+        from pmacs.schemas.data import EvidencePacket
+
+        # Build runner instances — all take (cycle_id=, audit_writer=None)
+        slot_runners: dict[int, list[Any]] = {
+            0: [
+                MacroRegimeRunner(cycle_id=cycle_id),
+                CatalystSummarizerRunner(cycle_id=cycle_id),
+            ],
+            1: [
+                MoatAnalystRunner(cycle_id=cycle_id),
+                GrowthHunterRunner(cycle_id=cycle_id),
+            ],
+            2: [
+                InsiderActivityRunner(cycle_id=cycle_id),
+                ShortInterestRunner(cycle_id=cycle_id),
+                ForensicsRunner(cycle_id=cycle_id),
+            ],
+        }
+
+        def _run_slot(
+            runners: list[Any],
+        ) -> list[tuple[str, Any]]:
+            """Run all runners in a slot sequentially, collecting successes."""
+            results: list[tuple[str, Any]] = []
+            for runner in runners:
+                try:
+                    output = runner.run(evidence, episodic_context=brief)
+                    if output is not None:
+                        results.append((runner.persona_name, output))
+                    else:
+                        log_debug(
+                            "PERSONA_RETURNED_NONE",
+                            payload={
+                                "persona": runner.persona_name,
+                                "ticker": ticker,
+                            },
+                            level="WARN",
+                            error_code="ABORTED_LLM",
+                            cycle_id=cycle_id,
+                            msg=f"Persona {runner.persona_name} returned None for {ticker}",
+                        )
+                except Exception as exc:
+                    log_debug(
+                        "PERSONA_EXCEPTION",
+                        payload={
+                            "persona": runner.persona_name,
+                            "ticker": ticker,
+                            "error": str(exc),
+                        },
+                        level="WARN",
+                        error_code="ABORTED_LLM",
+                        cycle_id=cycle_id,
+                        msg=f"Persona {runner.persona_name} raised {type(exc).__name__} for {ticker}",
+                    )
+            return results
+
+        # Dispatch 3 slots in parallel
+        results: dict[str, Any] = {}
+        timeout_seconds = 270
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_run_slot, runners): slot_id
+                for slot_id, runners in slot_runners.items()
+            }
+            for future in as_completed(futures, timeout=timeout_seconds):
+                slot_id = futures[future]
+                try:
+                    slot_results = future.result()
+                    for persona_name, output in slot_results:
+                        results[persona_name] = output
+                except Exception as exc:
+                    log_debug(
+                        "SLOT_FUTURE_EXCEPTION",
+                        payload={
+                            "slot": slot_id,
+                            "ticker": ticker,
+                            "error": str(exc),
+                        },
+                        level="WARN",
+                        error_code="ABORTED_LLM",
+                        cycle_id=cycle_id,
+                        msg=f"Slot {slot_id} raised {type(exc).__name__} for {ticker}",
+                    )
+
+        log_debug(
+            "PERSONA_DISPATCH_COMPLETE",
+            payload={
+                "cycle_id": cycle_id,
+                "ticker": ticker,
+                "personas_succeeded": list(results.keys()),
+                "personas_failed": [
+                    name
+                    for slot in slot_runners.values()
+                    for name in [r.persona_name for r in slot]
+                    if name not in results
+                ],
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"Persona dispatch for {ticker}: {len(results)} succeeded",
+        )
+
+        return results
+
+    @staticmethod
+    def _extract_directional_probability(
+        persona_name_str: str,
+        ticker: str,
+        cycle_id: str,
+        persona_output: Any,
+    ) -> Any | None:
+        """Extract DirectionalProbability from a PersonaOutput.
+
+        PersonaOutput.raw_output contains the raw JSON from the LLM.
+        All persona outputs have p_up, p_flat, p_down fields.
+
+        Args:
+            persona_name_str: Persona name string (e.g. 'macro_regime').
+            ticker: Ticker symbol.
+            cycle_id: Current cycle identifier.
+            persona_output: PersonaOutput instance from runner.run().
+
+        Returns:
+            DirectionalProbability or None on parse failure.
+        """
+        from pmacs.schemas.agents import DirectionalProbability, PersonaName
+
+        # persona_output is a PersonaOutput — extract raw_output
+        raw_json = getattr(persona_output, "raw_output", "")
+        if not raw_json:
+            return None
+
+        import json
+
+        try:
+            data = json.loads(raw_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        p_up = data.get("p_up")
+        p_flat = data.get("p_flat")
+        p_down = data.get("p_down")
+
+        if p_up is None or p_flat is None or p_down is None:
+            return None
+
+        try:
+            persona_enum = PersonaName(persona_name_str)
+        except ValueError:
+            return None
+
+        try:
+            return DirectionalProbability(
+                persona=persona_enum,
+                ticker=data.get("ticker", ticker),
+                p_up=float(p_up),
+                p_flat=float(p_flat),
+                p_down=float(p_down),
+                evidence_ids=data.get("evidence_ids", []),
+                cycle_id=cycle_id,
+            )
+        except Exception:
+            return None
 
     def _run_post_cycle(self, cycle_id: str, op_seq: int) -> int:
         """Steps 14-28: Post-cycle processing. Stub for future waves."""

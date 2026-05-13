@@ -401,3 +401,237 @@ class TestWizard:
         result = smoke_test_step(wizard)
         assert "llm_test" in result
         assert "data_test" in result
+
+
+# ---------------------------------------------------------------------------
+# Full Trade Lifecycle with Adapter Tests
+# ---------------------------------------------------------------------------
+
+
+class TestTradeLifecycleWithAdapter:
+    """Full lifecycle: sign TradePlan -> UDS submit -> adapter -> fill -> catastrophe-net -> cancel -> exit.
+
+    Uses MockAdapter (no real API calls).
+    """
+
+    @pytest.fixture()
+    def keypair(self):
+        from pmacs.execution.signing import generate_keypair
+        return generate_keypair()
+
+    @pytest.fixture()
+    def uds_paths(self):
+        import os
+        base = Path(f"/tmp/pmacs_lifecycle_{os.getpid()}")
+        base.mkdir(parents=True, exist_ok=True)
+        yield base / "lifecycle.sock", base / "audit"
+        # cleanup
+        for f in base.iterdir():
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        try:
+            base.rmdir()
+        except OSError:
+            pass
+
+    @pytest.fixture()
+    def trade_plan(self):
+        from pmacs.schemas.trade import TradeDirection, TradePlan
+        return TradePlan(
+            id="tp-lifecycle-001",
+            ticker="AAPL",
+            direction=TradeDirection.BUY,
+            quantity=10,
+            price_usd=150.0,
+            cycle_id="cycle-lifecycle-001",
+            holding_id="h-001",
+        )
+
+    @pytest.mark.asyncio()
+    async def test_full_buy_lifecycle(
+        self,
+        keypair,
+        uds_paths,
+        trade_plan,
+    ) -> None:
+        """Full BUY lifecycle: sign -> submit -> fill -> catastrophe-net stop."""
+        from pmacs.execution.adapter import MockAdapter
+        from pmacs.execution.service import ExecutionService
+
+        priv, pub = keypair
+        sock_path, audit_dir = uds_paths
+
+        adapter = MockAdapter()
+        svc = ExecutionService(
+            sock_path=sock_path,
+            public_key=pub,
+            audit_dir=audit_dir,
+            adapter=adapter,
+        )
+        await svc.start()
+        try:
+            plan_bytes = trade_plan.model_dump_json().encode("utf-8")
+            result = await ExecutionService.sign_and_send(sock_path, plan_bytes, priv)
+
+            assert result["status"] == "ACCEPTED"
+            fill = result["fill"]
+            assert fill["price"] == 150.0
+            assert fill["qty"] == 10
+            assert fill["ticker"] == "AAPL"
+            assert fill["direction"] == "BUY"
+            assert fill["broker_order_id"] == "mock-tp-lifecycle-001"
+
+            # Catastrophe-net stop placed
+            stop_id = result["stop_order_id"]
+            assert stop_id is not None
+            assert "stop" in stop_id
+
+            # Verify audit log
+            audit_log = audit_dir / "exec_audit.log"
+            assert audit_log.exists()
+            content = audit_log.read_text()
+            assert "EXEC_TRADE_ACCEPTED" in content
+            assert "tp-lifecycle-001" in content
+        finally:
+            await svc.stop()
+
+    @pytest.mark.asyncio()
+    async def test_sell_exit_with_cancel(
+        self,
+        keypair,
+        uds_paths,
+    ) -> None:
+        """Exit SELL: submit, verify fill, cancel stop order."""
+        from pmacs.execution.adapter import MockAdapter
+        from pmacs.execution.service import ExecutionService
+        from pmacs.schemas.trade import TradeDirection, TradePlan
+
+        priv, pub = keypair
+        sock_path, audit_dir = uds_paths
+
+        adapter = MockAdapter()
+        svc = ExecutionService(
+            sock_path=sock_path,
+            public_key=pub,
+            audit_dir=audit_dir,
+            adapter=adapter,
+        )
+        await svc.start()
+        try:
+            sell_plan = TradePlan(
+                id="tp-sell-001",
+                ticker="AAPL",
+                direction=TradeDirection.SELL,
+                quantity=10,
+                price_usd=160.0,
+                cycle_id="cycle-exit-001",
+            )
+            plan_bytes = sell_plan.model_dump_json().encode("utf-8")
+            result = await ExecutionService.sign_and_send(sock_path, plan_bytes, priv)
+
+            assert result["status"] == "ACCEPTED"
+            assert result["fill"]["direction"] == "SELL"
+            assert result["fill"]["price"] == 160.0
+            assert result["stop_order_id"] is not None
+
+            # Cancel the stop order
+            cancelled = await adapter.cancel_order(result["stop_order_id"])
+            assert cancelled is True
+        finally:
+            await svc.stop()
+
+    @pytest.mark.asyncio()
+    async def test_catastrophe_stop_price_is_15pct_below(
+        self,
+        keypair,
+        uds_paths,
+    ) -> None:
+        """Verify catastrophe-net stop is placed at 15% below entry."""
+        from pmacs.execution.adapter import MockAdapter
+        from pmacs.execution.service import ExecutionService
+        from pmacs.schemas.trade import TradeDirection, TradePlan
+
+        priv, pub = keypair
+        sock_path, audit_dir = uds_paths
+
+        adapter = MockAdapter()
+        svc = ExecutionService(
+            sock_path=sock_path,
+            public_key=pub,
+            audit_dir=audit_dir,
+            adapter=adapter,
+        )
+        await svc.start()
+        try:
+            # Entry at $200, stop should be at $170 (15% below)
+            plan = TradePlan(
+                id="tp-cat-001",
+                ticker="MSFT",
+                direction=TradeDirection.BUY,
+                quantity=5,
+                price_usd=200.0,
+                cycle_id="cycle-cat-001",
+            )
+            plan_bytes = plan.model_dump_json().encode("utf-8")
+            result = await ExecutionService.sign_and_send(sock_path, plan_bytes, priv)
+
+            assert result["status"] == "ACCEPTED"
+            stop_id = result["stop_order_id"]
+            # MockAdapter embeds stop_price in the ID: "mock-stop-{ticker}-{stop_price}"
+            assert "170.0" in stop_id
+        finally:
+            await svc.stop()
+
+    @pytest.mark.asyncio()
+    async def test_rejected_signature_returns_no_fill(
+        self,
+        keypair,
+        uds_paths,
+    ) -> None:
+        """Invalid signature returns REJECTED with no fill or stop."""
+        from pmacs.execution.adapter import MockAdapter
+        from pmacs.execution.service import ExecutionService
+        from pmacs.execution.signing import generate_keypair as gen_kp
+        from pmacs.schemas.trade import TradeDirection, TradePlan
+
+        priv_server, pub_server = keypair
+        sock_path, audit_dir = uds_paths
+
+        svc = ExecutionService(
+            sock_path=sock_path,
+            public_key=pub_server,
+            audit_dir=audit_dir,
+            adapter=MockAdapter(),
+        )
+        await svc.start()
+        try:
+            # Sign with wrong key
+            priv_wrong, _ = gen_kp()
+            plan = TradePlan(
+                id="tp-reject-001",
+                ticker="AAPL",
+                direction=TradeDirection.BUY,
+                quantity=10,
+                price_usd=150.0,
+            )
+            plan_bytes = plan.model_dump_json().encode("utf-8")
+            result = await ExecutionService.sign_and_send(sock_path, plan_bytes, priv_wrong)
+
+            assert result["status"] == "REJECTED"
+            assert result["reason"] == "INVALID_SIGNATURE"
+            assert "fill" not in result
+            assert "stop_order_id" not in result
+        finally:
+            await svc.stop()
+
+    @pytest.mark.asyncio()
+    async def test_mock_adapter_get_position_returns_none(
+        self,
+    ) -> None:
+        """MockAdapter.get_position returns None (no real positions)."""
+        from pmacs.execution.adapter import MockAdapter
+        adapter = MockAdapter()
+        result = await adapter.get_position("AAPL")
+        assert result is None

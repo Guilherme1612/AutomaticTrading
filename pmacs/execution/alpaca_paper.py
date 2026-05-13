@@ -121,13 +121,14 @@ class AlpacaPaperAdapter(BrokerAdapter):
         self, ticker: str, stop_price: float, qty: int
     ) -> str:
         """Place a stop-market (catastrophe-net) sell order."""
-        from alpaca.trading.requests import StopMarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import StopOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
 
-        request = StopMarketOrderRequest(
+        request = StopOrderRequest(
             symbol=ticker,
             qty=qty,
             side=OrderSide.SELL,
+            type=OrderType.STOP,
             time_in_force=TimeInForce.GTC,
             stop_price=stop_price,
         )

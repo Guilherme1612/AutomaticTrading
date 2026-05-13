@@ -104,6 +104,18 @@
     transition: opacity 100ms ease-in;
 }
 
+.htmx-indicator {
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+    pointer-events: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-indicator.htmx-request {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 /* ─── Toast Animations ──────────────────────────────────────────────────── */
 
 @keyframes toast-in {

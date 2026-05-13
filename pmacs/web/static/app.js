@@ -1173,3 +1173,65 @@ document.addEventListener("DOMContentLoaded", checkViewportWidth);
         }
     } catch (e) {}
 })();
+
+// ─── HTMX afterSwap — reinitialize page-specific JS after navigation ─────────
+
+document.addEventListener("htmx:afterSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target) return;
+    var targetId = target.id || "";
+
+    // Re-run viewport check after any swap
+    checkViewportWidth();
+
+    // After main content swap, reinitialize page-specific JS
+    if (targetId === "main-content") {
+        // Reconnect SSE if not already connected
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+            connectSSE();
+        }
+
+        // Update sidebar active state based on current URL
+        var currentPath = window.location.pathname;
+        var navLinks = document.querySelectorAll("#sidebar a[href]");
+        navLinks.forEach(function (link) {
+            var href = link.getAttribute("href");
+            if (href === currentPath) {
+                link.classList.add("bg-blue-50", "text-blue-600", "font-medium");
+                link.style.borderLeft = "2px solid #2563eb";
+                link.setAttribute("aria-current", "page");
+            } else {
+                link.classList.remove("bg-blue-50", "text-blue-600", "font-medium");
+                link.style.borderLeft = "";
+                link.removeAttribute("aria-current");
+            }
+        });
+
+        // Re-initialize Sankey if on agents page
+        if (currentPath === "/agents" && typeof PMACS_SANKEY !== "undefined") {
+            PMACS_SANKEY.init();
+        }
+    }
+});
+
+// Handle HTMX history navigation (back/forward)
+document.addEventListener("htmx:historyRestore", function () {
+    checkViewportWidth();
+});
+
+// Update active window button on sparkline window swap
+document.addEventListener("htmx:afterRequest", function (event) {
+    var elt = event.detail && event.detail.elt;
+    if (!elt) return;
+    if (elt.classList && elt.classList.contains("sparkline-window-btn")) {
+        var container = document.getElementById("sparkline-window-btns");
+        if (!container) return;
+        var buttons = container.querySelectorAll(".sparkline-window-btn");
+        buttons.forEach(function (btn) {
+            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.add("text-zinc-500");
+        });
+        elt.classList.remove("text-zinc-500");
+        elt.classList.add("bg-blue-50", "text-blue-600");
+    }
+});

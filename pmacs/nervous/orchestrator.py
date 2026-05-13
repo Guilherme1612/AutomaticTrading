@@ -794,7 +794,7 @@ class CycleOrchestrator:
         antipattern = check_antipattern(ticker, cycle_id)
         if antipattern is not None:
             holding = transition(
-                holding, HoldingState.ABORTED_PRE_LLM,
+                holding, HoldingState.ABORTED_LLM,
                 f"antipattern_detected:{antipattern}", cycle_id, op,
             )
             log_debug(
@@ -1044,7 +1044,7 @@ class CycleOrchestrator:
                     "abort_reason": sizing_result.abort_reason,
                 },
                 level="WARN",
-                error_code="ABORTED_RISK",
+                error_code="SIZING_CAPPED",
                 cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted: sizing {sizing_result.abort_reason}",
             )

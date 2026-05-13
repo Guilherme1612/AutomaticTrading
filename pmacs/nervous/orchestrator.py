@@ -651,7 +651,7 @@ class CycleOrchestrator:
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, entry_price_usd, position_size_usd "
-                    "FROM holdings WHERE state = 'OPEN'"
+                    "FROM holdings WHERE state = 'ACTIVE'"
                 ).fetchall()
             finally:
                 conn.close()
@@ -1044,29 +1044,8 @@ class CycleOrchestrator:
         # Evidence is local to this call — no module-level caches between symbols.
         # S6-2 edge case: evidence gateway timeout -> per-symbol abort with DATA_UNAVAILABLE
         evidence: list[Any] = []  # EvidencePacket list — populated by future data fetch
-        try:
-            # Future wave: evidence = fetch_evidence(ticker, cycle_id)
-            pass
-        except Exception as exc:
-            holding = transition(
-                holding, HoldingState.ABORTED_LLM,
-                f"DATA_UNAVAILABLE:{exc}", cycle_id, op,
-            )
-            self._symbol_holdings.pop(ticker, None)
-            log_debug(
-                "SYMBOL_ABORTED_DATA_UNAVAILABLE",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "error": str(exc),
-                },
-                level="WARN",
-                error_code="DATA_UNAVAILABLE",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted: data unavailable: {exc}",
-            )
-            return op + 1
+        # TODO: Future wave -- wire evidence fetching
+        # evidence = fetch_evidence(ticker, cycle_id)
 
         persona_results: dict[str, Any] = {}
         persona_timed_out = False
@@ -1321,6 +1300,7 @@ class CycleOrchestrator:
                 cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted: sizing {sizing_result.abort_reason}",
             )
+            self._symbol_holdings.pop(ticker, None)
             return op + 1
 
         log_debug(
@@ -1385,6 +1365,7 @@ class CycleOrchestrator:
                 msg=f"Symbol {ticker} aborted: verdict SKIP "
                     f"(conviction={conviction_score:.4f})",
             )
+            self._symbol_holdings.pop(ticker, None)
             return op + 1
 
         op += 1
@@ -1425,6 +1406,7 @@ class CycleOrchestrator:
                 msg=f"Symbol {ticker} aborted: risk gate blocked "
                     f"({', '.join(risk_result.reasons)})",
             )
+            self._symbol_holdings.pop(ticker, None)
             return op + 1
 
         log_debug(
@@ -1495,17 +1477,6 @@ class CycleOrchestrator:
             conn = sqlite3.connect(str(self._db_path))
             try:
                 conn.execute(
-                    "CREATE TABLE IF NOT EXISTS scan_records ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    "ticker TEXT NOT NULL, "
-                    "cycle_id TEXT NOT NULL, "
-                    "verdict TEXT NOT NULL, "
-                    "conviction_score REAL, "
-                    "direction TEXT, "
-                    "created_at TEXT NOT NULL"
-                    ")"
-                )
-                conn.execute(
                     "INSERT INTO scan_records "
                     "(ticker, cycle_id, verdict, conviction_score, direction, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1549,13 +1520,13 @@ class CycleOrchestrator:
             shares = sizing_result.target_shares
             stop_price = round(entry_price * (1 - 0.15), 2)  # catastrophe-net
 
-            # Update holding fields
+            # Execution fields set post-transition (not state-related):
             holding.entry_price_usd = entry_price
             holding.position_size_usd = sizing_result.target_usd
             holding.stop_price_usd = stop_price
             holding.verdict = verdict.value
             holding.conviction_score = conviction_score
-            holding.sector = holding.sector
+            # Note: holding.sector is already set during Holding creation
 
             # Mock fill via paper ledger
             if self._ledger is not None:
@@ -1860,6 +1831,12 @@ class CycleOrchestrator:
         Raises TimeoutError if persona dispatch exceeds timeout_seconds.
         """
         results: dict[str, Any] = {}
+        # NOTE: On timeout, the persona dispatch thread continues running in the
+        # background until it completes or the process exits. Python threads cannot
+        # be forcefully interrupted. This is acceptable because:
+        # 1. The orchestrator moves on and does not wait for the thread
+        # 2. The thread will eventually complete (LLM has its own timeouts)
+        # 3. At most 1 leaked thread per timed-out symbol
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
                 self._dispatch_personas,
@@ -2731,13 +2708,6 @@ class CycleOrchestrator:
                         conn2 = sqlite3.connect(str(self._db_path))
                         try:
                             conn2.execute(
-                                "CREATE TABLE IF NOT EXISTS lessons ("
-                                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                                "ticker TEXT, lesson_type TEXT, text TEXT, "
-                                "evidence_ids TEXT, cycle_id TEXT, created_at TEXT"
-                                ")"
-                            )
-                            conn2.execute(
                                 "INSERT INTO lessons "
                                 "(ticker, lesson_type, text, evidence_ids, cycle_id, created_at) "
                                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -2848,13 +2818,6 @@ class CycleOrchestrator:
                 try:
                     conn2 = sqlite3.connect(str(self._db_path))
                     try:
-                        conn2.execute(
-                            "CREATE TABLE IF NOT EXISTS failure_classifications ("
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                            "holding_id TEXT, taxonomy TEXT, severity REAL, "
-                            "summary TEXT, cycle_id TEXT, classified_at TEXT"
-                            ")"
-                        )
                         conn2.execute(
                             "INSERT INTO failure_classifications "
                             "(holding_id, taxonomy, severity, summary, cycle_id, classified_at) "

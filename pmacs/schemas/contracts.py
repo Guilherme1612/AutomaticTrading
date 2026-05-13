@@ -62,20 +62,22 @@ ABORT_STATES = frozenset({
 VALID_TRANSITIONS: dict[HoldingState, frozenset[HoldingState]] = {
     HoldingState.CANDIDATE: frozenset({
         HoldingState.PHASE1_RESEARCH, HoldingState.ABORTED_PRE_LLM,
-        HoldingState.HALTED,
+        HoldingState.HALTED, HoldingState.INTERRUPTED,
     }),
     HoldingState.PHASE1_RESEARCH: frozenset({
         HoldingState.PHASE2_CRUCIBLE, HoldingState.ABORTED_LLM,
-        HoldingState.PHASE1_TIMEOUT,
+        HoldingState.PHASE1_TIMEOUT, HoldingState.INTERRUPTED,
     }),
     HoldingState.PHASE1_TIMEOUT: frozenset({
-        HoldingState.ABORTED_LLM,
+        HoldingState.ABORTED_LLM, HoldingState.INTERRUPTED,
     }),
     HoldingState.PHASE2_CRUCIBLE: frozenset({
         HoldingState.APPROVED_PENDING, HoldingState.ABORTED_LLM,
+        HoldingState.INTERRUPTED,
     }),
     HoldingState.APPROVED_PENDING: frozenset({
         HoldingState.ACTIVE, HoldingState.ABORTED_RISK,
+        HoldingState.INTERRUPTED,
     }),
     HoldingState.ACTIVE: frozenset({
         HoldingState.THESIS_AGING_REVIEW,
@@ -83,10 +85,11 @@ VALID_TRANSITIONS: dict[HoldingState, frozenset[HoldingState]] = {
         HoldingState.EXIT_OPPORTUNITY_COST, HoldingState.EXIT_TRAILING_STOP,
         HoldingState.EXIT_FAILED, HoldingState.DELISTED,
         HoldingState.RESOLUTION_TIMEOUT, HoldingState.PANIC_EXIT,
-        HoldingState.HALTED,
+        HoldingState.HALTED, HoldingState.INTERRUPTED,
     }),
     HoldingState.THESIS_AGING_REVIEW: frozenset({
         HoldingState.ACTIVE, HoldingState.EXIT_THESIS_INVALIDATED,
+        HoldingState.INTERRUPTED,
     }),
     HoldingState.HALTED: frozenset({HoldingState.CANDIDATE}),
 }

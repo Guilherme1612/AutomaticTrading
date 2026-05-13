@@ -185,11 +185,51 @@ CREATE TABLE IF NOT EXISTS op_idempotency (
     result_hash TEXT,
     PRIMARY KEY (cycle_id, op_seq, op_type)
 );
+
+-- Scan records (Phase 9 step 13n)
+CREATE TABLE IF NOT EXISTS scan_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    cycle_id TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL,
+    direction TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- Lessons (Phase 9 step 23)
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT,
+    lesson_type TEXT,
+    text TEXT,
+    evidence_ids TEXT,
+    cycle_id TEXT,
+    created_at TEXT
+);
+
+-- Failure classifications (Phase 9 step 25)
+CREATE TABLE IF NOT EXISTS failure_classifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    holding_id TEXT,
+    taxonomy TEXT,
+    severity REAL,
+    summary TEXT,
+    cycle_id TEXT,
+    classified_at TEXT
+);
 """
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """Check if a column exists in a table."""
+    """Check if a column exists in a table.
+
+    WARNING: table name is interpolated directly into SQL.
+    Only call with hardcoded table names -- never user input.
+    """
+    import re
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table):
+        raise ValueError(f"Invalid table name: {table}")
     cursor = conn.execute(f"PRAGMA table_info({table})")
     return any(row[1] == column for row in cursor.fetchall())
 
@@ -208,6 +248,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE stop_events ADD COLUMN stop_type_category TEXT NOT NULL DEFAULT 'FIXED'")
     if not _column_exists(conn, "stop_events", "updated_at"):
         conn.execute("ALTER TABLE stop_events ADD COLUMN updated_at TEXT")
+
+    # holdings migrations — columns needed for post-cycle flywheel (Phase 9 Wave 4)
+    if not _column_exists(conn, "holdings", "last_reeval_at"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN last_reeval_at TEXT")
+    if not _column_exists(conn, "holdings", "abort_reason"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN abort_reason TEXT")
+    if not _column_exists(conn, "holdings", "stop_price_usd"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN stop_price_usd REAL")
+    if not _column_exists(conn, "holdings", "cycle_id_closed"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN cycle_id_closed TEXT")
 
     # op_idempotency migrations
     if not _column_exists(conn, "op_idempotency", "result_hash"):

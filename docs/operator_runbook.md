@@ -72,6 +72,130 @@ python ops/backup_verify.py restore --backup-dir <backup-dir>
 - Catastrophe-net broker-side stops (15% below entry) remain active at Alpaca
 - No action needed unless kill switch is engaged
 
+## First-Run Wizard
+
+On first launch, PMACS runs an 11-step wizard that configures:
+
+1. **Welcome** — system overview and prerequisites
+2. **Inference** — llama-server connection test (:8080)
+3. **Model** — Qwen3.6-35B-A3B hash verification
+4. **Keychain** — Ed25519 signing key generation
+5. **Embedding** — bge-base-en-v1.5 availability check
+6. **Database init** — SQLite + DuckDB + KuzuDB + Qdrant creation
+7. **Universe** — select initial ticker universe from 11 templates
+8. **Risk** — confirm $5K paper capital, position limits
+9. **Broker** — Alpaca paper trading API key entry
+10. **TOTP** — set up authenticator for operator actions
+11. **Review** — confirm all settings, run smoke-test cycle
+
+After wizard completes, the dashboard opens with pre-first-cycle state showing "Run smoke-test cycle".
+
+## Alpaca Paper Trading
+
+PMACS connects to Alpaca's paper trading API for order execution in PAPER mode.
+
+### Setup
+
+1. Create Alpaca paper account at `https://app.alpaca.markets/paper/dashboard`
+2. Get API Key ID and Secret from the dashboard
+3. Enter credentials during first-run wizard (Step 9) or via Settings page
+
+### Connection Details
+
+- **Base URL**: `https://paper-api.alpaca.markets` (paper trading)
+- **Data URL**: `https://data.alpaca.markets`
+- Orders submitted via `alpaca-py` with `asyncio.to_thread` wrapper
+- All orders logged in audit chain before submission
+
+### Order Flow
+
+1. Cycle produces verdict (BUY/SELL/HOLD/SKIP)
+2. Arbitration engine confirms position sizing
+3. ExecutionService signs with Ed25519
+4. BrokerAdapter submits to Alpaca
+5. Stop poller monitors for fills
+6. Catastrophe-net stop (15% below entry) set at broker level
+
+### Verification
+
+```bash
+# Check broker connection
+python3 -c "from pmacs.broker.alpaca import AlpacaPaperAdapter; print('OK')"
+
+# Run broker integration tests
+python3 -m pytest tests/unit/test_broker_adapter.py -v
+```
+
+## Notification Configuration
+
+### Notification Levels
+
+Settings page (§13.5) provides per-event notification level control:
+
+| Event | Default Level | Can Disable? |
+|---|---|---|
+| Cycle complete | Toast | Yes |
+| Trade filled (paper) | Toast | Yes |
+| Trade filled (live) | Modal | No |
+| Stop-loss triggered | Modal | No |
+| Kill switch engaged | Modal | **Never** |
+| Audit chain broken | Modal | **Never** |
+| Mutation candidate | Toast | Yes |
+| Mode promotion eligible | Toast | Yes |
+| Process heartbeat stale | Toast | Yes |
+| Model integrity failure | Modal | No |
+| Disk space warning | Toast | Yes |
+| Crucible attack complete | Toast | Yes |
+
+**Non-disableable events** (kill switch, audit chain) always show modal regardless of settings. This is enforced in both backend and frontend.
+
+### Configuration
+
+1. Navigate to Settings page
+2. Scroll to "Notifications" section
+3. Use dropdown per event: Toast / Modal / Silent
+4. Changes persist immediately (no save button needed)
+5. Levels survive page reload (stored in SQLite settings table)
+
+## Dark Mode
+
+PMACS supports three appearance modes:
+
+- **System** (default) — follows macOS appearance setting
+- **Light** — always light theme
+- **Dark** — always dark theme
+
+Toggle via Settings page → "Appearance" → dropdown.
+
+Colors use CSS custom properties that swap between light/dark tokens (Source.md §13.1).
+
+## Keyboard Shortcuts
+
+All shortcuts work from any page. Shortcuts are suppressed when a text input is focused (except Escape).
+
+| Shortcut | Action |
+|---|---|
+| `Cmd-K` | Open command palette (search tickers, actions, audit entries) |
+| `Cmd-1` through `Cmd-7` | Navigate to page (Dashboard, Agents, Pipeline, Universe, Cortex, Settings, Debug) |
+| `Cmd-R` | Refresh current page data |
+| `Cmd-/` | Show keyboard shortcuts overlay |
+| `/` | Focus search/filter on current page |
+| `Esc` | Close modal, drawer, or dismiss toast |
+| `Cmd-Shift-K` | Open kill switch confirmation (any page) |
+| `Cmd-T` | Open TOTP input modal |
+| `?` | Show contextual help for current page |
+
+## Cycle Compare
+
+Compare two cycles side-by-side from the Dashboard:
+
+1. Click "Compare" button on recent decisions list
+2. Select two cycle IDs from dropdowns
+3. Side-by-side view shows: verdicts, conviction scores, persona outputs, catalysts
+4. Differences highlighted in accent color
+
+Useful for understanding why a thesis changed between cycles.
+
 ## TOTP Setup
 
 TOTP is required for all destructive/promotion actions. Setup via:

@@ -1,4 +1,4 @@
-"""Unit tests for pmacs.execution.service — UDS execution service stub."""
+"""Unit tests for pmacs.execution.service — UDS execution service with adapter."""
 from __future__ import annotations
 
 import asyncio
@@ -12,10 +12,31 @@ import pytest
 
 from pmacs.execution.service import ExecutionService
 from pmacs.execution.signing import generate_keypair, sign_bytes
+from pmacs.schemas.trade import TradeDirection, TradePlan
 
 # macOS AF_UNIX path limit is ~104 chars; tmp_path can exceed this.
 # Use /tmp directly with short unique names.
 _UDS_COUNTER = 0
+
+
+def _make_plan_bytes(
+    plan_id: str = "tp-001",
+    ticker: str = "AAPL",
+    direction: str = "BUY",
+    quantity: int = 10,
+    price_usd: float = 150.0,
+    cycle_id: str = "cycle-test",
+) -> bytes:
+    """Create valid TradePlan JSON bytes for testing."""
+    plan = TradePlan(
+        id=plan_id,
+        ticker=ticker,
+        direction=TradeDirection(direction),
+        quantity=quantity,
+        price_usd=price_usd,
+        cycle_id=cycle_id,
+    )
+    return plan.model_dump_json().encode("utf-8")
 
 
 def _short_tmp_dir() -> Path:
@@ -85,13 +106,18 @@ class TestAcceptedFlow:
         sock_path, audit_dir = uds_paths
         svc = await _start_server(sock_path, audit_dir, pub)
         try:
-            plan_bytes = b'{"id":"tp-001","ticker":"AAPL","direction":"BUY"}'
+            plan_bytes = _make_plan_bytes(
+                plan_id="tp-001", ticker="AAPL", quantity=10, price_usd=150.0
+            )
             result = await ExecutionService.sign_and_send(sock_path, plan_bytes, priv)
             assert result["status"] == "ACCEPTED"
             assert "fill" in result
-            assert result["fill"]["price"] == 0.0
-            assert result["fill"]["qty"] == 0
+            # MockAdapter fills with plan data via service's population logic
+            assert result["fill"]["price"] == 150.0
+            assert result["fill"]["qty"] == 10
+            assert result["fill"]["ticker"] == "AAPL"
             assert "timestamp" in result["fill"]
+            assert "stop_order_id" in result
         finally:
             await svc.stop()
 
@@ -109,7 +135,7 @@ class TestTamperedPayload:
         sock_path, audit_dir = uds_paths
         svc = await _start_server(sock_path, audit_dir, pub)
         try:
-            plan_bytes = b'{"id":"tp-002","ticker":"MSFT","direction":"SELL"}'
+            plan_bytes = _make_plan_bytes(plan_id="tp-002", ticker="MSFT", direction="SELL")
             signature = sign_bytes(plan_bytes, priv)
 
             # Derive public key bytes
@@ -158,7 +184,7 @@ class TestWrongKey:
         try:
             # Use a different keypair to sign
             priv_wrong, _ = generate_keypair()
-            plan_bytes = b'{"id":"tp-003","ticker":"GOOG","direction":"BUY"}'
+            plan_bytes = _make_plan_bytes(plan_id="tp-003", ticker="GOOG")
 
             # sign_and_send with the wrong private key
             result = await ExecutionService.sign_and_send(
@@ -234,14 +260,14 @@ class TestAuditLogging:
         sock_path, audit_dir = uds_paths
         svc = await _start_server(sock_path, audit_dir, pub)
         try:
-            plan_bytes = b'{"id":"tp-audit","ticker":"TSLA"}'
+            plan_bytes = _make_plan_bytes(plan_id="tp-audit", ticker="TSLA")
             await ExecutionService.sign_and_send(sock_path, plan_bytes, priv)
 
             audit_log = audit_dir / "exec_audit.log"
             assert audit_log.exists()
             content = audit_log.read_text()
-            assert "EXEC_SERVICE_RECEIVE" in content
-            assert "signature_valid" in content
+            assert "EXEC_TRADE_ACCEPTED" in content
+            assert "ticker" in content
         finally:
             await svc.stop()
 
@@ -256,7 +282,7 @@ class TestAuditLogging:
         svc = await _start_server(sock_path, audit_dir, pub)
         try:
             priv_wrong, _ = generate_keypair()
-            plan_bytes = b'{"id":"tp-audit-rej"}'
+            plan_bytes = _make_plan_bytes(plan_id="tp-audit-rej")
             await ExecutionService.sign_and_send(sock_path, plan_bytes, priv_wrong)
 
             audit_log = audit_dir / "exec_audit.log"

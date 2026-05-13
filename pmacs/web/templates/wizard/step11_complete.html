@@ -1,0 +1,57 @@
+{# Wizard Step 11 — Complete (Source.md §12.1 Step 11)
+   Promote to SHADOW + PAPER, link to dashboard.
+   Expects: current_step, promotion_result
+#}
+<div class="w-full max-w-xl px-8 text-center">
+    <div class="mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 mb-4">
+            <span class="text-positive text-3xl">&#10003;</span>
+        </div>
+        <h1 class="text-3xl font-bold text-text-primary mb-2">Setup Complete</h1>
+        <p class="text-text-secondary text-base">PMACS is ready. Mode promoted to <span class="font-mono text-positive">SHADOW + PAPER</span>.</p>
+    </div>
+
+    <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-8 text-left">
+        <h2 class="text-sm font-semibold text-text-primary mb-4 uppercase tracking-wider">Configuration Summary</h2>
+
+        <div class="space-y-3 text-sm">
+            {% if promotion_result %}
+            <div class="flex justify-between items-center py-2 border-b border-border">
+                <span class="text-text-secondary">Mode</span>
+                <span class="font-mono text-positive">SHADOW + PAPER</span>
+            </div>
+            {% if promotion_result.get("model") %}
+            <div class="flex justify-between items-center py-2 border-b border-border">
+                <span class="text-text-secondary">Inference Model</span>
+                <span class="font-mono text-text-primary text-xs">{{ promotion_result["model"] }}</span>
+            </div>
+            {% endif %}
+            {% if promotion_result.get("universe_count") %}
+            <div class="flex justify-between items-center py-2 border-b border-border">
+                <span class="text-text-secondary">Universe Size</span>
+                <span class="font-mono text-text-primary">{{ promotion_result["universe_count"] }} tickers</span>
+            </div>
+            {% endif %}
+            <div class="flex justify-between items-center py-2 border-b border-border">
+                <span class="text-text-secondary">TOTP</span>
+                <span class="font-mono text-positive">Enrolled</span>
+            </div>
+            <div class="flex justify-between items-center py-2">
+                <span class="text-text-secondary">Paper Capital</span>
+                <span class="font-mono text-text-primary">$5,000</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="bg-surface border border-border rounded-lg p-4 mb-8">
+        <p class="text-xs text-text-muted mb-2">The audit log records this as the first mode promotion.</p>
+        <p class="text-xs text-text-muted">Run cycles with <span class="font-mono text-text-secondary">pmacs cycle</span> or use the dashboard below.</p>
+    </div>
+
+    <a href="/"
+       class="inline-flex items-center gap-2 px-8 py-3 bg-blue-600 text-white rounded-lg font-medium text-base hover:bg-blue-700 transition-colors">
+        Open Dashboard
+        <span class="text-xs opacity-75">localhost:8001</span>
+    </a>
+</div>

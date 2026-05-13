@@ -22,6 +22,7 @@ from pmacs.web.routes import (  # noqa: E402
     pipeline,
     settings,
     universe,
+    wizard,
 )
 
 app.include_router(dashboard.router)
@@ -31,3 +32,4 @@ app.include_router(universe.router)
 app.include_router(cortex.router)
 app.include_router(debug.router)
 app.include_router(settings.router)
+app.include_router(wizard.router)

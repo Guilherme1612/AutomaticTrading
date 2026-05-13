@@ -1,0 +1,68 @@
+{# Wizard Step 6 — Database initialization (Source.md §12.1 Step 5)
+   Create KuzuDB/Qdrant/DuckDB/SQLite/audit.log, genesis audit entry.
+   Expects: current_step, db_result
+#}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Database Initialization</h1>
+    <p class="text-text-secondary text-sm mb-8">Creating storage backends and writing the genesis audit entry.</p>
+
+    <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
+        <h2 class="text-sm font-semibold text-text-primary mb-4 uppercase tracking-wider">Storage Backends</h2>
+
+        <div class="space-y-3">
+            {% set stores = [
+                ("SQLite", "pmacs.db", db_result.get("sqlite_ok") if db_result else none),
+                ("KuzuDB", "pmacs_graph.kuzu", db_result.get("kuzudb_ok") if db_result else none),
+                ("Qdrant", "pmacs_vectors.qdrant", db_result.get("qdrant_ok") if db_result else none),
+                ("DuckDB", "pmacs_analytics.duckdb", db_result.get("duckdb_ok") if db_result else none),
+                ("audit.log", "logs/audit.log", db_result.get("audit_ok") if db_result else none),
+            ] %}
+            {% for name, path, ok in stores %}
+            <div class="flex items-center justify-between p-2 rounded border border-border">
+                <div class="flex items-center gap-3">
+                    {% if ok == true %}
+                    <span class="text-positive">&#10003;</span>
+                    {% elif ok == false %}
+                    <span class="text-negative">&#10007;</span>
+                    {% else %}
+                    <span class="text-text-muted">&mdash;</span>
+                    {% endif %}
+                    <span class="text-sm text-text-primary">{{ name }}</span>
+                </div>
+                <span class="text-xs text-text-muted font-mono">{{ path }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if db_result and db_result.get("genesis_ok") %}
+        <div class="mt-4 pt-4 border-t border-border">
+            <div class="flex items-center gap-2 text-xs text-positive font-mono">
+                <span>&#10003;</span> Genesis audit entry written (prev_sha256 = 0...0)
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if error %}
+    {% include "wizard/_error.html" %}
+    {% endif %}
+
+    <div class="flex justify-between">
+        <span></span>
+        {% if db_result and db_result.get("all_ok") %}
+        <button hx-post="/wizard/step/6"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Next
+        </button>
+        {% else %}
+        <button hx-post="/wizard/step/6"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Initialize Databases
+        </button>
+        {% endif %}
+    </div>
+</div>

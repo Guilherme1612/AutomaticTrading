@@ -1,0 +1,63 @@
+{# Wizard layout — full-screen, no sidebar, no top nav (Source.md §12.3)
+   Steps 2-11 extend this layout. Step 1 is standalone (full HTML doc).
+   Expects: current_step (int, 1-11)
+#}
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMACS Setup Wizard &mdash; Step {{ current_step }}</title>
+    <script src="/static/vendor/tailwind.min.js"></script>
+    <script src="/static/vendor/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'surface': 'var(--surface)',
+                        'surface-elevated': 'var(--surface-elevated)',
+                        'border-default': 'var(--border)',
+                        'text-primary': 'var(--text-primary)',
+                        'text-secondary': 'var(--text-secondary)',
+                        'text-muted': 'var(--text-muted)',
+                        'accent': 'var(--accent)',
+                        'positive': 'var(--positive)',
+                        'negative': 'var(--negative)',
+                        'warning': 'var(--warning)',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        :root {
+            --surface: #18181b;
+            --surface-elevated: #27272a;
+            --border: #3f3f46;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --positive: #22c55e;
+            --negative: #ef4444;
+            --warning: #fbbf24;
+        }
+    </style>
+</head>
+<body class="h-full bg-surface text-text-primary font-sans">
+    <div class="min-h-screen flex flex-col">
+        {% include "wizard/_progress.html" %}
+        <div class="flex-1 flex items-center justify-center" id="wizard-content">
+            {% block wizard_step %}{% endblock %}
+        </div>
+    </div>
+</body>
+</html>

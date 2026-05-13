@@ -1,0 +1,96 @@
+{# Wizard Step 4 — macOS Keychain credential entry (Source.md §12.1)
+   Alpaca key/secret, Polygon, Finnhub, FRED, EDGAR. Optional fields marked.
+   Expects: current_step
+#}
+<div class="w-full max-w-2xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">API Credentials</h1>
+    <p class="text-text-secondary text-sm mb-8">Enter API keys. Stored in macOS Keychain &mdash; never in config files or environment variables.</p>
+
+    <form id="keychain-form" hx-post="/wizard/step/4" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
+        <div class="space-y-5">
+            <!-- Alpaca (required for paper trading) -->
+            <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
+                <legend class="text-sm font-semibold text-text-primary px-2">Alpaca Paper Trading</legend>
+                <p class="text-xs text-text-muted mb-3">Required for order execution</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="alpaca_key" class="text-xs text-text-secondary block mb-1">API Key</label>
+                        <input type="text" name="alpaca_key" id="alpaca_key"
+                               class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                               autocomplete="off" spellcheck="false" required>
+                    </div>
+                    <div>
+                        <label for="alpaca_secret" class="text-xs text-text-secondary block mb-1">API Secret</label>
+                        <input type="password" name="alpaca_secret" id="alpaca_secret"
+                               class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                               autocomplete="off" required>
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Polygon (required) -->
+            <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
+                <legend class="text-sm font-semibold text-text-primary px-2">Polygon.io</legend>
+                <p class="text-xs text-text-muted mb-3">CRITICAL &mdash; OHLCV and real-time data</p>
+                <div>
+                    <label for="polygon_key" class="text-xs text-text-secondary block mb-1">API Key</label>
+                    <input type="text" name="polygon_key" id="polygon_key"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           autocomplete="off" spellcheck="false" required>
+                </div>
+            </fieldset>
+
+            <!-- Finnhub (optional) -->
+            <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
+                <legend class="text-sm font-semibold text-text-primary px-2">
+                    Finnhub
+                    <span class="text-xs text-text-muted font-normal ml-2">(optional)</span>
+                </legend>
+                <div>
+                    <label for="finnhub_key" class="text-xs text-text-secondary block mb-1">API Key</label>
+                    <input type="text" name="finnhub_key" id="finnhub_key"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           autocomplete="off" spellcheck="false">
+                </div>
+            </fieldset>
+
+            <!-- FRED (optional) -->
+            <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
+                <legend class="text-sm font-semibold text-text-primary px-2">
+                    FRED
+                    <span class="text-xs text-text-muted font-normal ml-2">(optional)</span>
+                </legend>
+                <div>
+                    <label for="fred_key" class="text-xs text-text-secondary block mb-1">API Key</label>
+                    <input type="text" name="fred_key" id="fred_key"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           autocomplete="off" spellcheck="false">
+                </div>
+            </fieldset>
+
+            <!-- SEC EDGAR (required) -->
+            <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
+                <legend class="text-sm font-semibold text-text-primary px-2">SEC EDGAR</legend>
+                <p class="text-xs text-text-muted mb-3">CRITICAL &mdash; User-Agent string (legal requirement for SEC API access)</p>
+                <div>
+                    <label for="edgar_ua" class="text-xs text-text-secondary block mb-1">User-Agent</label>
+                    <input type="text" name="edgar_ua" id="edgar_ua"
+                           placeholder="Your Name your.email@example.com"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           autocomplete="off" spellcheck="false" required>
+                </div>
+            </fieldset>
+        </div>
+
+        {% if error %}
+        {% include "wizard/_error.html" %}
+        {% endif %}
+
+        <div class="flex justify-end mt-8">
+            <button type="submit"
+                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                Save &amp; Verify
+            </button>
+        </div>
+    </form>
+</div>

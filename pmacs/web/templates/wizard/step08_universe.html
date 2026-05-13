@@ -1,0 +1,66 @@
+{# Wizard Step 8 — Universe seed (Source.md §12.1 Step 7)
+   16-ticker seed display, deselect/add tickers, OHLCV validation.
+   Expects: current_step, tickers (list), universe_result
+#}
+<div class="w-full max-w-2xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Universe Seed</h1>
+    <p class="text-text-secondary text-sm mb-8">Select the tickers to track. Each will be validated for OHLCV data availability.</p>
+
+    <form id="universe-form" hx-post="/wizard/step/8" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
+        <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
+            <h2 class="text-sm font-semibold text-text-primary mb-4 uppercase tracking-wider">Default Universe (16 tickers)</h2>
+
+            {% set default_tickers = tickers or [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B",
+                "JPM", "JNJ", "V", "UNH", "HD", "PG", "MA", "DIS"
+            ] %}
+
+            <div class="grid grid-cols-4 gap-2 mb-4">
+                {% for ticker in default_tickers %}
+                <label class="flex items-center gap-2 p-2 rounded border border-border hover:border-blue-500/50 cursor-pointer transition-colors">
+                    <input type="checkbox" name="tickers" value="{{ ticker }}" checked
+                           class="w-4 h-4 rounded border-zinc-600 bg-surface text-blue-600 focus:ring-blue-500 focus:ring-offset-0">
+                    <span class="text-sm font-mono text-text-primary">{{ ticker }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <div class="border-t border-border pt-4">
+                <label for="add_tickers" class="text-xs text-text-secondary block mb-1">Add custom tickers (comma-separated)</label>
+                <input type="text" name="add_tickers" id="add_tickers"
+                       placeholder="e.g., AMD, NFLX, CRM"
+                       class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                       autocomplete="off" spellcheck="false">
+            </div>
+
+            {% if universe_result and universe_result.get("validation") %}
+            <div class="mt-4 border-t border-border pt-4">
+                <h3 class="text-xs font-semibold text-text-primary mb-2 uppercase tracking-wider">Validation Results</h3>
+                {% for t, v in universe_result.get("validation", {}).items() %}
+                <div class="flex items-center gap-2 text-xs mb-1">
+                    {% if v.get("ok") %}
+                    <span class="text-positive">&#10003;</span>
+                    <span class="text-text-primary font-mono">{{ t }}</span>
+                    {% else %}
+                    <span class="text-negative">&#10007;</span>
+                    <span class="text-negative font-mono">{{ t }}</span>
+                    <span class="text-text-muted">&mdash; {{ v.get("message", "No OHLCV data") }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if error %}
+        {% include "wizard/_error.html" %}
+        {% endif %}
+
+        <div class="flex justify-end">
+            <button type="submit"
+                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            {% if universe_result and universe_result.get("all_ok") %}Next{% else %}Validate &amp; Continue{% endif %}
+            </button>
+        </div>
+    </form>
+</div>

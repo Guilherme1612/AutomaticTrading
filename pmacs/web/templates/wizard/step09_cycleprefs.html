@@ -1,0 +1,69 @@
+{# Wizard Step 9 — Cycle preferences (Source.md §12.1 Step 8)
+   Timezone, display currency, EOD semantics.
+   Expects: current_step, cycle_prefs
+#}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Cycle Preferences</h1>
+    <p class="text-text-secondary text-sm mb-8">Configure display currency, timezone, and end-of-day semantics.</p>
+
+    <form id="cycle-form" hx-post="/wizard/step/9" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
+        <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6 space-y-5">
+            <!-- Display Currency -->
+            <div>
+                <label for="display_currency" class="text-sm font-medium text-text-primary block mb-2">Display Currency</label>
+                <p class="text-xs text-text-muted mb-2">Primary currency for portfolio valuation and P&amp;L display.</p>
+                <select name="display_currency" id="display_currency"
+                        class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                    <option value="USD" selected>USD &mdash; US Dollar</option>
+                    <option value="EUR">EUR &mdash; Euro</option>
+                </select>
+            </div>
+
+            <!-- Timezone -->
+            <div>
+                <label for="timezone" class="text-sm font-medium text-text-primary block mb-2">Timezone</label>
+                <p class="text-xs text-text-muted mb-2">Used for "EOD" semantics and display timestamps.</p>
+                <select name="timezone" id="timezone"
+                        class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                    <option value="US/Eastern" selected>US/Eastern (ET)</option>
+                    <option value="US/Central">US/Central (CT)</option>
+                    <option value="US/Mountain">US/Mountain (MT)</option>
+                    <option value="US/Pacific">US/Pacific (PT)</option>
+                    <option value="Europe/London">Europe/London (GMT/BST)</option>
+                    <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                </select>
+            </div>
+
+            <!-- EOD Cutoff -->
+            <div>
+                <label for="eod_cutoff" class="text-sm font-medium text-text-primary block mb-2">EOD Cutoff Time</label>
+                <p class="text-xs text-text-muted mb-2">When PMACS considers the trading day "closed" for analysis purposes.</p>
+                <div class="flex items-center gap-2">
+                    <input type="time" name="eod_cutoff" id="eod_cutoff" value="16:30"
+                           class="px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                    <span class="text-xs text-text-muted">in selected timezone</span>
+                </div>
+            </div>
+
+            <!-- Schedule note -->
+            <div class="p-3 bg-surface border border-border rounded">
+                <p class="text-xs text-text-muted">
+                    <strong class="text-text-secondary">No schedule needed.</strong>
+                    PMACS is boot-driven. Run cycles on demand or via cron &mdash; no built-in scheduler.
+                </p>
+            </div>
+        </div>
+
+        {% if error %}
+        {% include "wizard/_error.html" %}
+        {% endif %}
+
+        <div class="flex justify-end">
+            <button type="submit"
+                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                Next
+            </button>
+        </div>
+    </form>
+</div>

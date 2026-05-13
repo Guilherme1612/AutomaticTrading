@@ -1,0 +1,89 @@
+{# Wizard Step 7 — Data source connectivity ping (Source.md §12.1 Step 6)
+   Green/red matrix per source. CRITICAL blocking, IMPORTANT/NICE_TO_HAVE warn.
+   Expects: current_step, data_result with {results: {source: {ok, message}}, all_ok}
+#}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Data Source Connectivity</h1>
+    <p class="text-text-secondary text-sm mb-8">Verifying API connectivity for each data source.</p>
+
+    <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
+        {% set critical_sources = ["polygon", "edgar", "alpaca"] %}
+        {% set important_sources = ["finnhub", "fred"] %}
+        {% set nice_sources = ["openfda", "finra", "form4", "ir_pages", "press", "fomc", "ecb"] %}
+
+        {% macro source_row(name, criticality, result) %}
+        <div class="flex items-center justify-between p-3 rounded border border-border
+            {% if result and result.get("ok") %}
+                border-green-700/30
+            {% elif result %}
+                border-red-700/30
+            {% endif %}">
+            <div class="flex items-center gap-3">
+                {% if result and result.get("ok") %}
+                <span class="text-positive text-lg">&#10003;</span>
+                {% elif result %}
+                <span class="text-negative text-lg">&#10007;</span>
+                {% else %}
+                <span class="text-text-muted">&mdash;</span>
+                {% endif %}
+                <div>
+                    <span class="text-sm text-text-primary">{{ name }}</span>
+                    <span class="ml-2 text-xs px-1.5 py-0.5 rounded
+                        {% if criticality == "CRITICAL" %}bg-red-900/30 text-red-400
+                        {% elif criticality == "IMPORTANT" %}bg-amber-900/30 text-amber-400
+                        {% else %}bg-zinc-700 text-zinc-400{% endif %}">
+                        {{ criticality }}
+                    </span>
+                </div>
+            </div>
+            <span class="text-xs text-text-muted max-w-[200px] truncate">
+                {{ result.get("message", "Pending") if result else "Pending" }}
+            </span>
+        </div>
+        {% endmacro %}
+
+        <h3 class="text-xs font-semibold text-negative mb-2 uppercase tracking-wider">Critical (must pass)</h3>
+        <div class="space-y-2 mb-4">
+            {% for src in critical_sources %}
+            {{ source_row(src, "CRITICAL", data_result.get("results", {}).get(src) if data_result else none) }}
+            {% endfor %}
+        </div>
+
+        <h3 class="text-xs font-semibold text-warning mb-2 uppercase tracking-wider">Important (warn if missing)</h3>
+        <div class="space-y-2 mb-4">
+            {% for src in important_sources %}
+            {{ source_row(src, "IMPORTANT", data_result.get("results", {}).get(src) if data_result else none) }}
+            {% endfor %}
+        </div>
+
+        <h3 class="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider">Nice to Have</h3>
+        <div class="space-y-2">
+            {% for src in nice_sources %}
+            {{ source_row(src, "NICE_TO_HAVE", data_result.get("results", {}).get(src) if data_result else none) }}
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if error %}
+    {% include "wizard/_error.html" %}
+    {% endif %}
+
+    <div class="flex justify-between">
+        <span></span>
+        {% if data_result and data_result.get("all_ok") %}
+        <button hx-post="/wizard/step/7"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Next
+        </button>
+        {% else %}
+        <button hx-post="/wizard/step/7"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Ping All Sources
+        </button>
+        {% endif %}
+    </div>
+</div>

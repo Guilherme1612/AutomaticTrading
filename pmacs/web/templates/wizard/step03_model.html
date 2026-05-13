@@ -1,0 +1,75 @@
+{# Wizard Step 3 — Model download and verification (Source.md §12.1)
+   Downloads Qwen3.6-35B-A3B, SHA256 verification, progress bar.
+   Expects: current_step, model_result
+#}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Model Download</h1>
+    <p class="text-text-secondary text-sm mb-8">Downloading and verifying the inference model.</p>
+
+    <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
+        <div class="mb-4">
+            <p class="text-sm text-text-primary font-medium">unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL</p>
+            <p class="text-xs text-text-muted mt-1">~21 GB download &middot; Quantized for Apple Silicon</p>
+        </div>
+
+        {% if model_result and model_result.get("already_exists") %}
+        <div class="flex items-center gap-3 p-3 bg-green-900/20 border border-green-700/40 rounded mb-4">
+            <span class="text-positive text-lg">&#10003;</span>
+            <div>
+                <p class="text-sm font-medium text-positive">Model already on disk</p>
+                <p class="text-xs text-text-muted">{{ model_result.get("path", "") }}</p>
+            </div>
+        </div>
+        {% elif model_result and model_result.get("downloading") %}
+        <div class="mb-4">
+            <div class="flex justify-between text-xs text-text-muted mb-1">
+                <span>Downloading...</span>
+                <span>{{ model_result.get("progress_pct", 0) }}%</span>
+            </div>
+            <div class="w-full bg-zinc-700 rounded-full h-2">
+                <div class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                     style="width: {{ model_result.get("progress_pct", 0) }}%"></div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if model_result and model_result.get("sha256_ok") == true %}
+        <div class="flex items-center gap-2 text-xs text-positive font-mono mb-3">
+            <span>&#10003;</span> SHA256 verified
+        </div>
+        {% elif model_result and model_result.get("sha256_ok") == false %}
+        <div class="flex items-center gap-2 text-xs text-negative font-mono mb-3">
+            <span>&#10007;</span> SHA256 mismatch
+        </div>
+        {% endif %}
+
+        {% if model_result and model_result.get("inference_ok") %}
+        <div class="flex items-center gap-2 text-xs text-positive font-mono">
+            <span>&#10003;</span> Inference test passed
+        </div>
+        {% endif %}
+    </div>
+
+    {% if error %}
+    {% include "wizard/_error.html" %}
+    {% endif %}
+
+    <div class="flex justify-between">
+        <span></span>
+        {% if model_result and model_result.get("all_ok") %}
+        <button hx-post="/wizard/step/3"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Next
+        </button>
+        {% else %}
+        <button hx-post="/wizard/step/3"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            {% if model_result and model_result.get("downloading") %}Refresh{% else %}Download Model{% endif %}
+        </button>
+        {% endif %}
+    </div>
+</div>

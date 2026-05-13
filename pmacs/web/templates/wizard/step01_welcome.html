@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMACS Setup Wizard</title>
+    <script src="/static/vendor/tailwind.min.js"></script>
+    <script src="/static/vendor/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'surface': 'var(--surface)',
+                        'surface-elevated': 'var(--surface-elevated)',
+                        'border-default': 'var(--border)',
+                        'text-primary': 'var(--text-primary)',
+                        'text-secondary': 'var(--text-secondary)',
+                        'text-muted': 'var(--text-muted)',
+                        'accent': 'var(--accent)',
+                        'positive': 'var(--positive)',
+                        'negative': 'var(--negative)',
+                        'warning': 'var(--warning)',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        :root {
+            --surface: #18181b;
+            --surface-elevated: #27272a;
+            --border: #3f3f46;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --positive: #22c55e;
+            --negative: #ef4444;
+            --warning: #fbbf24;
+        }
+        .wizard-fade-in {
+            animation: wizard-fade 200ms ease-out;
+        }
+        @keyframes wizard-fade {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="h-full bg-surface text-text-primary font-sans">
+    <div class="min-h-screen flex flex-col">
+        {% include "wizard/_progress.html" %}
+
+        <div class="flex-1 flex items-center justify-center wizard-fade-in" id="wizard-content">
+            <div class="w-full max-w-xl px-8">
+                <div class="text-center mb-12">
+                    <h1 class="text-4xl font-bold text-text-primary mb-4 tracking-tight">PMACS</h1>
+                    <p class="text-text-secondary text-lg mb-2">Portfolio Management and Catalyst Automation System</p>
+                    <p class="text-text-muted text-sm">A single-operator, local-only, catalyst-driven decision engine.</p>
+                </div>
+
+                <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-8">
+                    <h2 class="text-lg font-semibold text-text-primary mb-4">System Requirements</h2>
+                    <ul class="space-y-3 text-sm text-text-secondary">
+                        <li class="flex items-start gap-3">
+                            <span class="text-text-muted mt-0.5">&#9656;</span>
+                            <span>Apple Silicon Mac (M1 family) with at least 32 GB RAM</span>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <span class="text-text-muted mt-0.5">&#9656;</span>
+                            <span>macOS Ventura or later</span>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <span class="text-text-muted mt-0.5">&#9656;</span>
+                            <span>~25 GB free disk space (model + databases)</span>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <span class="text-text-muted mt-0.5">&#9656;</span>
+                            <span>Python 3.11 or later</span>
+                        </li>
+                        <li class="flex items-start gap-3">
+                            <span class="text-text-muted mt-0.5">&#9656;</span>
+                            <span>No internet connection required for operation (inference is fully local)</span>
+                        </li>
+                    </ul>
+                    {% if system_info %}
+                    <div class="mt-4 pt-4 border-t border-border text-xs text-text-muted font-mono">
+                        Detected: {{ system_info.get("platform", "Unknown") }}
+                        &middot; Python {{ system_info.get("python_version", "?") }}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="text-center">
+                    <button hx-post="/wizard/step/1"
+                            hx-target="#wizard-content"
+                            hx-swap="innerHTML transition:200ms"
+                            class="px-8 py-3 bg-blue-600 text-white rounded-lg font-medium text-base hover:bg-blue-700 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                            aria-label="Begin setup wizard">
+                        Let's go
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

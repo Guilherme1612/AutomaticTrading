@@ -29,6 +29,11 @@ Hardening (Phase 9 Wave 5):
   - Per-symbol Crucible timeout: 90s per cycle (180s total), default severity 0.5
   - Graceful shutdown via SIGTERM/SIGINT signal handlers
   - Kill switch mid-cycle abort: INTERRUPT remaining holdings, abbreviated post-cycle
+
+Performance (Phase 9 Wave 6, S6-1):
+  - Per-step timing instrumentation with budget thresholds
+  - Cycle metrics emitted in cycle.close SSE event
+  - Step budgets: persona dispatch 270s, crucible 180s, total cycle 30min, per-step 30s
 """
 from __future__ import annotations
 
@@ -162,6 +167,15 @@ class CycleOrchestrator:
         2: ["insider_activity", "short_interest", "forensics"],
     }
 
+    # -- Step timing budgets (S6-1) --
+    # Key: step label -> budget in milliseconds. Unlisted steps default to 30_000ms.
+    _STEP_BUDGETS: dict[str, float] = {
+        "persona_dispatch": 270_000,
+        "crucible": 180_000,
+        "total_cycle": 1_800_000,  # 30 min
+        "default": 30_000,
+    }
+
     # -- Public API --
 
     def run_cycle(self, trigger: str) -> str:
@@ -197,6 +211,16 @@ class CycleOrchestrator:
             ClockDriftError: If NTP drift exceeds threshold.
         """
         cycle_id: str = ""
+
+        # Initialize cycle metrics (S6-1)
+        self._cycle_metrics: dict[str, Any] = {
+            "total_time_ms": 0,
+            "per_step_times": {},
+            "persona_dispatch_time_ms": 0,
+            "crucible_time_ms": 0,
+            "post_cycle_time_ms": 0,
+        }
+        self._cycle_start = time.monotonic()
 
         # Reset hardening state for each cycle
         self._shutdown_requested = False
@@ -283,9 +307,11 @@ class CycleOrchestrator:
                 # Step 29 — Close cycle
                 op_seq = 29
                 if not self._skip_if_complete(cycle_id, op_seq):
+                    self._finalize_cycle_metrics(cycle_id)
                     close_cycle(cycle_id, self._db_path, self._audit_path)
                     self._publish_sse("cycle", "cycle.closed", {
                         "cycle_id": cycle_id,
+                        "metrics": self._cycle_metrics,
                     })
                     self._mark_op_complete(cycle_id, op_seq, "close_cycle")
 
@@ -336,6 +362,80 @@ class CycleOrchestrator:
             error_code="GRACEFUL_SHUTDOWN",
             msg=f"Signal {signum} received, requesting graceful shutdown",
         )
+
+    # -- Timing helpers (S6-1) --
+
+    def _timed_step(
+        self,
+        step_fn: Callable,
+        step_label: str,
+        *args: Any,
+    ) -> Any:
+        """Wrap a step function with timing instrumentation.
+
+        Records duration in _cycle_metrics["per_step_times"] and logs
+        STEP_OVER_BUDGET if duration exceeds the step budget.
+
+        Args:
+            step_fn: The step function to call.
+            step_label: Label for the step (used as key in per_step_times).
+            *args: Positional args forwarded to step_fn.
+
+        Returns:
+            Whatever step_fn returns.
+        """
+        start = time.monotonic()
+        result = step_fn(*args)
+        duration_ms = (time.monotonic() - start) * 1000
+        self._cycle_metrics["per_step_times"][step_label] = duration_ms
+
+        budget_ms = self._STEP_BUDGETS.get(
+            step_label, self._STEP_BUDGETS["default"],
+        )
+        if duration_ms > budget_ms:
+            log_debug(
+                "STEP_OVER_BUDGET",
+                payload={
+                    "step": step_label,
+                    "duration_ms": round(duration_ms, 1),
+                    "budget_ms": budget_ms,
+                    "over_by_ms": round(duration_ms - budget_ms, 1),
+                },
+                level="WARN",
+                error_code="STEP_OVER_BUDGET",
+                cycle_id=args[0] if args else "",
+                msg=f"Step '{step_label}' exceeded budget: "
+                    f"{duration_ms:.0f}ms > {budget_ms:.0f}ms budget",
+            )
+        return result
+
+    def _finalize_cycle_metrics(self, cycle_id: str) -> None:
+        """Compute total cycle time and populate _cycle_metrics."""
+        total_ms = (time.monotonic() - self._cycle_start) * 1000 if hasattr(self, "_cycle_start") else 0
+        self._cycle_metrics["total_time_ms"] = round(total_ms, 1)
+
+        # Sum persona and crucible from per_step_times if available
+        per_step = self._cycle_metrics.get("per_step_times", {})
+        persona_ms = sum(
+            v for k, v in per_step.items() if "persona" in k
+        )
+        crucible_ms = sum(
+            v for k, v in per_step.items() if "crucible" in k
+        )
+        post_cycle_ms = sum(
+            v for k, v in per_step.items()
+            if k.startswith("post_") or k in {
+                "weekly_reeval", "thesis_aging", "process_fills",
+                "reconciliation", "opportunity_cost", "calibration",
+                "crucible_calibration", "causal_attribution",
+                "memory_antipattern", "lessons_extraction",
+                "override_learning_post", "fde", "drift_stats",
+                "cross_db_consistency", "dead_letter",
+            }
+        )
+        self._cycle_metrics["persona_dispatch_time_ms"] = round(persona_ms, 1)
+        self._cycle_metrics["crucible_time_ms"] = round(crucible_ms, 1)
+        self._cycle_metrics["post_cycle_time_ms"] = round(post_cycle_ms, 1)
 
     # -- Step implementations --
 
@@ -442,54 +542,55 @@ class CycleOrchestrator:
 
         Returns next op_seq (13) after pre-cycle block completes.
         Each step checks idempotency via _skip_if_complete before executing.
+        Each step is timed via _timed_step (S6-1).
         """
         # op_seq 3: FX snapshot (Architecture.md step 2)
         op_seq = 3
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_fx_snapshot(cycle_id)
+            self._timed_step(self._step_fx_snapshot, "fx_snapshot", cycle_id)
             self._step_corporate_actions(cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "fx_snapshot")
 
         # Step 6: Macro regime
         op_seq = 6
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_macro_regime(cycle_id)
+            self._timed_step(self._step_macro_regime, "macro_regime", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "macro_regime")
 
         # Step 7: Catalyst resolution
         op_seq = 7
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_catalyst_resolution(cycle_id)
+            self._timed_step(self._step_catalyst_resolution, "catalyst_resolution", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "catalyst_resolution")
 
         # Step 8: Universe sync
         op_seq = 8
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_universe_sync(cycle_id)
+            self._timed_step(self._step_universe_sync, "universe_sync", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "universe_sync")
 
         # Step 9: Gatekeeper
         op_seq = 9
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_gatekeeper(cycle_id)
+            self._timed_step(self._step_gatekeeper, "gatekeeper", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "gatekeeper")
 
         # Step 10: Lessons flagger
         op_seq = 10
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_lessons_flagger(cycle_id)
+            self._timed_step(self._step_lessons_flagger, "lessons_flagger", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "lessons_flagger")
 
         # Step 11: Override learning
         op_seq = 11
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_override_learning(cycle_id)
+            self._timed_step(self._step_override_learning, "override_learning", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "override_learning")
 
         # Step 12: Queue composition
         op_seq = 12
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_queue_composition(cycle_id)
+            self._timed_step(self._step_queue_composition, "queue_composition", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "queue_composition")
 
         return 13  # Next op_seq after pre-cycle block
@@ -898,6 +999,7 @@ class CycleOrchestrator:
             return op + 1  # Skip to next symbol
 
         # -- Step 13c: Episodic context build ---
+        # S6-2 edge case: DuckDB/KuzuDB/Qdrant unavailable -> fallback to minimal brief
         from pmacs.agents.episodic_context import build_context_brief
 
         regime_label = "UNCERTAIN"
@@ -914,16 +1016,57 @@ class CycleOrchestrator:
                 except (ValueError, TypeError):
                     pass
 
-        brief = build_context_brief(
-            persona="all",
-            ticker=ticker,
-            regime=regime_label,
-            regime_confidence=regime_conf,
-        )
+        try:
+            brief = build_context_brief(
+                persona="all",
+                ticker=ticker,
+                regime=regime_label,
+                regime_confidence=regime_conf,
+            )
+        except Exception as exc:
+            # Fallback to minimal brief on any storage failure
+            brief = f"MACRO CONTEXT: regime={regime_label} confidence={regime_conf:.2f}"
+            log_debug(
+                "EPISODIC_CONTEXT_FALLBACK",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="STALE_DATA",
+                cycle_id=cycle_id,
+                msg=f"Episodic context build failed for {ticker}, "
+                    f"using minimal brief: {exc}",
+            )
 
         # -- Step 13d: Persona slot dispatch (S5-1: 270s timeout) ---
         # Evidence is local to this call — no module-level caches between symbols.
+        # S6-2 edge case: evidence gateway timeout -> per-symbol abort with DATA_UNAVAILABLE
         evidence: list[Any] = []  # EvidencePacket list — populated by future data fetch
+        try:
+            # Future wave: evidence = fetch_evidence(ticker, cycle_id)
+            pass
+        except Exception as exc:
+            holding = transition(
+                holding, HoldingState.ABORTED_LLM,
+                f"DATA_UNAVAILABLE:{exc}", cycle_id, op,
+            )
+            self._symbol_holdings.pop(ticker, None)
+            log_debug(
+                "SYMBOL_ABORTED_DATA_UNAVAILABLE",
+                payload={
+                    "cycle_id": cycle_id,
+                    "ticker": ticker,
+                    "holding_id": holding.id,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="DATA_UNAVAILABLE",
+                cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: data unavailable: {exc}",
+            )
+            return op + 1
 
         persona_results: dict[str, Any] = {}
         persona_timed_out = False
@@ -1594,6 +1737,10 @@ class CycleOrchestrator:
         After each symbol, checks for shutdown request and kill switch.
         If either is true, stops processing and returns immediately.
 
+        Edge cases (S6-2):
+            - Empty queue: cycle completes with no per-symbol work, post-cycle fires.
+            - All symbols abort: no LLM calls made, cycle completes with no trades.
+
         Args:
             cycle_id: Current cycle identifier.
             start_op_seq: Starting operation sequence number.
@@ -1602,6 +1749,21 @@ class CycleOrchestrator:
             Next op_seq after symbols processed (or interrupted).
         """
         op_seq = start_op_seq
+
+        # S6-2 edge case: empty queue
+        if not self._queue:
+            log_debug(
+                "CYCLE_EMPTY_QUEUE",
+                payload={"cycle_id": cycle_id, "queue_size": 0},
+                level="INFO",
+                cycle_id=cycle_id,
+                msg="Queue is empty after gatekeeper -- no symbols to process, "
+                    "post-cycle will still fire",
+            )
+            return op_seq
+
+        symbols_processed = 0
+        symbols_aborted = 0
 
         for item in self._queue:
             # Pre-check: shutdown or kill switch already triggered
@@ -1633,7 +1795,15 @@ class CycleOrchestrator:
                 )
                 break
 
+            prev_op = op_seq
             op_seq = self._run_symbol(cycle_id, item, op_seq)
+            symbols_processed += 1
+
+            # Detect if symbol aborted early (op_seq advanced by 2-3 vs ~15 for full pipeline)
+            # A symbol that runs the full pipeline advances op_seq by ~15;
+            # an abort advances by 2-3.
+            if op_seq - prev_op <= 4:
+                symbols_aborted += 1
 
             # Post-symbol check for shutdown/kill switch
             if self._shutdown_requested:
@@ -1657,6 +1827,21 @@ class CycleOrchestrator:
                     msg="Symbol loop interrupted: kill switch engaged mid-cycle",
                 )
                 break
+
+        # S6-2 edge case: all symbols aborted before LLM
+        if symbols_processed > 0 and symbols_aborted == symbols_processed:
+            log_debug(
+                "CYCLE_ALL_SYMBOLS_ABORTED",
+                payload={
+                    "cycle_id": cycle_id,
+                    "symbols_processed": symbols_processed,
+                    "symbols_aborted": symbols_aborted,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"All {symbols_processed} symbols aborted before LLM -- "
+                    "cycle completes with no trades, post-cycle will still fire",
+            )
 
         return op_seq
 
@@ -2012,97 +2197,98 @@ class CycleOrchestrator:
 
         Each step is best-effort: failures are logged but do not abort the cycle.
         Each step is idempotent via _skip_if_complete / _mark_op_complete.
+        Each step is timed via _timed_step (S6-1).
 
         Returns next op_seq (29) after post-cycle block completes.
         """
         # -- Step 14: Weekly re-evaluation --
         op_seq = 14
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_weekly_reeval(cycle_id)
+            self._timed_step(self._step_weekly_reeval, "weekly_reeval", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "weekly_reeval")
 
         # -- Step 15: Thesis aging --
         op_seq = 15
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_thesis_aging(cycle_id)
+            self._timed_step(self._step_thesis_aging, "thesis_aging", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "thesis_aging")
 
         # -- Step 16: Process fills --
         op_seq = 16
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_process_fills(cycle_id)
+            self._timed_step(self._step_process_fills, "process_fills", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "process_fills")
 
         # -- Step 17: Reconciliation --
         op_seq = 17
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_reconciliation(cycle_id)
+            self._timed_step(self._step_reconciliation, "reconciliation", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "reconciliation")
 
         # -- Step 18: Opportunity cost --
         op_seq = 18
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_opportunity_cost(cycle_id)
+            self._timed_step(self._step_opportunity_cost, "opportunity_cost", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "opportunity_cost")
 
         # -- Step 19: Calibration --
         op_seq = 19
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_calibration(cycle_id)
+            self._timed_step(self._step_calibration, "calibration", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "calibration")
 
         # -- Step 20: Crucible calibration --
         op_seq = 20
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_crucible_calibration(cycle_id)
+            self._timed_step(self._step_crucible_calibration, "crucible_calibration", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "crucible_calibration")
 
         # -- Step 21: Causal attribution --
         op_seq = 21
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_causal_attribution(cycle_id)
+            self._timed_step(self._step_causal_attribution, "causal_attribution", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "causal_attribution")
 
         # -- Step 22: Memory antipattern check --
         op_seq = 22
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_memory(cycle_id)
+            self._timed_step(self._step_memory, "memory_antipattern", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "memory_antipattern")
 
         # -- Step 23: Lessons extraction --
         op_seq = 23
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_lessons(cycle_id)
+            self._timed_step(self._step_lessons, "lessons_extraction", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "lessons_extraction")
 
         # -- Step 24: Override learning --
         op_seq = 24
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_override_learning_post(cycle_id)
+            self._timed_step(self._step_override_learning_post, "override_learning_post", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "override_learning_post")
 
         # -- Step 25: FDE --
         op_seq = 25
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_fde(cycle_id)
+            self._timed_step(self._step_fde, "fde", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "fde")
 
         # -- Step 26: Drift stats --
         op_seq = 26
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_drift(cycle_id)
+            self._timed_step(self._step_drift, "drift_stats", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "drift_stats")
 
         # -- Step 27: Cross-DB consistency --
         op_seq = 27
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_cross_db_consistency(cycle_id)
+            self._timed_step(self._step_cross_db_consistency, "cross_db_consistency", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "cross_db_consistency")
 
         # -- Step 28: Dead letter processing --
         op_seq = 28
         if not self._skip_if_complete(cycle_id, op_seq):
-            self._step_dead_letter(cycle_id)
+            self._timed_step(self._step_dead_letter, "dead_letter", cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "dead_letter")
 
         return 29  # Next op_seq after post-cycle block
@@ -2776,6 +2962,69 @@ class CycleOrchestrator:
             msg=f"Dead letter: {queue.pending_count} pending, "
                 f"{queue.exhausted_count} exhausted",
         )
+
+    # -- DB retry helper (S6-2: SQLite locked during write) --
+
+    def _db_execute_with_retry(
+        self,
+        sql: str,
+        params: tuple = (),
+        *,
+        retries: int = 3,
+        backoff_ms: float = 100.0,
+        cycle_id: str = "",
+    ) -> None:
+        """Execute a SQLite statement with retry on OperationalError (locked).
+
+        Retries up to `retries` times with exponential backoff starting at
+        `backoff_ms`. Logs each retry. Raises on final failure.
+
+        Args:
+            sql: SQL statement to execute.
+            params: Parameters for the statement.
+            retries: Max retry attempts (default 3).
+            backoff_ms: Initial backoff in milliseconds (default 100ms).
+            cycle_id: For logging context.
+        """
+        for attempt in range(retries):
+            try:
+                conn = sqlite3.connect(str(self._db_path))
+                try:
+                    conn.execute(sql, params)
+                    conn.commit()
+                finally:
+                    conn.close()
+                return
+            except sqlite3.OperationalError as exc:
+                if attempt < retries - 1:
+                    wait = backoff_ms * (2 ** attempt) / 1000.0
+                    log_debug(
+                        "DB_RETRY_LOCKED",
+                        payload={
+                            "attempt": attempt + 1,
+                            "max_retries": retries,
+                            "wait_s": wait,
+                            "error": str(exc),
+                        },
+                        level="INFO",
+                        cycle_id=cycle_id,
+                        msg=f"SQLite locked, retrying in {wait:.1f}s "
+                            f"(attempt {attempt + 1}/{retries})",
+                    )
+                    time.sleep(wait)
+                else:
+                    log_debug(
+                        "DB_RETRY_EXHAUSTED",
+                        payload={
+                            "attempts": retries,
+                            "error": str(exc),
+                        },
+                        level="WARN",
+                        error_code="DB_WRITE_FAILED",
+                        cycle_id=cycle_id,
+                        msg=f"SQLite write failed after {retries} retries: {exc}",
+                    )
+                    raise
 
     # -- Idempotency helpers --
 

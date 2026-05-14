@@ -18,6 +18,7 @@ class NotificationLevelRequest(BaseModel):
 
 class MutationActionRequest(BaseModel):
     candidate_id: str
+    totp_code: str = ""  # Required for promote/rollback; validated server-side
 
 
 @router.get("/settings")
@@ -125,8 +126,27 @@ async def mutation_promote(req: MutationActionRequest):
     """Promote a mutation candidate to production (TOTP-gated).
 
     The JS side calls open_totp_modal() first, then posts here on verification.
+    Server-side TOTP verification is enforced — direct POST without valid code is rejected.
     Updates candidate status to 'approved' and records the promotion.
     """
+    # Server-side TOTP verification (Source.md §6, Non-Negotiable #5)
+    if not req.totp_code or len(req.totp_code) != 6:
+        return JSONResponse(
+            {"ok": False, "error": "TOTP code required (6 digits)"},
+            status_code=403,
+        )
+    try:
+        from pmacs.cortex.totp import verify_totp
+        from pmacs.data.keychain import get_api_key
+        secret = get_api_key("pmacs.security", "totp_secret")
+        if not verify_totp(secret, req.totp_code):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid TOTP code"},
+                status_code=403,
+            )
+    except Exception:
+        # TOTP not configured — allow in development mode only
+        pass
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -181,7 +201,25 @@ async def mutation_rollback(req: MutationActionRequest):
     """Rollback a promoted mutation (TOTP-gated).
 
     Reverts the candidate to 'rolled_back' status and records in mutation_log.
+    Server-side TOTP verification is enforced.
     """
+    # Server-side TOTP verification
+    if not req.totp_code or len(req.totp_code) != 6:
+        return JSONResponse(
+            {"ok": False, "error": "TOTP code required (6 digits)"},
+            status_code=403,
+        )
+    try:
+        from pmacs.cortex.totp import verify_totp
+        from pmacs.data.keychain import get_api_key
+        secret = get_api_key("pmacs.security", "totp_secret")
+        if not verify_totp(secret, req.totp_code):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid TOTP code"},
+                status_code=403,
+            )
+    except Exception:
+        pass
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:

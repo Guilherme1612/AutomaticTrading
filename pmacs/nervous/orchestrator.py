@@ -134,15 +134,8 @@ class CycleOrchestrator:
             self._config.get("clock_drift_threshold", 60.0)
         )
 
-        # Step dispatch: maps step number to handler method.
-        # Steps 0 and 29 use module-level initiate_cycle/close_cycle directly.
+        # Steps 0-5 are called directly in _run_pre_cycle().
         # Steps 6-12 and 13-28 are handled by _run_pre_cycle/_run_symbol/_run_post_cycle.
-        self._step_dispatch: dict[int, Callable] = {
-            0: self._step_clock_drift,
-            1: self._step_checkpoint_resume,
-            4: self._step_kill_switch,
-            5: self._step_flywheel_health,
-        }
 
         # Pre-cycle pipeline state (populated by _run_pre_cycle)
         self._fx_rate: Any | None = None
@@ -154,10 +147,17 @@ class CycleOrchestrator:
         # Paper ledger (created lazily or injected for testing)
         self._ledger: Any | None = None
 
+        # Storage adapters (lazy-initialized via _get_kuzu_adapter / _get_qdrant_adapter)
+        self._kuzu_adapter: Any | None = None
+        self._qdrant_adapter: Any | None = None
+
         # Hardening state (S5-2: graceful shutdown + kill switch mid-cycle)
         self._shutdown_requested: bool = False
         self._kill_switch_engaged_mid_cycle: bool = False
         self._symbol_holdings: dict[str, Any] = {}  # ticker -> Holding (for INTERRUPT on abort)
+
+        # Price cache for real-time price fetching (Architecture.md §6.1)
+        self._price_cache: Any | None = None
 
     # -- Persona slot map (Architecture.md §12.2) --
 
@@ -923,6 +923,54 @@ class CycleOrchestrator:
 
             return _MockConfig()
 
+    def _get_kuzu_adapter(self) -> Any | None:
+        """Lazy-initialize and return the KuzuDB adapter (Architecture.md §8.4)."""
+        if self._kuzu_adapter is not None:
+            return self._kuzu_adapter
+        try:
+            from pmacs.storage.kuzu import KuzuDBAdapter
+            from pathlib import Path as _P
+
+            kuzu_path = _P(str(self._db_path)).parent / "pmacs.kuzu"
+            adapter = KuzuDBAdapter(db_path=kuzu_path)
+            if adapter._conn is not None:
+                self._kuzu_adapter = adapter
+                return adapter
+        except Exception:
+            pass
+        return None
+
+    def _get_qdrant_adapter(self) -> Any | None:
+        """Lazy-initialize and return the Qdrant adapter (Architecture.md §8.7)."""
+        if self._qdrant_adapter is not None:
+            return self._qdrant_adapter
+        try:
+            from pmacs.storage.qdrant import QdrantAdapter
+
+            url = self._config.get("qdrant_url", "http://127.0.0.1:6333")
+            adapter = QdrantAdapter(url=url)
+            if adapter._ensure_client():
+                adapter.create_collections()
+                self._qdrant_adapter = adapter
+                return adapter
+        except Exception:
+            pass
+        return None
+
+    def _get_price_cache(self) -> Any | None:
+        """Lazy-initialize and return the PriceCache (Architecture.md §6.1)."""
+        if self._price_cache is not None:
+            return self._price_cache
+        try:
+            from pmacs.data.gateway import DataGateway
+            from pmacs.data.price_cache import PriceCache
+
+            gateway = DataGateway()
+            self._price_cache = PriceCache(gateway=gateway, max_age_seconds=300)
+            return self._price_cache
+        except Exception:
+            return None
+
     def _run_symbol(
         self, cycle_id: str, item: Any | None, op_seq: int
     ) -> int:
@@ -999,7 +1047,8 @@ class CycleOrchestrator:
             return op + 1  # Skip to next symbol
 
         # -- Step 13c: Episodic context build ---
-        # S6-2 edge case: DuckDB/KuzuDB/Qdrant unavailable -> fallback to minimal brief
+        # Agents.md §18: 200-word brief from macro, failures, track record, lessons
+        # S6-2 edge case: stores unavailable -> fallback to minimal brief
         from pmacs.agents.episodic_context import build_context_brief
 
         regime_label = "UNCERTAIN"
@@ -1016,12 +1065,45 @@ class CycleOrchestrator:
                 except (ValueError, TypeError):
                     pass
 
+        # Fetch real store data for episodic context (Agents.md §18)
+        recent_failures: list[dict] | None = None
+        recent_lessons: list[str] | None = None
+        fde_history: list[dict] | None = None
+
+        kuzu = self._get_kuzu_adapter()
+        if kuzu is not None:
+            try:
+                failures = kuzu.get_failures_for_ticker(ticker, limit=3)
+                if failures:
+                    recent_failures = [
+                        {"taxonomy": f.get("fa.taxonomy", ""), "summary": f.get("fa.summary", "")}
+                        for f in failures
+                    ]
+            except Exception:
+                pass
+
+        qdrant = self._get_qdrant_adapter()
+        if qdrant is not None:
+            try:
+                similar = qdrant.search_similar("lessons", ticker, limit=2)
+                if similar:
+                    recent_lessons = [
+                        hit.get("payload", {}).get("lesson_text", "")[:100]
+                        for hit in similar
+                        if hit.get("payload")
+                    ]
+            except Exception:
+                pass
+
         try:
             brief = build_context_brief(
                 persona="all",
                 ticker=ticker,
                 regime=regime_label,
                 regime_confidence=regime_conf,
+                recent_failures=recent_failures,
+                recent_lessons=recent_lessons or None,
+                fde_history=fde_history,
             )
         except Exception as exc:
             # Fallback to minimal brief on any storage failure
@@ -1043,9 +1125,39 @@ class CycleOrchestrator:
         # -- Step 13d: Persona slot dispatch (S5-1: 270s timeout) ---
         # Evidence is local to this call — no module-level caches between symbols.
         # S6-2 edge case: evidence gateway timeout -> per-symbol abort with DATA_UNAVAILABLE
-        evidence: list[Any] = []  # EvidencePacket list — populated by future data fetch
-        # TODO: Future wave -- wire evidence fetching
-        # evidence = fetch_evidence(ticker, cycle_id)
+        try:
+            from pmacs.data.evidence_router import fetch_evidence_for_ticker
+            evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
+            evidence: list[Any] = list(evidence_packet.evidence)
+            # TODO: Future refinement -- filter evidence per persona using
+            # PERSONA_EVIDENCE_MAP before passing to _dispatch_personas.
+        except Exception as exc:
+            log_debug(
+                "EVIDENCE_FETCH_FAILED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN",
+                error_code="DATA_UNAVAILABLE",
+                cycle_id=cycle_id,
+                msg=f"Evidence fetch failed for {ticker}: {exc}",
+            )
+            evidence = []
+
+        # -- Fetch real-time price for sizing and execution (Architecture.md §6.1) --
+        current_price: float = 1.0  # fallback default
+        price_cache = self._get_price_cache()
+        if price_cache is not None:
+            fetched = price_cache.get_price(ticker, cycle_id)
+            if fetched is not None:
+                current_price = fetched
+            else:
+                log_debug(
+                    "PRICE_FALLBACK_DEFAULT",
+                    payload={"ticker": ticker, "cycle_id": cycle_id},
+                    level="WARN",
+                    error_code="DATA_UNAVAILABLE",
+                    cycle_id=cycle_id,
+                    msg=f"Price unavailable for {ticker}, using fallback 1.0",
+                )
 
         persona_results: dict[str, Any] = {}
         persona_timed_out = False
@@ -1153,64 +1265,175 @@ class CycleOrchestrator:
         )
         op += 1
 
-        # -- Step 13g: Crucible (S5-1: 90s per cycle, 180s total hard timeout) ---
+        # -- Step 13g: Crucible 2-iteration rewrite loop (Agents.md §16) ---
+        # State machine: INITIAL -> REWRITE -> DONE/ABORT
+        # Hard limits: 2 cycles max, 90s per cycle, 180s total, NO_TRADE on budget exhaust
+        CRUCIBLE_MAX_CYCLES = 2
+        CRUCIBLE_PER_CYCLE_TIMEOUT = 90   # seconds (Architecture.md §17.3)
+
         crucible_severity = 0.0
-        crucible_timed_out = False
+        crucible_state = "INITIAL"
+        crucible_iterations = 0
+        revised_evidence: list[Any] | None = None
         from pmacs.agents.crucible import CrucibleRunner
 
         crucible_runner = CrucibleRunner()
         crucible_start = time.monotonic()
-        try:
-            # Run Crucible with 180s hard timeout via ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=1) as crucible_pool:
-                crucible_future = crucible_pool.submit(
-                    crucible_runner.run,
-                    evidence=evidence,
-                    episodic_context=brief,
-                )
-                try:
-                    crucible_output = crucible_future.result(timeout=180)
-                except FuturesTimeoutError:
-                    crucible_timed_out = True
-                    crucible_output = None
+        import json as _json
 
-            if not crucible_timed_out and crucible_output is not None:
-                import json as _json
+        for _cycle_idx in range(CRUCIBLE_MAX_CYCLES):
+            elapsed = time.monotonic() - crucible_start
+            if elapsed > 180:
+                log_debug(
+                    "CRUCIBLE_BUDGET_EXHAUSTED",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "elapsed_s": elapsed,
+                    },
+                    level="WARN",
+                    error_code="CRUCIBLE_TIMEOUT",
+                    cycle_id=cycle_id,
+                    msg=f"Crucible 180s total budget exhausted for {ticker}",
+                )
+                crucible_state = "ABORT"
+                break
+
+            # Build evidence input: revised on 2nd iteration if available
+            ev_input = revised_evidence if revised_evidence is not None else evidence
+
+            try:
+                # Run Crucible with 90s per-cycle timeout
+                with ThreadPoolExecutor(max_workers=1) as crucible_pool:
+                    crucible_future = crucible_pool.submit(
+                        crucible_runner.run,
+                        evidence=ev_input,
+                        episodic_context=brief,
+                    )
+                    try:
+                        crucible_output = crucible_future.result(
+                            timeout=CRUCIBLE_PER_CYCLE_TIMEOUT,
+                        )
+                    except FuturesTimeoutError:
+                        log_debug(
+                            "CRUCIBLE_CYCLE_TIMEOUT",
+                            payload={
+                                "cycle_id": cycle_id,
+                                "ticker": ticker,
+                                "cycle": _cycle_idx + 1,
+                                "elapsed_s": time.monotonic() - crucible_start,
+                            },
+                            level="WARN",
+                            error_code="CRUCIBLE_TIMEOUT",
+                            cycle_id=cycle_id,
+                            msg=f"Crucible cycle {_cycle_idx + 1} timed out (90s) for {ticker}",
+                        )
+                        crucible_state = "ABORT"
+                        break
+
+                if crucible_output is None:
+                    crucible_state = "ABORT"
+                    break
+
+                # Parse severity from output
                 try:
                     crucible_data = _json.loads(crucible_output.raw_output)
-                    crucible_severity = float(crucible_data.get("severity_score", 0.5))
+                    crucible_severity = float(
+                        crucible_data.get("severity_score", 0.5)
+                    )
                 except (ValueError, TypeError, AttributeError):
                     crucible_severity = 0.5  # moderate default on parse failure
-            else:
-                crucible_severity = 0.5  # moderate default on LLM failure or timeout
-        except Exception as exc:
-            log_debug(
-                "CRUCIBLE_EXCEPTION",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "error": str(exc),
-                },
-                level="WARN",
-                error_code="ABORTED_LLM",
-                cycle_id=cycle_id,
-                msg=f"Crucible raised {type(exc).__name__} for {ticker}",
-            )
-            crucible_severity = 0.5  # moderate default on exception
 
-        if crucible_timed_out:
+                crucible_iterations += 1
+
+                log_debug(
+                    "CRUCIBLE_CYCLE_COMPLETE",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "cycle": _cycle_idx + 1,
+                        "severity": crucible_severity,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Crucible cycle {_cycle_idx + 1} for {ticker}: severity={crucible_severity:.2f}",
+                )
+
+                # State transitions per Agents.md §16.1
+                if crucible_severity >= 0.6:
+                    # High severity -> immediate ABORT (NO_TRADE)
+                    crucible_state = "ABORT"
+                    break
+                elif (
+                    crucible_severity >= 0.3
+                    and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1
+                ):
+                    # Medium severity -> rebuild evidence brief for rewrite
+                    crucible_state = "REWRITE"
+                    attacks = crucible_data.get("attacks", [])
+                    revised_evidence = _rebuild_evidence_brief(
+                        evidence, attacks, arbitrated, ticker,
+                    )
+                    log_debug(
+                        "CRUCIBLE_REWRITE_TRIGGERED",
+                        payload={
+                            "cycle_id": cycle_id,
+                            "ticker": ticker,
+                            "cycle": _cycle_idx + 1,
+                            "severity": crucible_severity,
+                            "num_attacks": len(attacks),
+                        },
+                        level="INFO",
+                        cycle_id=cycle_id,
+                        msg=f"Crucible cycle 1 severity {crucible_severity:.2f}, rebuilding evidence for cycle 2",
+                    )
+                else:
+                    # Low severity or max cycles reached -> DONE
+                    crucible_state = "DONE"
+                    break
+
+            except Exception as exc:
+                log_debug(
+                    "CRUCIBLE_EXCEPTION",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "cycle": _cycle_idx + 1,
+                        "error": str(exc),
+                    },
+                    level="WARN",
+                    error_code="ABORTED_LLM",
+                    cycle_id=cycle_id,
+                    msg=f"Crucible raised {type(exc).__name__} in cycle {_cycle_idx + 1} for {ticker}",
+                )
+                crucible_state = "ABORT"
+                break
+
+        # Handle ABORT: transition to ABORTED_RISK, skip remaining pipeline
+        if crucible_state == "ABORT":
+            holding = transition(
+                holding, HoldingState.ABORTED_RISK,
+                f"crucible_abort:severity={crucible_severity:.2f},iterations={crucible_iterations}",
+                cycle_id, op,
+            )
             log_debug(
-                "CRUCIBLE_TIMEOUT",
+                "SYMBOL_ABORTED_CRUCIBLE",
                 payload={
                     "cycle_id": cycle_id,
                     "ticker": ticker,
+                    "holding_id": holding.id,
+                    "crucible_severity": crucible_severity,
+                    "crucible_state": crucible_state,
+                    "crucible_iterations": crucible_iterations,
                     "elapsed_s": time.monotonic() - crucible_start,
                 },
                 level="WARN",
-                error_code="CRUCIBLE_TIMEOUT",
+                error_code="ABORTED_CRUCIBLE",
                 cycle_id=cycle_id,
-                msg=f"Crucible timed out for {ticker}, defaulting severity to 0.5",
+                msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}",
             )
+            self._symbol_holdings.pop(ticker, None)
+            return op + 1
 
         log_debug(
             "SYMBOL_CRUCIBLE_COMPLETE",
@@ -1219,21 +1442,23 @@ class CycleOrchestrator:
                 "ticker": ticker,
                 "holding_id": holding.id,
                 "crucible_severity": crucible_severity,
+                "crucible_state": crucible_state,
+                "crucible_iterations": crucible_iterations,
             },
             level="INFO",
             cycle_id=cycle_id,
-            msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}",
+            msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}, state={crucible_state}, iterations={crucible_iterations}",
         )
         op += 1
 
-        # -- Step 13h: EV computation ---
+        # -- Step 13h: EV computation (real pricing) ---
         from pmacs.engines.pricing import compute_ev, EvInputs
 
         ev_result = compute_ev(EvInputs(
             p_up=arbitrated.p_up,
             p_down=arbitrated.p_down,
-            target_gain_pct=0.10,
-            stop_loss_pct=0.15,
+            atr_pct=None,          # todo: wire ATR provider when available
+            current_price=current_price,
         ))
 
         log_debug(
@@ -1245,11 +1470,15 @@ class CycleOrchestrator:
                 "ev_pct": ev_result.expected_value_pct,
                 "ev_multiple": ev_result.ev_multiple,
                 "is_positive": ev_result.is_positive,
+                "target_gain_pct": ev_result.target_gain_pct,
+                "stop_loss_pct": ev_result.stop_loss_pct,
             },
             level="INFO",
             cycle_id=cycle_id,
             msg=f"Symbol {ticker} EV: {ev_result.expected_value_pct:.4f} "
-                f"(multiple={ev_result.ev_multiple:.2f})",
+                f"(multiple={ev_result.ev_multiple:.2f}, "
+                f"target={ev_result.target_gain_pct:.2%}, "
+                f"stop={ev_result.stop_loss_pct:.2%})",
         )
         op += 1
 
@@ -1274,12 +1503,12 @@ class CycleOrchestrator:
         sizing_result = size_position(SizingInputs(
             p_up=arbitrated.p_up,
             p_down=arbitrated.p_down,
-            target_gain_pct=0.10,
-            stop_loss_pct=0.15,
+            target_gain_pct=ev_result.target_gain_pct,
+            stop_loss_pct=ev_result.stop_loss_pct,
             matured_sources_used=arbitrated.matured_sources_used,
             is_limited_history=is_bootstrap,
             portfolio_value_usd=portfolio_value,
-            current_price=1.0,  # real price from data fetch in future wave
+            current_price=current_price,
         ))
 
         if sizing_result.abort_reason:
@@ -1515,10 +1744,10 @@ class CycleOrchestrator:
                 "execution_approved", cycle_id, op,
             )
 
-            # Determine entry price (placeholder: 1.0 until real price data)
-            entry_price = 1.0
+            # Determine entry price from PriceCache (Architecture.md §6.1)
+            entry_price = current_price
             shares = sizing_result.target_shares
-            stop_price = round(entry_price * (1 - 0.15), 2)  # catastrophe-net
+            stop_price = round(entry_price * (1 - ev_result.stop_loss_pct), 2)
 
             # Execution fields set post-transition (not state-related):
             holding.entry_price_usd = entry_price
@@ -2674,8 +2903,8 @@ class CycleOrchestrator:
         )
 
     def _step_lessons(self, cycle_id: str) -> None:
-        """Step 23: Extract lessons from new resolutions."""
-        from pmacs.engines.lessons import extract_lesson_from_resolution
+        """Step 23: Extract lessons from new resolutions and write to Qdrant."""
+        from pmacs.engines.lessons import extract_lesson_from_resolution, write_lesson_to_qdrant
 
         lessons_extracted = 0
         try:
@@ -2703,7 +2932,14 @@ class CycleOrchestrator:
                 )
                 if lesson is not None:
                     lessons_extracted += 1
-                    # Write lesson to storage
+                    # Write lesson to Qdrant with embedding (Architecture.md §8.7)
+                    qdrant = self._get_qdrant_adapter()
+                    if qdrant is not None:
+                        try:
+                            write_lesson_to_qdrant(lesson, qdrant)
+                        except Exception:
+                            pass
+                    # Write lesson to SQLite
                     try:
                         conn2 = sqlite3.connect(str(self._db_path))
                         try:
@@ -2814,7 +3050,23 @@ class CycleOrchestrator:
                 result = classify(ctx, holding_id=holding_id, cycle_id=cycle_id)
                 classified += 1
 
-                # Write classification to storage
+                # Write FailedAssumption to KuzuDB graph (Architecture.md §9 step 25)
+                kuzu = self._get_kuzu_adapter()
+                if kuzu is not None and result.primary.value != "UNCLASSIFIED":
+                    try:
+                        from uuid import uuid4 as _uuid4
+                        kuzu.write_failed_assumption(
+                            fa_id=str(_uuid4()),
+                            taxonomy=result.primary.value,
+                            severity=result.severity,
+                            holding_id=holding_id,
+                            cycle_id=cycle_id,
+                            summary=result.summary,
+                        )
+                    except Exception:
+                        pass
+
+                # Write classification to SQLite
                 try:
                     conn2 = sqlite3.connect(str(self._db_path))
                     try:
@@ -2881,13 +3133,28 @@ class CycleOrchestrator:
             )
 
     def _step_cross_db_consistency(self, cycle_id: str) -> None:
-        """Step 27: Cross-validate all storage backends."""
+        """Step 27: Cross-validate all storage backends (Architecture.md §14)."""
         from pmacs.storage.consistency import check_cross_db_consistency
 
+        # Build SQLite connection for cross-checks
+        sqlite_conn = None
+        try:
+            sqlite_conn = sqlite3.connect(str(self._db_path))
+        except Exception:
+            pass
+
         results = check_cross_db_consistency(
-            sqlite_path=str(self._db_path),
+            sqlite_conn=sqlite_conn,
+            kuzu_adapter=self._get_kuzu_adapter(),
+            qdrant_client=self._get_qdrant_adapter(),
             cycle_id=cycle_id,
         )
+
+        if sqlite_conn is not None:
+            try:
+                sqlite_conn.close()
+            except Exception:
+                pass
 
         status_summary = {
             r.store: r.status for r in results
@@ -3155,6 +3422,38 @@ def close_cycle(cycle_id: str, db_path: Path, audit_path: Path | None = None) ->
         cycle_id=cycle_id,
         msg=f"Cycle closed: {cycle_id[:8]}",
     )
+
+
+def _rebuild_evidence_brief(
+    evidence: list[Any],
+    attacks: list[dict[str, Any]],
+    arbitrated: Any,
+    ticker: str,
+) -> list[Any]:
+    """Rebuild evidence brief addressing Crucible cycle-1 attacks.
+
+    Deterministic Python merge: annotates original evidence with a
+    "crucible_attack_context" entry so cycle-2 Crucible can evaluate whether
+    the thesis addresses the identified flaws (Agents.md §16.1 REWRITE path).
+
+    The Crucible is not given new data -- it gets the same evidence plus a
+    structured summary of its own cycle-1 attacks. This ensures the rewrite
+    test is about whether the thesis *inherently* addresses the attacks, not
+    whether new evidence was cherry-picked to dodge them.
+    """
+    attack_summary: dict[str, Any] = {
+        "source": "crucible_rewrite_context",
+        "ticker": ticker,
+        "cycle_1_attacks": attacks,
+        "attack_count": len(attacks),
+        "thesis_direction": getattr(arbitrated, "decision", None),
+        "arbitrated_p_up": getattr(arbitrated, "p_up", None),
+        "arbitrated_p_down": getattr(arbitrated, "p_down", None),
+        "revised": True,
+    }
+
+    # Return a new list: original evidence + attack context annotation
+    return list(evidence) + [attack_summary]
 
 
 def _current_mode(db_path: Path) -> str:

@@ -2532,20 +2532,150 @@ class CycleOrchestrator:
 
             if needs_reeval:
                 reevaluated += 1
-                # Future wave: call _run_symbol() with re-eval evidence
-                # For now, update last_reeval_at
+                reeval_outcome = "unknown"
                 try:
-                    conn2 = sqlite3.connect(str(self._db_path))
-                    try:
-                        conn2.execute(
-                            "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
-                            (date.today().isoformat(), row[0]),
+                    # -- Re-eval pipeline: fetch evidence, run personas, arbitrate --
+                    from pmacs.data.evidence_router import fetch_evidence_for_ticker
+                    from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
+                    from pmacs.engines.state_machine import transition, is_valid_transition
+                    from pmacs.schemas.contracts import Holding, HoldingState
+
+                    ticker = row[1]
+                    holding_id = row[0]
+
+                    # Fetch fresh evidence
+                    evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
+                    evidence_list: list[Any] = list(evidence_packet.evidence)
+
+                    # Build a minimal brief for re-eval
+                    brief = f"WEEKLY_REEVAL: ticker={ticker}"
+
+                    # Dispatch personas with a 180s timeout (shorter than normal 270s)
+                    persona_results = self._dispatch_personas_with_timeout(
+                        evidence=evidence_list,
+                        brief=brief,
+                        cycle_id=cycle_id,
+                        ticker=ticker,
+                        timeout_seconds=180,
+                    )
+
+                    # Extract signals and arbitrate
+                    signals: list[ArbitrationSignal] = []
+                    for persona_name_str, raw_output in persona_results.items():
+                        dp = self._extract_directional_probability(
+                            persona_name_str, ticker, cycle_id, raw_output,
                         )
-                        conn2.commit()
-                    finally:
-                        conn2.close()
-                except sqlite3.OperationalError:
-                    pass
+                        if dp is not None:
+                            signals.append(ArbitrationSignal(dp))
+
+                    if signals:
+                        arbitrated = arbitrate(signals, cycle_id=cycle_id)
+
+                        if (
+                            arbitrated.decision.value.startswith("PROCEED")
+                            and arbitrated.p_up >= arbitrated.p_down
+                        ):
+                            # Thesis still valid — stay ACTIVE
+                            reeval_outcome = "thesis_valid"
+                            next_review = (date.today() + timedelta(days=7)).isoformat()
+                            conn2 = sqlite3.connect(str(self._db_path))
+                            try:
+                                conn2.execute(
+                                    "UPDATE holdings SET last_reeval_at = ?, "
+                                    "thesis_review_due_date = ? WHERE id = ?",
+                                    (date.today().isoformat(), next_review, holding_id),
+                                )
+                                conn2.commit()
+                            finally:
+                                conn2.close()
+                        else:
+                            # Thesis invalidated — transition to EXIT_THESIS_INVALIDATED
+                            reeval_outcome = "thesis_invalidated"
+                            holding = Holding(
+                                id=holding_id,
+                                ticker=ticker,
+                                state=HoldingState.ACTIVE,
+                                cycle_id_opened=cycle_id,
+                            )
+                            if is_valid_transition(
+                                holding.state, HoldingState.EXIT_THESIS_INVALIDATED,
+                            ):
+                                transition(
+                                    holding,
+                                    HoldingState.EXIT_THESIS_INVALIDATED,
+                                    f"reeval_thesis_invalidated:p_down={arbitrated.p_down:.2f}",
+                                    cycle_id,
+                                    0,
+                                )
+                            conn2 = sqlite3.connect(str(self._db_path))
+                            try:
+                                conn2.execute(
+                                    "UPDATE holdings SET state = ?, last_reeval_at = ? "
+                                    "WHERE id = ?",
+                                    (
+                                        HoldingState.EXIT_THESIS_INVALIDATED.value,
+                                        date.today().isoformat(),
+                                        holding_id,
+                                    ),
+                                )
+                                conn2.commit()
+                            finally:
+                                conn2.close()
+                    else:
+                        # No valid signals — update date only, don't exit
+                        reeval_outcome = "no_signals"
+                        conn2 = sqlite3.connect(str(self._db_path))
+                        try:
+                            conn2.execute(
+                                "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
+                                (date.today().isoformat(), holding_id),
+                            )
+                            conn2.commit()
+                        finally:
+                            conn2.close()
+
+                except Exception as exc:
+                    # Re-eval pipeline failure — fall back to date update only
+                    reeval_outcome = f"error:{str(exc)[:80]}"
+                    log_debug(
+                        "REEVAL_PIPELINE_FALLBACK",
+                        payload={
+                            "cycle_id": cycle_id,
+                            "ticker": row[1],
+                            "holding_id": row[0],
+                            "error": str(exc)[:200],
+                        },
+                        level="WARN",
+                        error_code="REEVAL_FAILED",
+                        cycle_id=cycle_id,
+                        msg=f"Re-eval pipeline failed for {row[1]}: {exc}, "
+                            f"falling back to date update",
+                    )
+                    try:
+                        conn2 = sqlite3.connect(str(self._db_path))
+                        try:
+                            conn2.execute(
+                                "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
+                                (date.today().isoformat(), row[0]),
+                            )
+                            conn2.commit()
+                        finally:
+                            conn2.close()
+                    except sqlite3.OperationalError:
+                        pass
+
+                log_debug(
+                    "REEVAL_SYMBOL_OUTCOME",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": row[1],
+                        "holding_id": row[0],
+                        "outcome": reeval_outcome,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Re-eval for {row[1]}: {reeval_outcome}",
+                )
 
         log_debug(
             "CYCLE_WEEKLY_REEVAL",

@@ -31,6 +31,7 @@
             <p class="text-xl font-mono font-semibold {{ 'text-green-600' if day_change_pct >= 0 else 'text-red-500' }}">
                 {{ "+" if day_change_pct >= 0 else "" }}{{ "%.2f"|format(day_change_pct) }}%
             </p>
+            <p class="text-xs text-zinc-400 font-mono mt-1">Last cycle: <span id="cycle-timing">--</span></p>
         </div>
     </div>
 </div>

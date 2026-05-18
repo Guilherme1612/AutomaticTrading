@@ -53,7 +53,7 @@ python ops/backup_verify.py restore --backup-dir <backup-dir>
 
 1. Open `http://localhost:8001`
 2. **Cortex page**: verify audit chain (green), process heartbeats (all green), disk free, clock drift, source connectivity
-3. **Dashboard**: check active positions, last cycle status, mode badge
+3. **Dashboard**: check active positions, last cycle status, mode badge, cycle timing
 4. If no cycle ran in 24h: click "Run cycle now" or let auto-cycle start
 
 ### During Market Hours
@@ -184,6 +184,17 @@ All shortcuts work from any page. Shortcuts are suppressed when a text input is 
 | `Cmd-Shift-K` | Open kill switch confirmation (any page) |
 | `Cmd-T` | Open TOTP input modal |
 | `?` | Show contextual help for current page |
+
+## Cycle Timing
+
+The dashboard shows the last cycle duration next to the Day Change metric. This updates in real-time via SSE when a cycle completes.
+
+Typical cycle times:
+- **Empty queue**: < 1s (no tickers to process)
+- **Single ticker**: 10-30s (personas + arbitration)
+- **Full 16-ticker cycle**: 3-8 minutes
+
+If cycle time exceeds 10 minutes, check the Debug page for slow persona responses or inference timeouts.
 
 ## Cycle Compare
 

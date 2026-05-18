@@ -20,15 +20,16 @@
 | [Phase 10](phases/phase-10/PLAN.md) | Broker Integration + Ops | Replace mock fills with Alpaca paper API, complete wizard, operational gaps | — |
 | [Phase 11](phases/phase-11/PLAN.md) | Polish + Operator Experience | Dynamic sparklines, a11y audit, perf profiling, workflow validation — **LIVE-READY** | — |
 | [Phase 12](phases/phase-12/PLAN.md) | Spec Gap Closure | Evidence pipeline, real prices, storage activation, engine completion, flywheel closure — **SPEC-COMPLIANT** | — |
+| [Phase 13](phases/phase-13/PLAN.md) | UI Polish | Cmd-K palette, toast system, sparklines, a11y audit, operator runbook — **PRODUCTION-READY** | — |
 
 ## Dependencies (linear chain)
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12
-                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C    ↑ SPEC-COMPLIANT
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12 → Phase 13
+                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C    ↑ SPEC-COMPLIANT              ↑ PRODUCTION-READY
 ```
 
-Phases 1-11 complete. System is LIVE-READY.
+Phases 1-12 complete. System is SPEC-COMPLIANT. Wave 5.3 UI polish deferred.
 
 ## Phase 9 Plans
 
@@ -54,6 +55,25 @@ Phases 1-11 complete. System is LIVE-READY.
 - [x] Wave 3: Accessibility Audit + Keyboard Shortcuts Validation
 - [x] Wave 4: Performance Profiling + Ops Tool Validation
 - [x] Wave 5: Operator Workflow Validation + Documentation Polish
+
+## Phase 12 Plans
+
+- [x] Wave 1: Data Pipeline Activation (evidence, prices, catalysts, EV)
+- [x] Wave 2: Storage Activation (KuzuDB, Qdrant, DuckDB)
+- [x] Wave 3: Engine Completion (Crucible, re-eval, cash ledger, MOO)
+- [x] Wave 4: Flywheel Closure (mutation SSE, lessons, episodic, mode gates)
+- [x] Wave 5: Ops + Test Coverage (scripts, tests; 5.3 UI polish → Phase 13)
+
+## Phase 13 Plans (Wave 5.3 Polish)
+
+- [ ] Cmd-K command palette
+- [ ] Toast notification system
+- [ ] Agents page animations (persona progress bars)
+- [ ] Accessibility audit (axe-core)
+- [ ] Performance profiling (cycle timing)
+- [ ] Operator runbook documentation
+- [ ] "Copy for Claude Code" button on debug events
+- [ ] Notification policy full implementation
 
 ## Operator Milestones
 

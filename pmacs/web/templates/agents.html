@@ -58,7 +58,7 @@
 <!-- 9 persona cards in a row -->
 <div class="grid grid-cols-3 gap-4 mb-6">
     {% for persona in personas %}
-    <div class="bg-surface-elevated border border-border rounded-lg p-5">
+    <div class="bg-surface-elevated border border-border rounded-lg p-5" data-stagger aria-live="polite">
         <div class="flex items-center justify-between mb-3">
             <h4 class="text-sm font-semibold text-text-primary">{{ persona.name }}</h4>
             <span class="px-1.5 py-0.5 text-xs rounded {{ 'bg-green-100 text-green-700' if loop.index <= 3 else 'bg-zinc-100 text-text-muted' }}">

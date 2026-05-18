@@ -1372,6 +1372,117 @@ document.addEventListener("DOMContentLoaded", checkViewportWidth);
     } catch (e) {}
 })();
 
+// ─── Focus Trap (Source.md §13.7 a11y) ────────────────────────────────────────
+
+var focusTrapState = { el: null, previouslyFocused: null };
+
+function trapFocus(modalEl) {
+    if (!modalEl) return;
+    focusTrapState.previouslyFocused = document.activeElement;
+    focusTrapState.el = modalEl;
+
+    var focusable = modalEl.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length === 0) return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+
+    first.focus();
+
+    modalEl._trapHandler = function (e) {
+        if (e.key !== "Tab") return;
+        if (e.shiftKey) {
+            if (document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            }
+        } else {
+            if (document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
+    };
+    modalEl.addEventListener("keydown", modalEl._trapHandler);
+}
+
+function releaseFocus() {
+    if (focusTrapState.el && focusTrapState.el._trapHandler) {
+        focusTrapState.el.removeEventListener("keydown", focusTrapState.el._trapHandler);
+        delete focusTrapState.el._trapHandler;
+    }
+    if (focusTrapState.previouslyFocused) {
+        focusTrapState.previouslyFocused.focus();
+        focusTrapState.previouslyFocused = null;
+    }
+    focusTrapState.el = null;
+}
+
+// ─── Cycle Timing (Source.md §15 performance) ────────────────────────────────
+
+var cycleTimings = [];
+
+onSSE("cycle", function (data) {
+    if (data.event === "cycle_start") {
+        cycleTimings.push({ start: Date.now(), ticker: data.ticker || "" });
+    }
+    if (data.event === "cycle_complete") {
+        var el = document.getElementById("cycle-timing");
+        if (!el) return;
+        var last = cycleTimings[cycleTimings.length - 1];
+        if (!last) return;
+        var duration = ((Date.now() - last.start) / 1000).toFixed(1);
+        el.textContent = duration + "s";
+        // Keep last 20
+        if (cycleTimings.length > 20) cycleTimings.shift();
+    }
+});
+
+// ─── Staggered Entrance (Source.md §13.7 a11y-safe) ──────────────────────────
+
+function initStaggeredEntrance() {
+    if (prefersReducedMotion) return;
+    var cards = document.querySelectorAll("[data-stagger]");
+    cards.forEach(function (card, i) {
+        card.style.opacity = "0";
+        card.style.transform = "translateY(8px)";
+        setTimeout(function () {
+            card.style.transition = "opacity 0.2s ease-out, transform 0.2s ease-out";
+            card.style.opacity = "1";
+            card.style.transform = "translateY(0)";
+        }, 40 * i);
+    });
+}
+
+document.addEventListener("DOMContentLoaded", initStaggeredEntrance);
+document.addEventListener("htmx:afterSwap", function (e) {
+    if (e.detail && e.detail.target && e.detail.target.id === "main-content") {
+        initStaggeredEntrance();
+    }
+});
+
+// ─── Modal focus trap wiring ─────────────────────────────────────────────────
+
+// Trap focus when modals open, release when they close
+var _origToggleCmdK = toggleCmdK;
+toggleCmdK = function () {
+    var el = document.getElementById("cmd-k");
+    var wasHidden = el && el.classList.contains("hidden");
+    _origToggleCmdK();
+    if (wasHidden) {
+        trapFocus(el);
+    } else {
+        releaseFocus();
+    }
+};
+
+var _origCloseCmdK = closeCmdK;
+closeCmdK = function () {
+    releaseFocus();
+    _origCloseCmdK();
+};
+
 // ─── HTMX afterSwap — reinitialize page-specific JS after navigation ─────────
 
 document.addEventListener("htmx:afterSwap", function (event) {

@@ -109,6 +109,11 @@
 </head>
 <body class="h-full bg-surface text-text-primary font-sans" hx-boost="true" hx-indicator="#htmx-indicator">
 
+    <!-- Skip to content (Source.md §13.7 a11y) -->
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:px-4 focus:py-2 focus:bg-blue-600 focus:text-white focus:rounded focus:text-sm focus:outline-none">
+        Skip to content
+    </a>
+
     <!-- Viewport width guard (Source.md §13.7: minimum 1024px) -->
     <div id="viewport-guard" class="hidden fixed inset-0 z-[100] bg-zinc-900 flex items-center justify-center" role="alert">
         <div class="text-center text-zinc-300">

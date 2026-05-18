@@ -86,12 +86,12 @@ class TestQdrantAdapter:
     def test_get_embedding_length(self):
         qa = QdrantAdapter()
         vec = qa.get_embedding("hello")
-        assert len(vec) == 8
+        assert len(vec) == 768  # bge-base-en-v1.5 dimension
 
     def test_get_embedding_values_in_range(self):
         qa = QdrantAdapter()
         vec = qa.get_embedding("any text")
-        assert all(0.0 <= v <= 1.0 for v in vec)
+        assert all(-1.0 <= v <= 1.0 for v in vec)  # cosine-normalized
 
     def test_search_returns_empty_list(self):
         qa = QdrantAdapter()

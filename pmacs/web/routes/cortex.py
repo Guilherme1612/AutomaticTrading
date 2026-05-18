@@ -34,6 +34,7 @@ async def cortex_page(request: Request):
                 "processes": cortex_data["processes"],
                 "disk_clock_network": cortex_data["disk_clock_network"],
                 "kill_switch": cortex_data["kill_switch"],
+                "kill_switch_history": cortex_data["kill_switch_history"],
                 "model_integrity": cortex_data["model_integrity"],
             },
         )

@@ -94,7 +94,7 @@ def execute_rollback(
 
     # SSE event
     if sse_publisher is not None:
-        sse_publisher.publish("mutation", "mutation.rollback", {
+        sse_publisher.publish("mutation", "mutation.rolled_back", {
             "proposal_id": proposal_id,
             "reason": reason,
             "rolled_back_at": now,

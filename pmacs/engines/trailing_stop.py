@@ -46,6 +46,7 @@ def maybe_arm_trailing(
     stop_loss_price: float,
     atr_20: float,
     is_armed: bool,
+    current_trailing: float = 0.0,
 ) -> TrailingStopState:
     """Arm trailing stop at profit_r > 1.5. Trailing = current - 1.0 * ATR_20.
 
@@ -55,14 +56,14 @@ def maybe_arm_trailing(
         stop_loss_price: Initial stop-loss price.
         atr_20: 20-day Average True Range.
         is_armed: Whether the trailing stop is already armed.
+        current_trailing: Current trailing stop price (preserved when re-arming).
 
     Returns:
         Updated TrailingStopState. If already armed, returns state with
-        armed=True but preserves existing trailing price (caller should use
-        maybe_ratchet_trailing to update the trailing price).
+        armed=True and preserves existing trailing price.
     """
     if is_armed:
-        return TrailingStopState(armed=True, trailing_stop_price=0.0)
+        return TrailingStopState(armed=True, trailing_stop_price=current_trailing)
 
     profit_r = compute_profit_r(entry_price, current_price, stop_loss_price)
     if profit_r > 1.5:

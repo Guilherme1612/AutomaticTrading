@@ -77,6 +77,32 @@ PROMOTION_THRESHOLDS: dict[str, dict[str, float | int]] = {
     },
 }
 
+# -- Mode demotion gates (Phases.md §3.5) --
+DEMOTION_THRESHOLDS: dict[str, dict[str, float]] = {
+    "LIVE_EXPANDED_to_LIVE_STANDARD": {
+        "window": 20,
+        "max_sharpe": 0.0,        # Sharpe < 0 triggers
+        "max_drawdown_pct": 12.0,  # drawdown > 12% triggers
+    },
+    "LIVE_STANDARD_to_LIVE_EARLY": {
+        "window": 20,
+        "max_sharpe": 0.0,
+        "max_drawdown_pct": 14.0,
+    },
+    "LIVE_EARLY_to_PAPER_VALIDATED": {
+        "window": 20,
+        "max_sharpe": 0.0,
+        "max_drawdown_pct": 16.0,
+    },
+    "PAPER_VALIDATED_to_PAPER": {
+        "window": 30,
+        "max_brier": 0.32,        # Brier > 0.32 triggers
+        "min_sharpe": -0.3,       # Sharpe < -0.3 triggers
+    },
+}
+
+DEMOTE_COOLDOWN_CYCLES: int = 10  # 10-cycle observation after demotion (§3.5 step 7)
+
 # -- Persona temperatures (Source.md, Agents.md) --
 TEMP_ANALYSIS: float = 0.2
 TEMP_CRUCIBLE: float = 0.1

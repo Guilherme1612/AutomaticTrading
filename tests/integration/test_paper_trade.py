@@ -307,23 +307,24 @@ class TestWizard:
         assert wizard.get_step() == WizardStep.WELCOME
 
         step = wizard.complete_step(WizardStep.WELCOME, {"welcome": True})
-        assert step == WizardStep.CHECK_SYSTEM
-        assert wizard.get_step() == WizardStep.CHECK_SYSTEM
+        assert step == WizardStep.INFERENCE_BACKEND
+        assert wizard.get_step() == WizardStep.INFERENCE_BACKEND
         assert wizard.config["welcome"] is True
 
     def test_wizard_full_progression(self) -> None:
         wizard = Wizard()
         steps = [
             WizardStep.WELCOME,
-            WizardStep.CHECK_SYSTEM,
-            WizardStep.CREATE_DIRS,
-            WizardStep.GENERATE_KEYS,
-            WizardStep.CONFIGURE_LLM,
-            WizardStep.VERIFY_LLM,
-            WizardStep.CONFIGURE_DATA,
-            WizardStep.VERIFY_DATA,
-            WizardStep.CONFIGURE_BROKER,
+            WizardStep.INFERENCE_BACKEND,
+            WizardStep.MODEL_DOWNLOAD,
+            WizardStep.KEYCHAIN_SETUP,
+            WizardStep.DB_INIT,
+            WizardStep.DATA_CONNECTIVITY,
+            WizardStep.UNIVERSE_SEED,
+            WizardStep.CYCLE_PREFERENCES,
+            WizardStep.TOTP_ENROLLMENT,
             WizardStep.SMOKE_TEST,
+            WizardStep.PROMOTE,
         ]
         for step in steps:
             wizard.complete_step(step)
@@ -335,12 +336,12 @@ class TestWizard:
         wizard = Wizard()
         completed, total = wizard.get_progress()
         assert completed == 0
-        assert total == 10  # All steps except COMPLETE
+        assert total == 11  # 11 actionable steps (Source.md §12.1)
 
         wizard.complete_step(WizardStep.WELCOME)
         completed, total = wizard.get_progress()
         assert completed == 1
-        assert total == 10
+        assert total == 11
 
     def test_wizard_cannot_complete_final_step(self) -> None:
         wizard = Wizard()
@@ -350,7 +351,7 @@ class TestWizard:
     def test_wizard_config_accumulation(self) -> None:
         wizard = Wizard()
         wizard.complete_step(WizardStep.WELCOME, {"step": "welcome"})
-        wizard.complete_step(WizardStep.CHECK_SYSTEM, {"python_ok": True})
+        wizard.complete_step(WizardStep.INFERENCE_BACKEND, {"python_ok": True})
         assert wizard.config == {"step": "welcome", "python_ok": True}
 
     def test_check_system_step(self) -> None:

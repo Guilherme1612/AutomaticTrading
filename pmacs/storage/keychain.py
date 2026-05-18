@@ -120,6 +120,32 @@ def set_api_key(service: str, account: str, key: str) -> None:
         ) from exc
 
 
+def read_key(dotted_name: str) -> str | None:
+    """Retrieve an API key using a dotted service name.
+
+    Convenience wrapper around get_api_key that splits a dotted name like
+    ``"pmacs.finnhub.api_key"`` into service=``"pmacs.finnhub"`` and
+    account=``"api_key"``.  Returns ``None`` on any failure instead of
+    raising, so callers can fall back gracefully.
+
+    Args:
+        dotted_name: Dotted string ``"<service>.<account>"`` or
+            ``"<service>.<sub>.<account>"``.  The *last* segment is the
+            account; everything before it is the service.
+
+    Returns:
+        The key string, or ``None`` if not found / unavailable.
+    """
+    parts = dotted_name.rsplit(".", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    service, account = parts
+    try:
+        return get_api_key(service, account)
+    except KeychainError:
+        return None
+
+
 def rotate_api_key(service: str, account: str, old_key: str, new_key: str) -> None:
     """Rotate an API key: verify old key matches, then replace with new.
 

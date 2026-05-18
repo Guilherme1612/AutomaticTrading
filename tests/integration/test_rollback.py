@@ -159,7 +159,7 @@ class TestRollbackSSENotification:
             sse_publisher=FakeSSE(),
         )
         assert len(events) == 1
-        assert events[0]["type"] == "mutation.rollback"
+        assert events[0]["type"] == "mutation.rolled_back"
         assert events[0]["data"]["proposal_id"] == "p1"
 
 

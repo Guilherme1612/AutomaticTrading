@@ -6,11 +6,8 @@ the five PMACS storage backends: SQLite, KuzuDB, Qdrant, DuckDB.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
-
-logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -226,7 +223,13 @@ def _check_sqlite_kuzu_holdings(
         for row in cursor.fetchall():
             sqlite_ids.add(str(row[0]))
     except Exception as exc:
-        logger.warning("SQLite holdings query failed: %s", exc)
+        log_debug(
+            "SQLITE_HOLDINGS_QUERY_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="SQLITE_QUERY_FAILED",
+            msg=f"SQLite holdings query failed: {exc}",
+        )
         return ConsistencyResult(
             store="sqlite",
             status="UNAVAILABLE",
@@ -238,7 +241,13 @@ def _check_sqlite_kuzu_holdings(
         for row in rows:
             kuzu_ids.add(str(row.get("id", "")))
     except Exception as exc:
-        logger.warning("KuzuDB holdings query failed: %s", exc)
+        log_debug(
+            "KUZU_HOLDINGS_QUERY_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="KUZU_QUERY_FAILED",
+            msg=f"KuzuDB holdings query failed: {exc}",
+        )
         return ConsistencyResult(
             store="sqlite",
             status="UNAVAILABLE",
@@ -310,7 +319,13 @@ def _check_kuzu_qdrant_theses(
             if eid:
                 thesis_ids.append(str(eid))
     except Exception as exc:
-        logger.warning("KuzuDB thesis query failed: %s", exc)
+        log_debug(
+            "KUZU_THESIS_QUERY_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="KUZU_QUERY_FAILED",
+            msg=f"KuzuDB thesis query failed: {exc}",
+        )
         return ConsistencyResult(
             store="kuzudb",
             status="UNAVAILABLE",
@@ -333,7 +348,13 @@ def _check_kuzu_qdrant_theses(
         )
         found_ids = {str(p.id) for p in found}
     except Exception as exc:
-        logger.warning("Qdrant retrieve failed: %s", exc)
+        log_debug(
+            "QDRANT_RETRIEVE_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="QDRANT_QUERY_FAILED",
+            msg=f"Qdrant retrieve failed: {exc}",
+        )
         return ConsistencyResult(
             store="kuzudb",
             status="UNAVAILABLE",
@@ -389,7 +410,13 @@ def _check_duckdb_kuzu_resolutions(
         for row in result.fetchall():
             duckdb_ids.add(str(row[0]))
     except Exception as exc:
-        logger.warning("DuckDB resolutions query failed: %s", exc)
+        log_debug(
+            "DUCKDB_RESOLUTIONS_QUERY_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="DUCKDB_QUERY_FAILED",
+            msg=f"DuckDB resolutions query failed: {exc}",
+        )
         return ConsistencyResult(
             store="duckdb",
             status="UNAVAILABLE",
@@ -411,7 +438,13 @@ def _check_duckdb_kuzu_resolutions(
         )
         kuzu_ids = {str(row.get("hid", "")) for row in rows if row.get("hid")}
     except Exception as exc:
-        logger.warning("KuzuDB resolution query failed: %s", exc)
+        log_debug(
+            "KUZU_RESOLUTION_QUERY_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="KUZU_QUERY_FAILED",
+            msg=f"KuzuDB resolution query failed: {exc}",
+        )
         return ConsistencyResult(
             store="duckdb",
             status="UNAVAILABLE",

@@ -111,6 +111,15 @@ class MutationDaemon:
             # 4. Stage proposals in SQLite
             for candidate in candidates:
                 self._stage_proposal(candidate, cycle_id)
+                if self._sse is not None:
+                    self._sse.publish("mutation", "mutation.proposed", {
+                        "mutation_id": candidate.id,
+                        "candidate_name": candidate.target,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "dimension": candidate.dimension,
+                        "trigger_taxonomy": candidate.trigger_taxonomy,
+                        "trigger_count": candidate.trigger_count,
+                    })
 
             # 5. Activate A/B tests for PROPOSED proposals
             self._activate_pending_ab_tests(cycle_id)
@@ -234,6 +243,12 @@ class MutationDaemon:
                         "started_at = ? WHERE id = ?",
                         (datetime.now(timezone.utc).isoformat(), proposal_id),
                     )
+                    if self._sse is not None:
+                        self._sse.publish("mutation", "mutation.ab_started", {
+                            "mutation_id": proposal_id,
+                            "candidate_name": proposal_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
             conn.commit()
         finally:
             conn.close()
@@ -266,6 +281,16 @@ class MutationDaemon:
                     self._runner.record_outcome(proposal_id, "control", control_val)
                 if candidate_val is not None:
                     self._runner.record_outcome(proposal_id, "candidate", candidate_val)
+                if self._sse is not None:
+                    state = self._runner.get_state(proposal_id)
+                    if state is not None:
+                        self._sse.publish("mutation", "mutation.ab_progress", {
+                            "mutation_id": proposal_id,
+                            "candidate_name": proposal_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "control_n": len(state.control_outcomes),
+                            "candidate_n": len(state.candidate_outcomes),
+                        })
                 continue
 
             # Fallback: read from SQLite mutation_outcomes table
@@ -327,6 +352,28 @@ class MutationDaemon:
                     ),
                 )
                 self._runner.complete(proposal_id)
+
+                # SSE events for A/B completion
+                if self._sse is not None:
+                    ts = datetime.now(timezone.utc).isoformat()
+                    self._sse.publish("mutation", "mutation.ab_complete", {
+                        "mutation_id": proposal_id,
+                        "candidate_name": proposal_id,
+                        "timestamp": ts,
+                        "effect_size": result.cohens_d,
+                        "p_value": result.p_value,
+                        "sample_size": result.sample_size,
+                        "significant": result.is_significant,
+                    })
+                    if new_status == "REJECTED":
+                        self._sse.publish("mutation", "mutation.rejected", {
+                            "mutation_id": proposal_id,
+                            "candidate_name": proposal_id,
+                            "timestamp": ts,
+                            "reason": "stat_test_not_significant",
+                            "p_value": result.p_value,
+                            "effect_size": result.cohens_d,
+                        })
             conn.commit()
         finally:
             conn.close()

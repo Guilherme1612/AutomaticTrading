@@ -6,6 +6,7 @@ IMPORTANT: Always use `usd_per_eur`, NEVER `eur_per_usd`.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,9 +15,11 @@ class FxRate(BaseModel):
     """Single FX rate snapshot. Convention: usd_per_eur (ECB standard)."""
     model_config = ConfigDict(frozen=True)
 
-    usd_per_eur: float = Field(gt=0, description="USD per 1 EUR (ECB convention)")
+    pair: Literal["EURUSD"] = "EURUSD"
+    usd_per_eur: float = Field(gt=0.5, lt=2.0, description="USD per 1 EUR (ECB convention)")
     business_date: date  # ECB publication date (CET-based)
     fetched_at: datetime  # UTC timestamp
+    source: Literal["ECB"] = "ECB"
 
     @model_validator(mode="after")
     def _no_eur_per_usd_field(self) -> "FxRate":

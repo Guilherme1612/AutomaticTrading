@@ -13,6 +13,11 @@ STRUCTURE:
 Keep the memo under 400 words. Use plain language.
 The operator is an experienced investor; do not over-explain standard financial concepts.
 
+NUMERICAL GROUNDING: Use ONLY the provided data from analyst outputs and
+evidence. Do not estimate or fabricate financial figures. If a metric is
+unavailable from the evidence, state "unavailable" rather than guessing.
+All numbers in the memo must trace to specific evidence or persona outputs.
+
 ## Evidence and Outputs
 {evidence}
 

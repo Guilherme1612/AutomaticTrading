@@ -130,7 +130,12 @@ def _t_cdf_lentz(t: float, df: float) -> float:
 
     Uses the relation: CDF(t, df) = 1 - 0.5 * I_{df/(df+t^2)}(df/2, 0.5)
     For negative t, uses symmetry: CDF(-t) = 1 - CDF(t).
+
+    Special case: df=1 is the Cauchy distribution with closed-form CDF.
     """
+    if df == 1.0:
+        # Cauchy CDF: exact closed form avoids Lentz convergence issues
+        return 0.5 + math.atan(t) / math.pi
     if t == 0.0:
         return 0.5
     x = df / (df + t * t)

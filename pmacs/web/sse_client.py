@@ -8,6 +8,8 @@ from typing import Callable
 
 import httpx
 
+from pmacs.logsys.debug_log import log_debug
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,7 +62,19 @@ class SSEClient:
                                             stream_name,
                                         )
                             except json.JSONDecodeError:
-                                logger.warning("SSE: invalid JSON in data line")
+                                log_debug(
+                                    "SSE_INVALID_JSON",
+                                    payload={"line": line[:200]},
+                                    level="WARN",
+                                    error_code="SSE_CONNECTION_FAILED",
+                                    msg="SSE: invalid JSON in data line",
+                                )
             except Exception:
-                logger.warning("SSE connection lost, reconnecting in 5s")
+                log_debug(
+                    "SSE_CONNECTION_LOST",
+                    payload={},
+                    level="WARN",
+                    error_code="SSE_CONNECTION_FAILED",
+                    msg="SSE connection lost, reconnecting in 5s",
+                )
                 time.sleep(5)

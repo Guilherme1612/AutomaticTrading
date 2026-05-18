@@ -22,9 +22,10 @@ from pydantic import BaseModel, ValidationError
 
 from pmacs.agents.grammars import load_grammar
 from pmacs.agents.sanity.base import BaseSanityValidator, SanityResult
+from pmacs.data.gateway import sanitize_evidence
 from pmacs.logsys import log_debug
 from pmacs.schemas.agents import PersonaOutput
-from pmacs.schemas.data import EvidencePacket
+from pmacs.schemas.data import Evidence, EvidencePacket
 from pmacs.storage.audit import AuditWriter
 
 
@@ -91,6 +92,11 @@ class PersonaRunner(ABC):
         After 3 total failures: log ABORTED_LLM, return None.
         """
         grammar_text = self._load_grammar()
+        evidence = self._sanitize_evidence_packets(evidence)
+        if episodic_context:
+            episodic_context = sanitize_evidence(
+                episodic_context, source="episodic", cycle_id=self.cycle_id,
+            )
         prompt = self.build_prompt(evidence, episodic_context)
         model_cls = self.get_pydantic_model()
         validator = self.get_sanity_validator()
@@ -262,6 +268,32 @@ class PersonaRunner(ABC):
             return load_grammar(self.grammar_name)
         except FileNotFoundError:
             return ""
+
+    def _sanitize_evidence_packets(
+        self, packets: list[EvidencePacket],
+    ) -> list[EvidencePacket]:
+        """Sanitize all text fields in evidence packets (Agents.md §19.2).
+
+        Returns new packets — never mutates (anti-pattern §16.4).
+        """
+        sanitized_packets: list[EvidencePacket] = []
+        for packet in packets:
+            new_evidence: list[Evidence] = []
+            for ev in packet.evidence:
+                new_data = {
+                    k: sanitize_evidence(v, source=ev.source.value, cycle_id=self.cycle_id)
+                    if isinstance(v, str)
+                    else v
+                    for k, v in ev.data.items()
+                }
+                new_title = (
+                    sanitize_evidence(ev.title, source=ev.source.value, cycle_id=self.cycle_id)
+                    if ev.title
+                    else ev.title
+                )
+                new_evidence.append(ev.model_copy(update={"data": new_data, "title": new_title}))
+            sanitized_packets.append(packet.model_copy(update={"evidence": new_evidence}))
+        return sanitized_packets
 
     def _call_llm(
         self, prompt: str, grammar: str, temperature: float, timeout: float = 120.0

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -91,7 +91,7 @@ VALID_TRANSITIONS: dict[HoldingState, frozenset[HoldingState]] = {
         HoldingState.ACTIVE, HoldingState.EXIT_THESIS_INVALIDATED,
         HoldingState.INTERRUPTED,
     }),
-    HoldingState.HALTED: frozenset({HoldingState.CANDIDATE}),
+    HoldingState.HALTED: frozenset({HoldingState.CANDIDATE, HoldingState.ACTIVE}),
 }
 
 ABORT_REASON_STATES = frozenset({
@@ -111,35 +111,109 @@ class Thesis(BaseModel):
     version: int = 1
     catalyst_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Holding(BaseModel):
-    """A holding through its lifecycle. State transitions via state_machine only."""
+    """A holding through its lifecycle. State transitions via state_machine only.
+
+    Architecture.md §8.3 — all fields must match spec exactly.
+    """
     model_config = ConfigDict(frozen=False)  # state machine mutates state
 
     id: str
     ticker: str
+    catalyst_id: str = ""
+
     state: HoldingState = HoldingState.CANDIDATE
+    mode: Literal["SHADOW", "PAPER", "PAPER_VALIDATED",
+                  "LIVE_EARLY", "LIVE_STANDARD", "LIVE_EXPANDED"] = "SHADOW"
+    abort_reason: str | None = None
+
+    # Entry
+    signal_price: float = 0.0
+    entry_date: datetime | date | None = None
+    entry_price: float | None = None
+    position_size_usd: float = 0.0
+    position_size_shares: float = 0.0
+
+    # Decision context (snapshot at entry)
+    original_p_up: float = 0.0
+    original_p_flat: float = 0.0
+    original_p_down: float = 0.0
+    original_ev_net: float = 0.0
+    original_conviction: float = 0.0
+    thesis_hash: str = ""
+    thesis_version: int = 1
+    thesis_embedding_id: str | None = None
+    fundamental_weights_moat: float = 0.0
+    fundamental_weights_growth: float = 0.0
+    matured_sources_at_entry: int = 0
+    crucible_severity_at_entry: float = 0.0
+
+    # Risk
+    stop_loss_price: float = 0.0
+    catastrophe_net_price: float = 0.0
+    trailing_stop_price: float | None = None
+    trailing_stop_armed: bool = False
+    thesis_review_due_date: date | None = None
+
+    # Exit
+    exit_date: datetime | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+    realized_pnl_usd: float | None = None
+    realized_pnl_pct: float | None = None
+
+    # Audit linkage
     cycle_id_opened: str = ""
     cycle_id_closed: str | None = None
+
+    # Extra fields for operational use (not in spec but needed by existing code)
     thesis: Thesis | None = None
-    entry_date: date | None = None
-    exit_date: date | None = None
-    entry_price_usd: float | None = None
-    exit_price_usd: float | None = None
-    position_size_usd: float | None = None
-    abort_reason: str | None = None
     sector: str | None = None
     subsector: str | None = None
     catalyst_type: str | None = None
     last_reeval_at: date | None = None
-    stop_price_usd: float | None = None
-    trailing_stop_price_usd: float | None = None
     verdict: str | None = None
     conviction_score: float | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Backward-compatible aliases (DB columns use _usd suffix; kept for migration)
+    entry_price_usd: float | None = None
+    exit_price_usd: float | None = None
+    stop_price_usd: float | None = None
+    trailing_stop_price_usd: float | None = None
+
+    @model_validator(mode="after")
+    def _sync_price_aliases(self) -> "Holding":
+        """Keep spec fields and _usd aliases in sync."""
+        if self.entry_price is not None and self.entry_price_usd is None:
+            object.__setattr__(self, "entry_price_usd", self.entry_price)
+        elif self.entry_price_usd is not None and self.entry_price is None:
+            object.__setattr__(self, "entry_price", self.entry_price_usd)
+        if self.exit_price is not None and self.exit_price_usd is None:
+            object.__setattr__(self, "exit_price_usd", self.exit_price)
+        elif self.exit_price_usd is not None and self.exit_price is None:
+            object.__setattr__(self, "exit_price", self.exit_price_usd)
+        if self.stop_loss_price and not self.stop_price_usd:
+            object.__setattr__(self, "stop_price_usd", self.stop_loss_price)
+        elif self.stop_price_usd and not self.stop_loss_price:
+            object.__setattr__(self, "stop_loss_price", self.stop_price_usd)
+        if self.trailing_stop_price is not None and self.trailing_stop_price_usd is None:
+            object.__setattr__(self, "trailing_stop_price_usd", self.trailing_stop_price)
+        elif self.trailing_stop_price_usd is not None and self.trailing_stop_price is None:
+            object.__setattr__(self, "trailing_stop_price", self.trailing_stop_price_usd)
+        return self
+
+    @model_validator(mode="after")
+    def _check_probabilities(self) -> "Holding":
+        """Validate original probabilities sum to 1.0 when set (Architecture.md §8.3)."""
+        total = self.original_p_up + self.original_p_flat + self.original_p_down
+        if total > 0 and abs(total - 1.0) > 1e-6:
+            raise ValueError(f"original probabilities sum to {total}, expected 1.0")
+        return self
 
     @model_validator(mode="after")
     def _validate_terminal_has_exit(self) -> "Holding":

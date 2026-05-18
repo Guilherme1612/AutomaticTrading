@@ -91,10 +91,16 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "QDRANT_UPSERT",
     "QDRANT_SEARCH",
     "QDRANT_COLLECTIONS_CREATED",
+    "QDRANT_CONNECTION_FAILED",
+    "QDRANT_UNAVAILABLE",
     "DUCKDB_TABLES_INITIALIZED",
     "DUCKDB_WRITE",
     # Dead letter queue (system-level, not cycle-scoped)
     "DEAD_LETTER_EXHAUSTED",
+    # Broker adapter events (not cycle-scoped)
+    "ALPACA_CANCEL_FAILED",
+    "ALPACA_SUBMIT_FAILED",
+    "ALPACA_POSITION_FETCH_FAILED",
 })
 
 # Module-level log file path (set during initialization)

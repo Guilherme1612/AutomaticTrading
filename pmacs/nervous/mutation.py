@@ -148,13 +148,13 @@ def apply_candidate_to_registry(
     writer.append("mutation_operator_promoted", audit_payload, cycle_id=cycle_id)
     writer.close()
 
-    # 6. SSE event
+    # 6. SSE event — mutation.promoted when operator TOTP-applies a candidate
     if sse_publisher is not None:
-        sse_publisher.publish("mutation", "mutation.ready_for_review", {
-            "proposal_id": proposal_id,
+        sse_publisher.publish("mutation", "mutation.promoted", {
+            "mutation_id": proposal_id,
+            "candidate_name": target,
+            "timestamp": now,
             "dimension": dimension,
-            "target": target,
-            "applied_at": now,
         })
 
     return {
@@ -236,7 +236,7 @@ def rollback_registry(
 
     # 6. SSE event
     if sse_publisher is not None:
-        sse_publisher.publish("mutation", "mutation.rollback", {
+        sse_publisher.publish("mutation", "mutation.rolled_back", {
             "proposal_id": proposal_id,
             "reason": reason,
             "rolled_back_at": now,

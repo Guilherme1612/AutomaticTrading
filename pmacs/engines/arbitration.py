@@ -18,6 +18,7 @@ Steps:
 
 from __future__ import annotations
 
+from pmacs.logsys.debug_log import log_debug
 from pmacs.schemas.agents import DirectionalProbability, PersonaName
 from pmacs.schemas.arbitration import (
     Arbitrated,
@@ -128,6 +129,25 @@ def _mature_disagree(signals: list[ArbitrationSignal]) -> bool:
     return has_up and has_down
 
 
+def disagreement_severity(signals: list[ArbitrationSignal]) -> float:
+    """Compute disagreement severity across mature sources (Architecture.md §9.1).
+
+    Returns 0.0 (full agreement) to 1.0 (maximum disagreement).
+    Uses variance of directional probabilities across sources.
+    """
+    if len(signals) < 2:
+        return 0.0
+
+    # Compute variance of p_up across sources
+    p_ups = [s.p_up for s in signals]
+    mean_up = sum(p_ups) / len(p_ups)
+    variance = sum((p - mean_up) ** 2 for p in p_ups) / len(p_ups)
+
+    # Normalize to 0-1 range (max variance for binary split = 0.25)
+    severity = min(1.0, variance / 0.25)
+    return severity
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -148,6 +168,12 @@ def arbitrate(
         Arbitrated with combined probabilities, weights, and decision.
     """
     if not signals:
+        log_debug(
+            "ARBITRATION_NO_SIGNALS",
+            payload={"ticker": "", "decision": "ABORT_NO_MATURE_SOURCES"},
+            cycle_id=cycle_id,
+            msg="No signals provided to arbitration",
+        )
         return Arbitrated(
             ticker="",
             cycle_id=cycle_id,
@@ -197,6 +223,12 @@ def arbitrate(
                 decision=ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE,
             )
         else:
+            log_debug(
+                "ARBITRATION_NO_MATURE_DISAGREE",
+                payload={"ticker": ticker, "immature_count": len(immature)},
+                cycle_id=cycle_id,
+                msg="Immature sources disagree, no mature sources",
+            )
             return Arbitrated(
                 ticker=ticker,
                 cycle_id=cycle_id,
@@ -211,6 +243,18 @@ def arbitrate(
 
     # 8. Agreement check on mature sources
     if _mature_disagree(mature):
+        log_debug(
+            "ARBITRATION_MATURE_DISAGREEMENT",
+            payload={
+                "ticker": ticker,
+                "mature_count": len(mature),
+                "severity": round(disagreement_severity(mature), 3),
+            },
+            cycle_id=cycle_id,
+            error_code="ARBITRATION_DISAGREEMENT",
+            level="WARN",
+            msg="Mature sources disagree on direction",
+        )
         return Arbitrated(
             ticker=ticker,
             cycle_id=cycle_id,
@@ -266,6 +310,20 @@ def arbitrate(
     directions = [_dominant_direction(s.p_up, s.p_flat, s.p_down) for s in mature]
     unique_dirs = set(directions)
     agreement = 1.0 if len(unique_dirs) == 1 else 0.5
+
+    log_debug(
+        "ARBITRATION_COMPLETE",
+        payload={
+            "ticker": ticker,
+            "p_up": round(p_up, 4),
+            "p_flat": round(p_flat, 4),
+            "p_down": round(p_down, 4),
+            "matured_sources_used": len(mature),
+            "agreement": round(agreement, 3),
+        },
+        cycle_id=cycle_id,
+        msg="Arbitration completed successfully",
+    )
 
     return Arbitrated(
         ticker=ticker,

@@ -18,6 +18,11 @@ probability distribution (~0.33 each).
 Your directional probability should reflect the SHORT INTEREST SIGNAL ONLY.
 Do not incorporate other factors.
 
+NUMERICAL GROUNDING: Use ONLY the provided evidence data. Do not estimate or
+fabricate short interest metrics, percentages, or volume figures. If short
+interest data is not in the evidence, output INSUFFICIENT_DATA rather than
+making up numbers. Cite specific evidence_ids for every claim.
+
 {evidence}
 
 {episodic_context}

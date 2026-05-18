@@ -121,7 +121,13 @@ class ExecutionService:
             try:
                 plan = TradePlan.model_validate_json(payload_bytes)
             except Exception as exc:
-                logger.error("Invalid TradePlan payload: %s", exc)
+                log_debug(
+                    "EXEC_INVALID_PLAN",
+                    payload={"error": str(exc)},
+                    level="ERROR",
+                    error_code="EXECUTION_SERVICE_ERROR",
+                    msg=f"Invalid TradePlan payload: {exc}",
+                )
                 response = {
                     "status": "REJECTED",
                     "reason": f"INVALID_PLAN: {exc}",

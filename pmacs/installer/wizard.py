@@ -10,18 +10,23 @@ from enum import Enum
 
 
 class WizardStep(Enum):
-    """Wizard steps in order. COMPLETE is the terminal state."""
-    WELCOME = 1
-    CHECK_SYSTEM = 2
-    CREATE_DIRS = 3
-    GENERATE_KEYS = 4
-    CONFIGURE_LLM = 5
-    VERIFY_LLM = 6
-    CONFIGURE_DATA = 7
-    VERIFY_DATA = 8
-    CONFIGURE_BROKER = 9
-    SMOKE_TEST = 10
-    COMPLETE = 11
+    """Wizard steps in order (Source.md §12.1). COMPLETE is the terminal state.
+
+    11 actionable steps match the spec's "11 dots" progress strip.
+    Step 4 includes the embedding model setup (spec §12.1 Step 4.5).
+    """
+    WELCOME = 1           # Step 1 — Welcome and system identity check
+    INFERENCE_BACKEND = 2  # Step 2 — Inference backend detection (llama-server)
+    MODEL_DOWNLOAD = 3     # Step 3 — Model download and SHA256 verification
+    KEYCHAIN_SETUP = 4     # Step 4 — macOS Keychain + embedding model setup (§4.5)
+    DB_INIT = 5            # Step 5 — Database initialization (all 5 stores)
+    DATA_CONNECTIVITY = 6  # Step 6 — Data source connectivity ping
+    UNIVERSE_SEED = 7      # Step 7 — Universe seed (16-ticker default)
+    CYCLE_PREFERENCES = 8  # Step 8 — Cycle preferences (currency, timezone)
+    TOTP_ENROLLMENT = 9    # Step 9 — TOTP enrollment (QR code)
+    SMOKE_TEST = 10        # Step 10 — Smoke-test cycle (synthetic fixtures)
+    PROMOTE = 11           # Step 11 — Promote to SHADOW + PAPER
+    COMPLETE = 12          # Terminal state
 
 
 class Wizard:

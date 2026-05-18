@@ -6,11 +6,10 @@ positions.  Pure deterministic math -- no LLM.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from pmacs.logsys.debug_log import log_debug
 
 # Default config path (relative to project root)
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "risk.toml"
@@ -35,7 +34,12 @@ def load_tolerance_from_config(config_path: str | Path | None = None) -> Toleran
     path = Path(config_path) if config_path is not None else _DEFAULT_CONFIG_PATH
 
     if not path.is_file():
-        logger.debug("Config file not found at %s, using default tolerances", path)
+        log_debug(
+            "RECONCILIATION_CONFIG_MISSING",
+            payload={"path": str(path)},
+            level="DEBUG",
+            msg=f"Config file not found at {path}, using default tolerances",
+        )
         return ToleranceConfig()
 
     try:
@@ -45,14 +49,25 @@ def load_tolerance_from_config(config_path: str | Path | None = None) -> Toleran
         try:
             import tomli as tomllib  # type: ignore[no-redef]
         except ImportError:
-            logger.debug("No TOML parser available, using default tolerances")
+            log_debug(
+                "RECONCILIATION_NO_TOML_PARSER",
+                payload={},
+                level="DEBUG",
+                msg="No TOML parser available, using default tolerances",
+            )
             return ToleranceConfig()
 
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     except Exception as exc:
-        logger.warning("Failed to parse %s: %s", path, exc)
+        log_debug(
+            "RECONCILIATION_CONFIG_PARSE_FAILED",
+            payload={"path": str(path), "error": str(exc)},
+            level="WARN",
+            error_code="RECONCILIATION_FAILED",
+            msg=f"Failed to parse {path}: {exc}",
+        )
         return ToleranceConfig()
 
     kill_switch = data.get("kill_switch", {})

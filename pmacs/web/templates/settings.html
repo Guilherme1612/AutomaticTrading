@@ -47,6 +47,40 @@
                         </select>
                     </dd>
                 </div>
+                <div class="flex justify-between items-center">
+                    <dt class="text-zinc-500">Display Currency</dt>
+                    <dd>
+                        <select id="currency-select" onchange="setDisplayPref('currency', this.value)"
+                                class="text-sm font-mono border border-zinc-200 rounded px-2 py-1 bg-white">
+                            <option value="USD" selected>USD — US Dollar</option>
+                            <option value="EUR">EUR — Euro</option>
+                        </select>
+                    </dd>
+                </div>
+                <div class="flex justify-between items-center">
+                    <dt class="text-zinc-500">Display Density</dt>
+                    <dd>
+                        <select id="density-select" onchange="setDisplayPref('density', this.value)"
+                                class="text-sm font-mono border border-zinc-200 rounded px-2 py-1 bg-white">
+                            <option value="compact">Compact</option>
+                            <option value="comfortable" selected>Comfortable</option>
+                            <option value="spacious">Spacious</option>
+                        </select>
+                    </dd>
+                </div>
+                <div class="flex justify-between items-center">
+                    <dt class="text-zinc-500">EOD Timezone</dt>
+                    <dd>
+                        <select id="timezone-select" onchange="setDisplayPref('timezone', this.value)"
+                                class="text-sm font-mono border border-zinc-200 rounded px-2 py-1 bg-white">
+                            <option value="America/New_York" selected>US Eastern (ET)</option>
+                            <option value="America/Chicago">US Central (CT)</option>
+                            <option value="Europe/London">London (GMT/BST)</option>
+                            <option value="Europe/Berlin">Central European (CET)</option>
+                            <option value="Asia/Tokyo">Tokyo (JST)</option>
+                        </select>
+                    </dd>
+                </div>
             </dl>
             <div class="border-t border-zinc-100 mt-4 pt-4">
                 <h4 class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Notification Levels</h4>
@@ -80,26 +114,38 @@
             <dl class="space-y-3 text-left max-w-lg">
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Max Single Position</dt>
-                    <dd class="font-mono">20% ($1,000)</dd>
+                    <dd class="font-mono">{{ (config.get('risk', {}).get('max_single_position_pct', 0.20) * 100) | int }}% (${{ (config.get('risk', {}).get('max_single_position_pct', 0.20) * 5000) | int }})</dd>
                 </div>
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Catastrophe-net Stop</dt>
-                    <dd class="font-mono">15% below entry</dd>
+                    <dd class="font-mono">{{ (config.get('risk', {}).get('catastrophe_net_pct', 0.15) * 100) | int }}% below entry</dd>
                 </div>
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">EV Minimum</dt>
-                    <dd class="font-mono">--</dd>
+                    <dd class="font-mono">{{ config.get('risk', {}).get('ev_minimum_pct', 0.01) }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Concurrent Positions</dt>
+                    <dd class="font-mono">{{ config.get('risk', {}).get('max_concurrent', 5) }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Kill Switch Daily Loss</dt>
+                    <dd class="font-mono">{{ (config.get('risk', {}).get('kill_switch_daily_loss_pct', 0.05) * 100) | int }}%</dd>
                 </div>
             </dl>
             {% elif section == "Crucible" %}
             <dl class="space-y-3 text-left max-w-lg">
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Time Budget</dt>
-                    <dd class="font-mono">90s per attack</dd>
+                    <dd class="font-mono">{{ config.get('crucible', {}).get('time_budget_s', 90) }}s per attack</dd>
                 </div>
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Max Cycles</dt>
-                    <dd class="font-mono">2</dd>
+                    <dd class="font-mono">{{ config.get('crucible', {}).get('max_cycles', 2) }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Severity No-Trade</dt>
+                    <dd class="font-mono">{{ config.get('crucible', {}).get('severity_no_trade', 0.6) }}</dd>
                 </div>
                 <div class="flex justify-between">
                     <dt class="text-zinc-500">Temperature</dt>
@@ -161,6 +207,10 @@
                             {% endif %}
                         </div>
                         <div class="flex gap-2 mt-3">
+                            <button onclick="viewDiff('{{ candidate.candidate_id }}')"
+                                    class="px-3 py-1 text-xs border border-zinc-200 text-zinc-600 rounded hover:bg-zinc-100 transition-colors">
+                                View Diff
+                            </button>
                             <button onclick="promoteMutation('{{ candidate.candidate_id }}')"
                                     class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
                                 Promote (TOTP)
@@ -224,9 +274,134 @@
                     <dt class="text-zinc-500">Analysis Temperature</dt>
                     <dd class="font-mono">0.2</dd>
                 </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Crucible Temperature</dt>
+                    <dd class="font-mono">0.1</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Memo Writer Temperature</dt>
+                    <dd class="font-mono">0.3</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Concurrent Slots</dt>
+                    <dd class="font-mono">{{ config.get('resources', {}).get('max_slots', '--') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Model</dt>
+                    <dd class="font-mono text-xs">{{ config.get('model_registry', {}).get('primary', {}).get('gguf_path', '--') }}</dd>
+                </div>
+            </dl>
+            {% elif section == "Brokers" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Paper Broker</dt>
+                    <dd class="font-mono">Alpaca Paper</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Live Broker</dt>
+                    <dd class="font-mono">Alpaca</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Paper API Key</dt>
+                    <dd class="font-mono">{{ 'Configured' if config.get('broker', {}).get('alpaca_paper_key') else 'Not set' }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">IBKR Connection</dt>
+                    <dd class="font-mono text-zinc-400">Future (not in current scope)</dd>
+                </div>
+            </dl>
+            {% elif section == "Universe" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Universe Size</dt>
+                    <dd class="font-mono">{{ config.get('universe', {}).get('size', 'Dynamic') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Rotation Frequency</dt>
+                    <dd class="font-mono">{{ config.get('universe', {}).get('rotation', 'Weekly') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Index Overlay</dt>
+                    <dd class="font-mono">{{ config.get('universe', {}).get('index_overlay', 'Enabled') }}</dd>
+                </div>
+            </dl>
+            {% elif section == "Agent Personas" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                {% for persona in ['catalyst_summarizer', 'crucible', 'forensics', 'growth_hunter', 'insider_activity', 'macro_regime', 'moat_analyst', 'short_interest', 'memo_writer'] %}
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">{{ persona | replace('_', ' ') | title }}</dt>
+                    <dd class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                        <span class="font-mono text-xs text-green-600">Active</span>
+                    </dd>
+                </div>
+                {% endfor %}
+                <div class="flex justify-between mt-2 pt-2 border-t border-zinc-100">
+                    <dt class="text-zinc-500">Total Personas</dt>
+                    <dd class="font-mono">9</dd>
+                </div>
+            </dl>
+            {% elif section == "Queue" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Priority Bands</dt>
+                    <dd class="font-mono">3 (HIGH, NORMAL, LOW)</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Max Concurrent Analysis</dt>
+                    <dd class="font-mono">{{ config.get('resources', {}).get('max_slots', 3) }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Cycle Time Limit</dt>
+                    <dd class="font-mono">{{ config.get('resources', {}).get('cycle_time_limit_s', 300) }}s</dd>
+                </div>
+            </dl>
+            {% elif section == "Audit & Debug" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Audit Log Path</dt>
+                    <dd class="font-mono text-xs">data/audit.log</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Debug Log Level</dt>
+                    <dd class="font-mono">{{ config.get('debug', {}).get('level', 'INFO') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Chain Verification</dt>
+                    <dd class="font-mono text-green-600">Enabled</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Hash Algorithm</dt>
+                    <dd class="font-mono">SHA-256</dd>
+                </div>
+            </dl>
+            {% elif section == "Operator" %}
+            <dl class="space-y-3 text-left max-w-lg">
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Current Mode</dt>
+                    <dd class="font-mono">{{ mode }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">TOTP Status</dt>
+                    <dd class="font-mono text-green-600">Configured</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-zinc-500">Mode Override</dt>
+                    <dd>
+                        <button onclick="open_totp_modal({
+                            actionId: 'settings.mode_override',
+                            description: 'Override system mode',
+                            consequences: 'Bypasses promotion gate checks. The system has not proven performance at the target level.',
+                            callbackUrl: '/api/settings/mode_override',
+                            onSuccess: function() { window.location.reload(); }
+                        })" class="px-3 py-1 text-xs border border-zinc-200 text-zinc-600 rounded hover:bg-zinc-100 transition-colors">
+                            Force Promote/Demote (TOTP)
+                        </button>
+                    </dd>
+                </div>
             </dl>
             {% else %}
-            <p>No configuration loaded. Connect to pmacs-nervous to populate.</p>
+            <p class="text-sm text-zinc-400">No configuration loaded for this section.</p>
             {% endif %}
         </div>
     </div>
@@ -252,6 +427,17 @@ function setTheme(mode) {
     } else {
         root.classList.remove("dark");
     }
+}
+
+// Display preferences (Source.md §20.2)
+function setDisplayPref(key, value) {
+    try { localStorage.setItem("pmacs-" + key, value); } catch (e) {}
+    if (key === "density") {
+        var root = document.documentElement;
+        root.classList.remove("density-compact", "density-comfortable", "density-spacious");
+        root.classList.add("density-" + value);
+    }
+    showToast("Display preference saved: " + key + " = " + value, "success", 1500);
 }
 
 // Notification level changes (Source.md §13.5)
@@ -318,6 +504,75 @@ function rollbackMutation(candidateId) {
         }
     });
 }
+
+// Diff viewer (Source.md §13.3)
+function viewDiff(candidateId) {
+    var modal = document.getElementById('diff-modal');
+    var container = document.getElementById('diff-container');
+    container.innerHTML = '<p class="text-xs text-zinc-400">Loading diff...</p>';
+    modal.classList.remove('hidden');
+
+    fetch('/api/mutation/' + candidateId + '/diff')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok) { container.innerHTML = '<p class="text-xs text-red-500">Error: ' + data.error + '</p>'; return; }
+            window._diffData = data;
+            renderDiff('side-by-side');
+        });
+}
+
+function renderDiff(mode) {
+    var container = document.getElementById('diff-container');
+    var data = window._diffData;
+    if (mode === 'unified') {
+        var lines = data.unified.split('\n');
+        var html = '<pre class="text-xs font-mono whitespace-pre overflow-x-auto">';
+        for (var i = 0; i < lines.length; i++) {
+            var cls = lines[i].startsWith('+') ? 'text-green-600' : lines[i].startsWith('-') ? 'text-red-600' : 'text-zinc-600';
+            html += '<span class="' + cls + '">' + lines[i].replace(/</g,'&lt;') + '</span>\n';
+        }
+        html += '</pre>';
+        container.innerHTML = html;
+    } else {
+        container.innerHTML = data.diff_html;
+    }
+    // Update toggle buttons
+    document.getElementById('btn-sbs').className = mode === 'side-by-side'
+        ? 'px-3 py-1 text-xs rounded bg-zinc-800 text-white' : 'px-3 py-1 text-xs rounded border border-zinc-200 text-zinc-600';
+    document.getElementById('btn-unified').className = mode === 'unified'
+        ? 'px-3 py-1 text-xs rounded bg-zinc-800 text-white' : 'px-3 py-1 text-xs rounded border border-zinc-200 text-zinc-600';
+}
+
+function copyDiffText(side) {
+    var data = window._diffData;
+    var text = side === 'baseline' ? data.baseline : data.candidate;
+    navigator.clipboard.writeText(text).then(function() {
+        showToast('Copied ' + side, 'success');
+    });
+}
+
+function closeDiffModal() {
+    document.getElementById('diff-modal').classList.add('hidden');
+}
 </script>
+
+<!-- Diff Modal -->
+<div id="diff-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6">
+    <div class="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[80vh] flex flex-col">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-200">
+            <h3 class="text-sm font-semibold text-zinc-900">Mutation Diff</h3>
+            <div class="flex items-center gap-2">
+                <button id="btn-sbs" onclick="renderDiff('side-by-side')" class="px-3 py-1 text-xs rounded bg-zinc-800 text-white">Side by Side</button>
+                <button id="btn-unified" onclick="renderDiff('unified')" class="px-3 py-1 text-xs rounded border border-zinc-200 text-zinc-600">Unified</button>
+                <span class="text-zinc-300 mx-1">|</span>
+                <button onclick="copyDiffText('baseline')" class="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700">Copy Baseline</button>
+                <button onclick="copyDiffText('candidate')" class="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-700">Copy Candidate</button>
+                <span class="text-zinc-300 mx-1">|</span>
+                <button onclick="closeDiffModal()" class="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-600">&times; Close</button>
+            </div>
+        </div>
+        <div id="diff-container" class="overflow-auto p-4 flex-1"></div>
+    </div>
+</div>
 {% endif %}
 {% endblock %}

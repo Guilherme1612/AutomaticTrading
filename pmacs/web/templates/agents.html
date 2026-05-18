@@ -18,19 +18,28 @@
 </div>
 {% endif %}
 
-<!-- Queue strip -->
+<!-- Queue strip with drag-reorder (Source.md §16.5) -->
 <div class="bg-surface-elevated border border-border rounded-lg p-4 mb-6">
     <div class="flex items-center gap-4">
         <h3 class="text-sm font-semibold text-text-primary">Queue</h3>
-        <div class="flex gap-2">
+        <div id="queue-list" class="flex gap-2 flex-wrap">
             {% if queue %}
                 {% for item in queue %}
-                <span class="px-2 py-1 text-xs font-mono bg-zinc-100 rounded">{{ item }}</span>
+                <span class="px-2 py-1 text-xs font-mono bg-zinc-100 rounded cursor-grab active:cursor-grabbing"
+                      draggable="true" data-ticker="{{ item }}"
+                      ondragstart="queueDragStart(event)" ondragover="queueDragOver(event)" ondrop="queueDrop(event)">
+                    {{ item }}
+                </span>
                 {% endfor %}
             {% else %}
                 <span class="text-sm text-text-muted">Empty</span>
             {% endif %}
         </div>
+        {% if queue and queue|length > 0 %}
+        <button onclick="promoteQueueHead()" class="ml-auto px-3 py-1 text-xs border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
+            Promote P1 Head
+        </button>
+        {% endif %}
     </div>
 </div>
 
@@ -154,6 +163,54 @@
 <!-- Load sankey module (Source.md §13.3 Sankey) -->
 <script src="/static/sankey.js"></script>
 <script>
+// Queue drag-reorder (Source.md §16.5)
+var _draggedTicker = null;
+
+function queueDragStart(e) {
+    _draggedTicker = e.target.getAttribute("data-ticker");
+    e.dataTransfer.effectAllowed = "move";
+    e.target.style.opacity = "0.5";
+}
+
+function queueDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+}
+
+function queueDrop(e) {
+    e.preventDefault();
+    var target = e.target.getAttribute("data-ticker");
+    if (!_draggedTicker || !target || _draggedTicker === target) return;
+    // Reorder in DOM
+    var list = document.getElementById("queue-list");
+    var items = Array.from(list.children);
+    var draggedEl = items.find(function(el) { return el.getAttribute("data-ticker") === _draggedTicker; });
+    var targetEl = items.find(function(el) { return el.getAttribute("data-ticker") === target; });
+    if (draggedEl && targetEl) {
+        list.insertBefore(draggedEl, targetEl);
+        // Persist new order
+        var newOrder = Array.from(list.children).map(function(el) { return el.getAttribute("data-ticker"); });
+        fetch("/api/queue/reorder", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({order: newOrder})
+        }).then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) showToast("Queue reordered", "success", 1500);
+        });
+    }
+    draggedEl.style.opacity = "1";
+    _draggedTicker = null;
+}
+
+function promoteQueueHead() {
+    var list = document.getElementById("queue-list");
+    var first = list.querySelector("[data-ticker]");
+    if (!first) return;
+    var ticker = first.getAttribute("data-ticker");
+    showToast(ticker + " promoted to next cycle head", "success", 2000);
+}
+
 // Initialize sankey visualization on page load
 document.addEventListener("DOMContentLoaded", function () {
     if (typeof PMACS_SANKEY !== "undefined") {

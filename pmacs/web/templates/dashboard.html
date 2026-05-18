@@ -24,6 +24,7 @@
         <div>
             <p class="text-sm text-zinc-500">Portfolio Value</p>
             <p class="text-3xl font-mono font-semibold text-zinc-900">${{ "{:,.2f}".format(portfolio_value) }}</p>
+            <p class="text-xs text-zinc-400 font-mono mt-1">~{{ "%.2f"|format(portfolio_value * 0.92) }} EUR</p>
         </div>
         <div class="text-right">
             <p class="text-sm text-zinc-500">Day Change</p>

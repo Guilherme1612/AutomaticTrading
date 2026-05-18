@@ -52,8 +52,8 @@ class AuditWriter:
         """Append an event to the audit log. Returns this entry's SHA256."""
         iso_ts = datetime.now(timezone.utc).isoformat()
 
-        # Add cycle_id to payload if provided
-        if cycle_id:
+        # Add cycle_id to payload if provided and not already present
+        if cycle_id and "cycle_id" not in payload:
             payload = {**payload, "cycle_id": cycle_id}
 
         canon = canonical_json(payload)

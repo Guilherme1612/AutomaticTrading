@@ -616,6 +616,57 @@ def get_settings(config_dir: str | Path) -> dict[str, Any]:
     return result
 
 
+def get_kill_switch_history(
+    audit_path: str | Path, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Get recent kill switch trigger events from audit log (Source.md §18.6).
+
+    Returns last `limit` events with timestamp, reason, and trigger type.
+    """
+    audit_path = Path(audit_path)
+    if not audit_path.exists():
+        return []
+
+    events: list[dict[str, Any]] = []
+    try:
+        # Read lines from end of file (most recent first)
+        with open(audit_path) as f:
+            lines = f.readlines()
+    except Exception:
+        return []
+
+    for line in reversed(lines):
+        if len(events) >= limit:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            import json
+
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        event_type = entry.get("event", "")
+        # Kill switch engagements
+        if event_type == "kill_switch_engaged":
+            events.append({
+                "timestamp": entry.get("ts", ""),
+                "reason": entry.get("payload", {}).get("reason", "Unknown"),
+                "trigger_type": "manual",
+            })
+        # Auto-demotion triggers
+        elif event_type == "mode_changed" and entry.get("payload", {}).get("triggered_by") == "AUTO_DEMOTION":
+            events.append({
+                "timestamp": entry.get("ts", ""),
+                "reason": entry.get("payload", {}).get("reason", "Auto-demotion"),
+                "trigger_type": "auto_demotion",
+            })
+
+    return events
+
+
 def get_cortex_status(
     db: sqlite3.Connection,
     heartbeat_dir: Path,
@@ -688,6 +739,7 @@ def get_cortex_status(
             "network_ok": True,
         },
         "kill_switch": {"engaged": False, "totp_required": True},
+        "kill_switch_history": get_kill_switch_history(audit_path),
         "model_integrity": {"hash_verified": False, "model_path": "--"},
     }
 

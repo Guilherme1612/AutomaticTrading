@@ -15,6 +15,11 @@ Distinguish between open-market purchases (signal) and options exercises/sales
 Your directional probability should reflect the INSIDER ACTIVITY SIGNAL ONLY.
 Do not incorporate other factors.
 
+NUMERICAL GROUNDING: Use ONLY the provided evidence data. Do not estimate or
+fabricate financial figures, transaction amounts, or dates. If filing data is
+not in the evidence, state "data unavailable" rather than guessing. Cite
+specific evidence_ids for every claim.
+
 {evidence}
 
 {episodic_context}

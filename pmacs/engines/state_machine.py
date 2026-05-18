@@ -2,12 +2,16 @@
 
 Direct mutation of holding.state is FORBIDDEN outside this module.
 CI grep-fails on `holding.state =` outside state_machine.py.
+
+Architecture.md §5.1: Every state transition is hash-chained.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
+from pmacs.logsys import log_debug
 from pmacs.schemas.contracts import (
     ABORT_REASON_STATES,
     TERMINAL_STATES,
@@ -24,10 +28,12 @@ def transition(
     reason: str,
     cycle_id: str,
     op_seq: int,
+    audit_path: Path | None = None,
 ) -> Holding:
     """Transition a holding to a new state.
 
     This is the ONLY place Holding.state changes. Direct mutation is forbidden.
+    Every transition is logged to the audit chain (Architecture.md §5.1).
 
     Args:
         holding: The holding to transition.
@@ -35,6 +41,7 @@ def transition(
         reason: Human-readable reason for the transition.
         cycle_id: The current cycle ID.
         op_seq: Operation sequence number within the cycle.
+        audit_path: Optional path to audit.log for hash-chained recording.
 
     Returns:
         The updated holding (state changed).
@@ -76,6 +83,31 @@ def transition(
     # Record the transition in cycle_id_closed for closing transitions
     if new_state in TERMINAL_STATES and holding.cycle_id_closed is None:
         holding.cycle_id_closed = cycle_id
+
+    # Hash-chained audit log (Architecture.md §5.1)
+    transition_event = {
+        "holding_id": holding.id,
+        "from": current.value,
+        "to": new_state.value,
+        "reason": reason,
+        "op_seq": op_seq,
+    }
+    if audit_path is not None:
+        from pmacs.storage.audit import AuditWriter
+        writer = AuditWriter(audit_path)
+        writer.append(
+            "state_transition",
+            transition_event,
+            cycle_id=cycle_id,
+        )
+
+    log_debug(
+        "STATE_TRANSITION",
+        payload=transition_event,
+        level="INFO",
+        cycle_id=cycle_id,
+        msg=f"Holding {holding.id[:8]}: {current.value} -> {new_state.value} ({reason})",
+    )
 
     return holding
 

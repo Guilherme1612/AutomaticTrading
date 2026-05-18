@@ -16,6 +16,11 @@
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-zinc-900">Ticker Universe</h3>
         <div class="flex gap-2">
+            <label class="flex items-center gap-2 px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors cursor-pointer">
+                <input type="checkbox" id="index-overlay-toggle" onchange="toggleIndexOverlay(this.checked)"
+                       class="rounded border-zinc-300">
+                <span class="text-zinc-600">Nasdaq-100 Overlay</span>
+            </label>
             <button onclick="addTickerPrompt()"
                     class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
                 Add Ticker
@@ -90,6 +95,27 @@
     {% endif %}
 </div>
 <script>
+// Index overlay toggle (Source.md §17.5)
+function toggleIndexOverlay(enabled) {
+    fetch("/api/universe/index-overlay", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({enabled: enabled})
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            showToast(enabled ? "Nasdaq-100 overlay enabled" : "Nasdaq-100 overlay disabled", "success");
+            setTimeout(function() { window.location.reload(); }, 1000);
+        } else {
+            showToast("Failed: " + (data.error || "Unknown"), "error");
+            document.getElementById("index-overlay-toggle").checked = !enabled;
+        }
+    }).catch(function(err) {
+        showToast("Error: " + err.message, "error");
+        document.getElementById("index-overlay-toggle").checked = !enabled;
+    });
+}
+
 function addTickerPrompt() {
     open_totp_modal({
         actionId: "universe.add_ticker",

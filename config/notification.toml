@@ -1,0 +1,35 @@
+# Notification levels per event category (Source.md §13.5, §20.2)
+# Levels: "toast", "toast+sound", "modal", "none"
+
+[cycle_start]
+level = "toast"
+
+[cycle_complete]
+level = "toast"
+
+[trade_filled_paper]
+level = "toast"
+
+[trade_filled_live]
+level = "toast+sound"
+
+[kill_switch_engaged]
+level = "modal"  # Cannot be silenced (enforced server-side)
+
+[audit_chain_failure]
+level = "modal"  # Cannot be silenced (enforced server-side)
+
+[stop_loss_triggered]
+level = "toast+sound"
+
+[mutation_candidate_ready]
+level = "toast"
+
+[mode_changed]
+level = "toast+sound"
+
+[demotion_triggered]
+level = "toast+sound"
+
+[persona_aborted]
+level = "toast"

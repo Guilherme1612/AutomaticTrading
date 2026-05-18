@@ -12,6 +12,7 @@ from typing import Any
 
 from pmacs.constants import MUTATION_ACTIVATION_CYCLES
 from pmacs.schemas.mutation import MutationDimension
+from pmacs.storage.audit import canonical_json
 
 # Rule-based candidate generation (Agents.md §17.2)
 GENERATION_RULES: list[dict] = [
@@ -69,6 +70,39 @@ GENERATION_RULES: list[dict] = [
         "target": "sizing.half_kelly_multiplier",
         "candidate_change": "Reduce from 0.5 to 0.4",
     },
+    # -- Additional rules from spec analysis (Agents.md §17.2) --
+    {
+        "taxonomy": "INSIDER_SIGNAL_FALSE",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": MutationDimension.PERSONA_WEIGHT,
+        "target": "insider_activity.weight",
+        "candidate_change": "Decrease insider_activity weight by 10-15%",
+    },
+    {
+        "taxonomy": "SHORT_INTEREST_CORRECT",
+        "min_count": 5,
+        "window_cycles": 30,
+        "dimension": MutationDimension.PERSONA_WEIGHT,
+        "target": "short_interest.weight",
+        "candidate_change": "Increase short_interest weight by 10-15%",
+    },
+    {
+        "taxonomy": "PERSONA_BRIER_DRIFT",
+        "min_count": 3,
+        "window_cycles": 50,
+        "dimension": MutationDimension.PERSONA_PROMPT,
+        "target": "affected_persona.system_prompt",
+        "candidate_change": "Add stronger evidence-citation requirements for drifted persona",
+    },
+    {
+        "taxonomy": "PERSONA_TICKER_AFFINITY",
+        "min_count": 3,
+        "window_cycles": 50,
+        "dimension": MutationDimension.PERSONA_WEIGHT,
+        "target": "affected_persona.ticker_affinity",
+        "candidate_change": "Adjust persona weight +/-10% based on observed Brier by ticker",
+    },
 ]
 
 
@@ -110,7 +144,7 @@ def generate_candidates(
         ]
         count = sum(f.get("count", 0) for f in matching)
         if count >= rule["min_count"]:
-            baseline = json.dumps({"current": "production"})
+            baseline = canonical_json({"current": "production"})
             candidate_id = hashlib.sha256(
                 f"{rule['dimension']}:{rule['target']}:{rule['taxonomy']}".encode()
             ).hexdigest()[:16]
@@ -122,7 +156,7 @@ def generate_candidates(
                     trigger_taxonomy=rule["taxonomy"],
                     trigger_count=count,
                     baseline_config=baseline,
-                    candidate_config=json.dumps({"change": rule["candidate_change"]}),
+                    candidate_config=canonical_json({"change": rule["candidate_change"]}),
                     diff_summary=rule["candidate_change"],
                     reversible=True,
                     rollback_config=baseline,

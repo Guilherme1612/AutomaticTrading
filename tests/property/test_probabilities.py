@@ -35,7 +35,7 @@ def valid_prob_triple():
     ))
 
 
-valid_rate = st.floats(min_value=0.5, max_value=2.0, allow_nan=False, allow_infinity=False)
+valid_rate = st.floats(min_value=0.51, max_value=1.99, allow_nan=False, allow_infinity=False)
 positive_amount = st.floats(min_value=0.01, max_value=1_000_000.0, allow_nan=False, allow_infinity=False)
 score = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 

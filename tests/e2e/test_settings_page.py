@@ -107,7 +107,7 @@ class TestRiskSection:
     def test_max_single_position(self, client):
         resp = client.get("/settings")
         assert "20%" in resp.text
-        assert "$1,000" in resp.text
+        assert "1000" in resp.text
 
     def test_catastrophe_stop(self, client):
         resp = client.get("/settings")

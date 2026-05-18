@@ -167,6 +167,36 @@ CREATE TABLE IF NOT EXISTS mutation_proposals (
     sample_size INTEGER
 );
 
+-- Mutation candidates view (compatibility alias for dashboard)
+CREATE VIEW IF NOT EXISTS mutation_candidates AS
+SELECT
+    id AS candidate_id,
+    dimension,
+    target,
+    baseline_value,
+    candidate_value,
+    status,
+    fde_cluster_trigger,
+    proposed_at,
+    started_at,
+    completed_at,
+    effect_size,
+    p_value,
+    sample_size,
+    NULL AS trending_direction
+FROM mutation_proposals;
+
+-- Mutation log (promotion/rejection/rollback audit trail)
+CREATE TABLE IF NOT EXISTS mutation_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    target TEXT NOT NULL,
+    promoted_at TEXT,
+    rolled_back_at TEXT,
+    status TEXT NOT NULL DEFAULT 'promoted'
+);
+
 -- Mutation outcomes
 CREATE TABLE IF NOT EXISTS mutation_outcomes (
     id TEXT PRIMARY KEY,

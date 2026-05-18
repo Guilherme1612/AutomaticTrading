@@ -19,12 +19,13 @@
 | [Phase 9](phases/phase-9/PLAN.md) | Core Orchestration | Wire 30 canonical cycle steps into working end-to-end pipeline | — |
 | [Phase 10](phases/phase-10/PLAN.md) | Broker Integration + Ops | Replace mock fills with Alpaca paper API, complete wizard, operational gaps | — |
 | [Phase 11](phases/phase-11/PLAN.md) | Polish + Operator Experience | Dynamic sparklines, a11y audit, perf profiling, workflow validation — **LIVE-READY** | — |
+| [Phase 12](phases/phase-12/PLAN.md) | Spec Gap Closure | Evidence pipeline, real prices, storage activation, engine completion, flywheel closure — **SPEC-COMPLIANT** | — |
 
 ## Dependencies (linear chain)
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11
-                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12
+                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C    ↑ SPEC-COMPLIANT
 ```
 
 Phases 1-11 complete. System is LIVE-READY.

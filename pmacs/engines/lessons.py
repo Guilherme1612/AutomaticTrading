@@ -1,7 +1,16 @@
-"""Lessons engine — extract structured lessons from resolved cycles."""
+"""Lessons engine — extract structured lessons from resolved cycles.
+
+Spec ref: Architecture.md §9 step 23, Agents.md §18.6
+
+Extracts lessons from resolutions and writes them to both SQLite (OLTP)
+and Qdrant (vector similarity search for episodic context injection).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+from pmacs.logsys.debug_log import log_debug
 
 
 @dataclass
@@ -61,3 +70,51 @@ def extract_lesson_from_resolution(
         )
 
     return None
+
+
+def write_lesson_to_qdrant(
+    lesson: Lesson,
+    qdrant_adapter: Any,
+) -> bool:
+    """Write a lesson to Qdrant with embedding (Architecture.md §8.7).
+
+    Generates a 768-dim embedding from the lesson text and upserts into
+    the ``lessons`` collection.  Gracefully no-ops if Qdrant is unavailable.
+
+    Parameters
+    ----------
+    lesson : Lesson
+        The lesson to embed and store.
+    qdrant_adapter : QdrantAdapter
+        The Qdrant adapter instance.
+
+    Returns
+    -------
+    bool
+        True if the upsert succeeded (or was attempted), False on error.
+    """
+    try:
+        lesson_id = f"{lesson.cycle_id}_{lesson.ticker}_{lesson.lesson_type}"
+        qdrant_adapter.upsert_with_embedding(
+            collection="lessons",
+            id=lesson_id,
+            text=lesson.text,
+            payload={
+                "lesson_id": lesson_id,
+                "ticker": lesson.ticker,
+                "kind": lesson.lesson_type,
+                "lesson_text": lesson.text,
+                "cycle_id": lesson.cycle_id,
+                "evidence_ids": ",".join(lesson.evidence_ids),
+            },
+        )
+        return True
+    except Exception as exc:
+        log_debug(
+            "LESSON_WRITE_FAILED",
+            payload={"ticker": lesson.ticker, "error": str(exc)},
+            level="WARN",
+            error_code="LESSON_WRITE_FAILED",
+            msg=f"Lesson Qdrant write failed for {lesson.ticker}: {exc}",
+        )
+        return False

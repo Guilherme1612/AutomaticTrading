@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -62,7 +62,7 @@ class EvidencePacket(BaseModel):
     ticker: str
     cycle_id: str
     evidence: list[Evidence] = Field(default_factory=list)
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source_count: int = 0
     has_stale_data: bool = False
 

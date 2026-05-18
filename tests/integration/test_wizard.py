@@ -195,7 +195,7 @@ class TestTOTPEnrollStep:
         from pmacs.installer.steps.totp_enroll import run
 
         result = await run({})
-        assert "secret" in result
+        assert "_secret" in result
         assert "qr_data_uri" in result
         assert result["qr_data_uri"].startswith("data:image/svg+xml")
         assert result["ok"] is False  # Not yet verified

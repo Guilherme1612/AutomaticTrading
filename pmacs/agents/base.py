@@ -81,6 +81,7 @@ class PersonaRunner(ABC):
         cycle_id: str = "",
         audit_writer: AuditWriter | None = None,
         simulation_mode: bool = False,
+        billing_ctx: dict[str, Any] | None = None,
     ) -> None:
         self.persona_name = persona_name
         self.model_config = model_config or {}
@@ -91,6 +92,9 @@ class PersonaRunner(ABC):
         self._audit = audit_writer
         self.simulation_mode = simulation_mode
         self._last_call_usage: dict | None = None  # Side-channel for billing (Phase 16)
+        self._billing_ctx = billing_ctx  # {"sqlite_conn": ..., "duckdb_adapter": ..., "model_id": ...}
+        self._cycle_cumulative_actual: float = 0.0
+        self._cycle_cumulative_estimated: float = 0.0
 
     @abstractmethod
     def get_pydantic_model(self) -> type[BaseModel]:
@@ -142,9 +146,15 @@ class PersonaRunner(ABC):
 
             # Layer 1: HTTP call to llama-server
             try:
+                # Pre-flight budget check (Phase 16 — PRD §8)
+                self._check_preflight_budget(prompt)
+
                 t0 = time.monotonic()
                 raw_output = self._call_llm(prompt, grammar_text, current_temp)
                 latency_ms = (time.monotonic() - t0) * 1000
+
+                # Post-call billing (Phase 16 — PRD §7, §9)
+                self._record_call_billing(prompt, latency_ms)
             except httpx.ConnectError as exc:
                 last_error = f"LLM connection refused: {exc}"
                 log_debug(
@@ -1143,6 +1153,94 @@ class PersonaRunner(ABC):
             },
             cycle_id=self.cycle_id,
         )
+
+    def _check_preflight_budget(self, prompt: str) -> None:
+        """Pre-flight budget estimate. Raises RuntimeError if budget exceeded."""
+        if not self._billing_ctx:
+            return
+        try:
+            from pmacs.billing.token_estimator import estimate_call_cost
+            from pmacs.billing.budget_enforcer import enforce_budgets
+            from pmacs.billing.pricing import get_pricing
+
+            sqlite_conn = self._billing_ctx["sqlite_conn"]
+            model_id = self._billing_ctx.get("model_id", "")
+            pricing = get_pricing(sqlite_conn, model_id)
+            estimated = estimate_call_cost(prompt, self.persona_name, pricing)
+            self._cycle_cumulative_estimated += estimated.estimated_cost_usd
+
+            result = enforce_budgets(sqlite_conn, estimated.estimated_cost_usd)
+            if not result.allowed:
+                raise RuntimeError(
+                    f"Budget blocked: {result.reason}"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # Billing failure must not block the cycle
+
+    def _record_call_billing(self, prompt: str, latency_ms: float) -> None:
+        """Post-call billing: compute body cost, log usage, check runaway."""
+        if not self._billing_ctx or not self._last_call_usage:
+            return
+        try:
+            from pmacs.billing.cost_calculator import compute_body_cost
+            from pmacs.billing.token_estimator import estimate_call_cost
+            from pmacs.billing.usage_logger import log_usage
+            from pmacs.billing.budget_enforcer import check_runaway
+            from pmacs.billing.pricing import get_pricing
+            from pmacs.billing.reconciler import spawn_reconcile_call
+            from pmacs.schemas.billing import BodyCost, EstimatedCost
+
+            sqlite_conn = self._billing_ctx["sqlite_conn"]
+            duckdb_adapter = self._billing_ctx["duckdb_adapter"]
+            model_id = self._billing_ctx.get("model_id", "")
+            pricing = get_pricing(sqlite_conn, model_id)
+
+            usage = self._last_call_usage
+            estimated = estimate_call_cost(prompt, self.persona_name, pricing)
+            body_cost_usd = compute_body_cost(
+                {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]},
+                pricing,
+            )
+
+            call_record = BodyCost(
+                call_id=hashlib.sha256(f"{self.cycle_id}:{self.persona_name}:{time.monotonic()}".encode()).hexdigest()[:16],
+                cycle_id=self.cycle_id,
+                persona=self.persona_name,
+                model_id=model_id,
+                generation_id=usage.get("generation_id"),
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                body_cost_usd=body_cost_usd,
+                latency_ms=int(latency_ms),
+            )
+
+            log_usage(sqlite_conn, duckdb_adapter, call_record, estimated)
+
+            # Mid-cycle runaway check
+            self._cycle_cumulative_actual += body_cost_usd
+            runaway = check_runaway(self._cycle_cumulative_actual, self._cycle_cumulative_estimated)
+            if not runaway.allowed:
+                from pmacs.nervous.sse_publisher import publish_system_event
+                publish_system_event("cost.runaway_detected", {
+                    "persona": self.persona_name,
+                    "cycle_id": self.cycle_id,
+                    "actual": round(self._cycle_cumulative_actual, 6),
+                    "estimated": round(self._cycle_cumulative_estimated, 6),
+                })
+
+            # Spawn reconciliation for cloud calls (has generation_id)
+            gen_id = usage.get("generation_id")
+            if gen_id:
+                spawn_reconcile_call(
+                    call_record.call_id,
+                    gen_id,
+                    self._billing_ctx.get("sqlite_path", ""),
+                    self._billing_ctx.get("duckdb_path", ""),
+                )
+        except Exception:
+            pass  # Billing failure must not block the cycle
 
     def _get_model_hash(self) -> str:
         """Get the configured model hash from config, or empty string.

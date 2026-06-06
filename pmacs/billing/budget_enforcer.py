@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from pmacs.logsys import log_debug
+from pmacs.nervous.sse_publisher import publish_system_event
 from pmacs.schemas.billing import BudgetCheckResult
 
 
@@ -75,6 +76,14 @@ def check_daily_hard_cap(
     # Engage kill switch (Phase 16 — PRD §8.2)
     _engage_budget_kill_switch("CYCLE_BLOCKED_BUDGET_DAILY", projected, cap)
 
+    publish_system_event("cost.cap_breached", {
+        "period": "daily",
+        "current": round(current, 6),
+        "projected": round(projected, 6),
+        "cap": cap,
+        "cap_type": "daily_hard",
+    })
+
     return BudgetCheckResult(
         allowed=False,
         reason=f"Daily spend ${projected:.4f} would exceed cap ${cap:.2f}",
@@ -114,6 +123,14 @@ def check_monthly_hard_cap(
     # Engage kill switch (Phase 16 — PRD §8.3)
     _engage_budget_kill_switch("CYCLE_BLOCKED_BUDGET_MONTHLY", projected, cap)
 
+    publish_system_event("cost.cap_breached", {
+        "period": "monthly",
+        "current": round(current, 6),
+        "projected": round(projected, 6),
+        "cap": cap,
+        "cap_type": "monthly_hard",
+    })
+
     return BudgetCheckResult(
         allowed=False,
         reason=f"Monthly spend ${projected:.4f} would exceed cap ${cap:.2f}",
@@ -151,6 +168,12 @@ def check_runaway(
         error_code="COST_RUNAWAY_DETECTED",
         msg=f"Runaway cost detected: ${actual_cumulative:.4f} is {delta_pct:.0f}% above estimate ${estimated_cumulative:.4f}",
     )
+
+    publish_system_event("cost.runaway_detected", {
+        "actual": round(actual_cumulative, 6),
+        "estimated": round(estimated_cumulative, 6),
+        "delta_pct": round(delta_pct, 1),
+    })
 
     return BudgetCheckResult(
         allowed=False,

@@ -14,6 +14,7 @@ import httpx
 
 from pmacs.billing.usage_logger import update_actual_cost, update_budget_state
 from pmacs.logsys import log_debug
+from pmacs.nervous.sse_publisher import publish_system_event
 
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
@@ -95,6 +96,16 @@ def _reconcile_call_impl(
 
     update_actual_cost(sqlite_conn, duckdb_adapter, call_id, cost)
     _log_drift(call_id, body_cost, cost, delta)
+
+    # SSE: cost.reconciled (only if delta is significant)
+    if abs(delta) > 0.001:
+        publish_system_event("cost.reconciled", {
+            "call_id": call_id,
+            "body_cost": round(body_cost, 6),
+            "actual_cost": round(cost, 6),
+            "delta": round(delta, 6),
+        })
+
     return True
 
 

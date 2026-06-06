@@ -390,6 +390,9 @@ var NOTIFICATION_POLICY = {
     source_degraded_important: { surface: "toast", type: "warning", duration: 30000, sound: false },
     source_degraded_nice: { surface: "silent", sound: false },
     source_recovered: { surface: "toast", type: "info", duration: 5000, sound: false },
+    cost_cap_breached: { surface: "toast", type: "warning", duration: 0, sound: "click" },
+    cost_runaway: { surface: "toast", type: "warning", duration: 0, sound: "click" },
+    cost_reconciled_large: { surface: "toast", type: "info", duration: 10000, sound: false },
 };
 
 // Events that ALWAYS show modal regardless of saved level
@@ -1654,6 +1657,23 @@ onSSE("mutation", function (data) {
     }
     if (data.event_type) {
         handleNotification(data.event_type, data);
+    }
+});
+
+// Cost events — budget updates, cap breaches, reconciliation
+onSSE("system", function (data) {
+    var etype = data.event_type || data.type || "";
+    if (etype.indexOf("cost.") === 0) {
+        if (etype === "cost.cap_breached") {
+            handleNotification("cost_cap_breached", data);
+        } else if (etype === "cost.runaway_detected") {
+            handleNotification("cost_runaway", data);
+        } else if (etype === "cost.reconciled") {
+            var delta = (data.data && data.data.delta) || 0;
+            if (Math.abs(delta) > 0.10) {
+                handleNotification("cost_reconciled_large", data);
+            }
+        }
     }
 });
 

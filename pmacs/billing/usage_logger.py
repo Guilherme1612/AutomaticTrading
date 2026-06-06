@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from pmacs.logsys import log_debug
+from pmacs.nervous.sse_publisher import publish_system_event
 from pmacs.schemas.billing import BodyCost, EstimatedCost
 
 
@@ -41,6 +42,17 @@ def log_usage(
     # SQLite budget state update
     update_budget_state(sqlite_conn, call_record.body_cost_usd)
 
+    # SSE: cost.call_completed
+    publish_system_event("cost.call_completed", {
+        "call_id": call_record.call_id,
+        "cycle_id": call_record.cycle_id,
+        "persona": call_record.persona,
+        "body_cost_usd": round(call_record.body_cost_usd, 6),
+        "prompt_tokens": call_record.prompt_tokens,
+        "completion_tokens": call_record.completion_tokens,
+        "latency_ms": call_record.latency_ms,
+    })
+
 
 def update_budget_state(sqlite_conn, cost_usd: float) -> None:
     """Atomically add cost to today and this_month budget totals.
@@ -60,6 +72,13 @@ def update_budget_state(sqlite_conn, cost_usd: float) -> None:
             [cost_usd, now],
         )
         sqlite_conn.commit()
+
+        # SSE: cost.budget_update
+        totals = get_budget_totals(sqlite_conn)
+        publish_system_event("cost.budget_update", {
+            "today": totals.get("today", {}),
+            "this_month": totals.get("this_month", {}),
+        })
     except Exception as exc:
         try:
             sqlite_conn.rollback()

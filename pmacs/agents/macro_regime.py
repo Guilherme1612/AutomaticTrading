@@ -27,14 +27,16 @@ class MacroRegimeRunner(PersonaRunner):
         self,
         cycle_id: str = "",
         audit_writer: Any | None = None,
+        simulation_mode: bool = False,
     ) -> None:
         super().__init__(
             persona_name="macro_regime",
             grammar_name="macro_regime",
             temperature=0.2,
-            max_tokens=512,
+            max_tokens=3072,
             cycle_id=cycle_id,
             audit_writer=audit_writer,
+            simulation_mode=simulation_mode,
         )
 
     def get_pydantic_model(self):
@@ -52,6 +54,9 @@ class MacroRegimeRunner(PersonaRunner):
     ) -> str:
         prompt_path = _PROMPT_DIR / "macro_regime.md"
         system_prompt = prompt_path.read_text(encoding="utf-8")
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        system_prompt = system_prompt.replace("{today_date}", today)
 
         evidence_text = self._format_evidence(evidence)
         context_block = ""
@@ -67,10 +72,5 @@ class MacroRegimeRunner(PersonaRunner):
 
     @staticmethod
     def _format_evidence(evidence: list[EvidencePacket]) -> str:
-        lines: list[str] = []
-        for packet in evidence:
-            for ev in packet.evidence:
-                lines.append(
-                    f"- [{ev.id}] ({ev.source.value}/{ev.type.value}) {ev.title or 'untitled'}"
-                )
-        return "\n".join(lines) if lines else "No evidence provided."
+        from pmacs.agents.base import PersonaRunner
+        return PersonaRunner.format_evidence_for_prompt(evidence)

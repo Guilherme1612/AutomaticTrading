@@ -109,8 +109,8 @@ class TestQdrantSchemaMigration:
         qa.create_collections()  # must not raise
 
     def test_collections_list_matches_spec(self):
-        """QdrantAdapter.COLLECTIONS must contain the 5 required collections."""
-        expected = {"theses", "memos_persona", "memos_aggregated", "evidence_chunks", "lessons"}
+        """QdrantAdapter.COLLECTIONS must contain the 6 required collections (Architecture.md §8.7)."""
+        expected = {"theses", "memos_persona", "memos_aggregated", "evidence_chunks", "lessons", "episodic"}
         actual = set(QdrantAdapter.COLLECTIONS)
         assert expected == actual, f"Mismatch: expected {expected}, got {actual}"
 

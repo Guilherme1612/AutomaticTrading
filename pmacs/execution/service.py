@@ -4,7 +4,7 @@ Receives signed TradePlan payloads via Unix Domain Socket, verifies Ed25519
 signatures, submits orders through a BrokerAdapter, polls for fills, places
 catastrophe-net stops, and returns fill results.
 
-Production path: /var/db/pmacs/exec.sock
+Production path: resolved via data_dir() / "exec.sock"
 Dev/test path: /tmp/pmacs_exec_test.sock
 """
 from __future__ import annotations
@@ -112,7 +112,8 @@ class ExecutionService:
                     "status": "REJECTED",
                     "reason": "INVALID_SIGNATURE",
                 }
-                self._audit_signature_result(valid=False, payload_size=len(payload_bytes))
+                # cycle_id unavailable here — payload is unauthenticated, cannot parse TradePlan
+                self._audit_signature_result(valid=False, payload_size=len(payload_bytes), cycle_id="SIG_REJECT")
                 writer.write(json.dumps(response).encode("utf-8"))
                 await writer.drain()
                 return
@@ -121,6 +122,12 @@ class ExecutionService:
             try:
                 plan = TradePlan.model_validate_json(payload_bytes)
             except Exception as exc:
+                # Try to extract cycle_id from raw payload for audit traceability
+                raw_cycle_id = "PARSE_FAIL"
+                try:
+                    raw_cycle_id = json.loads(payload_bytes.decode("utf-8")).get("cycle_id", "PARSE_FAIL")
+                except Exception:
+                    pass
                 log_debug(
                     "EXEC_INVALID_PLAN",
                     payload={"error": str(exc)},
@@ -132,7 +139,7 @@ class ExecutionService:
                     "status": "REJECTED",
                     "reason": f"INVALID_PLAN: {exc}",
                 }
-                self._audit_signature_result(valid=True, payload_size=len(payload_bytes))
+                self._audit_signature_result(valid=True, payload_size=len(payload_bytes), cycle_id=raw_cycle_id)
                 writer.write(json.dumps(response).encode("utf-8"))
                 await writer.drain()
                 return
@@ -242,7 +249,7 @@ class ExecutionService:
             )
             return None
 
-    def _audit_signature_result(self, *, valid: bool, payload_size: int) -> None:
+    def _audit_signature_result(self, *, valid: bool, payload_size: int, cycle_id: str = "") -> None:
         """Write signature verification result to audit log."""
         if self._audit is not None:
             self._audit.append(
@@ -251,6 +258,7 @@ class ExecutionService:
                     "signature_valid": valid,
                     "payload_size": payload_size,
                 },
+                cycle_id=cycle_id,
             )
 
     def _audit_trade_accepted(
@@ -312,3 +320,24 @@ class ExecutionService:
         finally:
             writer.close()
             await writer.wait_closed()
+
+
+if __name__ == "__main__":
+    import asyncio as _asyncio
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    from pmacs.storage.sqlite import default_db_path
+    from pmacs.execution.signing import generate_keypair
+
+    _data_dir = default_db_path().parent
+    _sock_path = _data_dir / "exec.sock"
+    _audit_dir = _data_dir
+
+    _priv, _pub = generate_keypair()
+    _svc = ExecutionService(
+        sock_path=_sock_path,
+        public_key=_pub,
+        audit_dir=_audit_dir,
+    )
+    _asyncio.run(_svc.start())

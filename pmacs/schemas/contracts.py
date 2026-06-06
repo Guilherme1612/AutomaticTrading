@@ -44,6 +44,8 @@ class HoldingState(str, Enum):
 
 
 TERMINAL_STATES = frozenset({
+    HoldingState.ABORTED_PRE_LLM, HoldingState.ABORTED_LLM,
+    HoldingState.ABORTED_RISK,
     HoldingState.RESOLVED_UP, HoldingState.RESOLVED_FLAT,
     HoldingState.RESOLVED_DOWN, HoldingState.RESOLVED_MIXED,
     HoldingState.STOPPED_OUT, HoldingState.EXIT_THESIS_INVALIDATED,
@@ -62,36 +64,39 @@ ABORT_STATES = frozenset({
 VALID_TRANSITIONS: dict[HoldingState, frozenset[HoldingState]] = {
     HoldingState.CANDIDATE: frozenset({
         HoldingState.PHASE1_RESEARCH, HoldingState.ABORTED_PRE_LLM,
-        HoldingState.HALTED, HoldingState.INTERRUPTED,
     }),
     HoldingState.PHASE1_RESEARCH: frozenset({
         HoldingState.PHASE2_CRUCIBLE, HoldingState.ABORTED_LLM,
-        HoldingState.PHASE1_TIMEOUT, HoldingState.INTERRUPTED,
+        HoldingState.PHASE1_TIMEOUT,
     }),
     HoldingState.PHASE1_TIMEOUT: frozenset({
-        HoldingState.ABORTED_LLM, HoldingState.INTERRUPTED,
+        HoldingState.ABORTED_LLM,
     }),
     HoldingState.PHASE2_CRUCIBLE: frozenset({
         HoldingState.APPROVED_PENDING, HoldingState.ABORTED_LLM,
-        HoldingState.INTERRUPTED,
     }),
     HoldingState.APPROVED_PENDING: frozenset({
         HoldingState.ACTIVE, HoldingState.ABORTED_RISK,
-        HoldingState.INTERRUPTED,
+        HoldingState.ABORTED_LLM,
     }),
     HoldingState.ACTIVE: frozenset({
-        HoldingState.THESIS_AGING_REVIEW,
+        HoldingState.RESOLVED_UP, HoldingState.RESOLVED_FLAT,
+        HoldingState.RESOLVED_DOWN, HoldingState.RESOLVED_MIXED,
         HoldingState.STOPPED_OUT, HoldingState.EXIT_THESIS_INVALIDATED,
         HoldingState.EXIT_OPPORTUNITY_COST, HoldingState.EXIT_TRAILING_STOP,
-        HoldingState.EXIT_FAILED, HoldingState.DELISTED,
+        HoldingState.EXIT_FAILED, HoldingState.HALTED, HoldingState.DELISTED,
         HoldingState.RESOLUTION_TIMEOUT, HoldingState.PANIC_EXIT,
-        HoldingState.HALTED, HoldingState.INTERRUPTED,
+        HoldingState.INTERRUPTED, HoldingState.THESIS_AGING_REVIEW,
     }),
     HoldingState.THESIS_AGING_REVIEW: frozenset({
         HoldingState.ACTIVE, HoldingState.EXIT_THESIS_INVALIDATED,
-        HoldingState.INTERRUPTED,
     }),
-    HoldingState.HALTED: frozenset({HoldingState.CANDIDATE, HoldingState.ACTIVE}),
+    HoldingState.HALTED: frozenset({
+        HoldingState.ACTIVE, HoldingState.DELISTED, HoldingState.PANIC_EXIT,
+    }),
+    HoldingState.INTERRUPTED: frozenset({
+        HoldingState.ACTIVE, HoldingState.PANIC_EXIT, HoldingState.DELISTED,
+    }),
 }
 
 ABORT_REASON_STATES = frozenset({

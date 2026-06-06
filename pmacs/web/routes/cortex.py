@@ -1,12 +1,27 @@
-"""Cortex route — system health monitoring page."""
+"""Cortex route — system health monitoring page (Source.md §18)."""
+
+from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from pmacs.web.app import templates
+from pmacs.web.templating import templates
 from pmacs.web.config import get_config
 from pmacs.web import data as data_layer
 
 router = APIRouter()
+
+
+class KillSwitchRequest(BaseModel):
+    """Request body for kill switch actions."""
+    totp_code: str = ""
+    reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Page render
+# ---------------------------------------------------------------------------
 
 
 @router.get("/cortex")
@@ -46,4 +61,180 @@ async def cortex_page(request: Request):
                 "page": "cortex",
                 "error": data_layer.build_error_context("cortex", exc),
             },
+        )
+
+
+# ---------------------------------------------------------------------------
+# API endpoints (Source.md §18 interactive panel actions)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/cortex/audit-verify")
+async def audit_verify():
+    """Re-run full audit chain verification (Source.md §18.1 re-verify button)."""
+    cfg = get_config()
+    try:
+        from pmacs.storage.audit import AuditVerifier
+        verifier = AuditVerifier(cfg.audit_path)
+        ok, detail = verifier.verify_full()
+        return JSONResponse({
+            "ok": True,
+            "verified": ok,
+            "detail": detail if not ok else "Chain intact",
+        })
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Audit verify failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Audit verification failed"}, status_code=500)
+
+
+@router.post("/api/cortex/reconcile")
+async def reconcile():
+    """Re-run cross-DB consistency check (Source.md §18.2 re-reconcile button)."""
+    cfg = get_config()
+    try:
+        from pmacs.storage.consistency import check_cross_db_consistency
+        results = check_cross_db_consistency(sqlite_path=cfg.sqlite_path)
+        return JSONResponse({
+            "ok": True,
+            "stores": [
+                {"store": r.store, "status": r.status, "details": r.details, "drift_count": r.drift_count}
+                for r in results
+            ],
+        })
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Reconcile failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Cross-DB reconciliation failed"}, status_code=500)
+
+
+@router.post("/api/cortex/kill-switch/engage")
+async def kill_switch_engage(req: KillSwitchRequest):
+    """Engage the kill switch (Source.md §18.5).
+
+    Engagement does NOT require TOTP — any trigger can engage (safer to over-trigger).
+    """
+    cfg = get_config()
+    try:
+        from pmacs.cortex.kill_switch import engage
+        engage(
+            reason=req.reason or "Manual engagement via Cortex page",
+            trigger="MANUAL",
+            db_path=cfg.sqlite_path,
+            audit_path=cfg.audit_path,
+        )
+        return JSONResponse({"ok": True, "state": "ENGAGED"})
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Kill switch engage failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Failed to engage kill switch"}, status_code=500)
+
+
+@router.post("/api/cortex/kill-switch/disengage")
+async def kill_switch_disengage(req: KillSwitchRequest):
+    """Disengage the kill switch (Source.md §18.5, TOTP-gated).
+
+    Only the operator can disengage — requires valid TOTP code.
+    """
+    if not req.totp_code or len(req.totp_code) != 6:
+        return JSONResponse(
+            {"ok": False, "error": "TOTP code required (6 digits)"},
+            status_code=403,
+        )
+
+    cfg = get_config()
+    try:
+        from pmacs.cortex.kill_switch import disengage
+        from pmacs.storage.keychain import get_api_key
+        secret = get_api_key("pmacs.system.totp_secret", "operator")
+        success = disengage(
+            totp_secret=secret,
+            totp_code=req.totp_code,
+            reason=req.reason or "Manual disengagement via Cortex page",
+            db_path=cfg.sqlite_path,
+            audit_path=cfg.audit_path,
+        )
+        if success:
+            return JSONResponse({"ok": True, "state": "ARMED"})
+        return JSONResponse(
+            {"ok": False, "error": "Invalid TOTP code"},
+            status_code=403,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Kill switch disengage failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Failed to disengage kill switch"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# TOTP verification (standalone — mirrors nervous/api.py endpoint)
+# ---------------------------------------------------------------------------
+
+class TOTPVerifyRequest(BaseModel):
+    """Request body for TOTP verification."""
+    code: str
+    action_id: str = ""
+
+
+@router.post("/api/totp/verify")
+async def totp_verify(req: TOTPVerifyRequest):
+    """Verify a TOTP code for gated actions (Source.md §18, Architecture.md §16.3).
+
+    Standalone endpoint so the dashboard can verify TOTP without nervous running.
+    Rate-limited via BUCKETS["totp_verify"] (5 attempts per 60s).
+    """
+    if not req.code or len(req.code) != 6:
+        return JSONResponse(
+            {"verified": False, "action_id": req.action_id, "error": "6-digit code required"},
+            status_code=200,
+        )
+
+    # Rate limit (Architecture.md §16.3 — must use BUCKETS)
+    from pmacs.nervous.rate_limit import BUCKETS
+    if not BUCKETS["totp_verify"].acquire():
+        return JSONResponse(
+            {"verified": False, "action_id": req.action_id, "error": "Too many attempts, please wait"},
+            status_code=429,
+        )
+
+    try:
+        from pmacs.cortex.totp import verify_totp
+        from pmacs.storage.keychain import get_api_key
+
+        secret = get_api_key("pmacs.system.totp_secret", "operator")
+        if not secret:
+            return JSONResponse(
+                {"verified": False, "action_id": req.action_id, "error": "TOTP not configured"},
+                status_code=200,
+            )
+
+        success = verify_totp(secret, req.code)
+
+        # Audit log (Architecture.md §5.1)
+        try:
+            from pmacs.storage.audit import AuditWriter
+            from pathlib import Path
+            audit_path = Path("data/audit.log")
+            writer = AuditWriter(audit_path)
+            writer.append(
+                "totp_verify_attempt",
+                {"action_id": req.action_id, "success": success},
+                cycle_id="totp",
+            )
+            writer.close()
+        except Exception:
+            pass
+
+        if success:
+            return JSONResponse({"verified": True, "action_id": req.action_id})
+        return JSONResponse(
+            {"verified": False, "action_id": req.action_id, "error": "Invalid TOTP code"},
+            status_code=200,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("TOTP verification failed: %s", exc, exc_info=True)
+        return JSONResponse(
+            {"verified": False, "action_id": req.action_id, "error": "TOTP verification failed"},
+            status_code=500,
         )

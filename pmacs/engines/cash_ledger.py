@@ -22,7 +22,18 @@ from pathlib import Path
 
 from pmacs.logsys import log_debug
 
-STARTING_CAPITAL = 5000.00  # Source.md §2
+
+def _load_starting_capital() -> float:
+    """Load starting capital from config, fallback to constant."""
+    try:
+        from pmacs.config import load_config
+        return load_config().risk.starting_capital_usd
+    except (FileNotFoundError, KeyError, TypeError, AttributeError):
+        from pmacs.constants import PAPER_CAPITAL_USD
+        return PAPER_CAPITAL_USD
+
+
+STARTING_CAPITAL = _load_starting_capital()  # Source.md §2
 
 
 @dataclass(frozen=True)
@@ -133,6 +144,8 @@ class CashLedger:
         """
         conn = self._connect()
         try:
+            # BEGIN IMMEDIATE serializes concurrent writers, preventing TOCTOU races
+            conn.execute("BEGIN IMMEDIATE")
             # Read latest snapshot
             row = conn.execute(
                 "SELECT cash_usd, positions_value_usd, total_value_usd "

@@ -14,3 +14,11 @@ minimum_ev_pct = 0.01
 [sizing]
 half_kelly = true
 correlation_floor = 0.30
+max_position_usd = 1000.0
+
+[capital]
+starting_usd = 5000.0
+
+[pricing]
+default_target_gain_pct = 0.10
+default_stop_loss_pct = 0.15

@@ -19,6 +19,13 @@ from pathlib import Path
 from pmacs.cortex.health import HEARTBEAT_DIR
 from pmacs.logsys import log_debug
 
+
+def _resolve_db(db_path: Path | str | None) -> Path:
+    if db_path is None:
+        from pmacs.config import data_dir
+        return data_dir() / "pmacs.db"
+    return Path(db_path)
+
 # Gap threshold: if heartbeat timestamps show a gap larger than this,
 # we assume the machine was sleeping.
 _SLEEP_GAP_THRESHOLD_S = 300.0  # 5 minutes
@@ -73,7 +80,7 @@ def _detect_sleep_via_heartbeat(
 
 
 def _find_incomplete_cycle(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
 ) -> str | None:
     """Find a cycle that has checkpoints but is not closed.
 
@@ -86,6 +93,7 @@ def _find_incomplete_cycle(
     Returns:
         cycle_id of the incomplete cycle, or None if all cycles are complete.
     """
+    db_path = _resolve_db(db_path)
     p = Path(db_path)
     if not p.exists():
         return None
@@ -111,7 +119,7 @@ def _find_incomplete_cycle(
 
 
 def check_sleep_wake(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     heartbeat_dir: Path = HEARTBEAT_DIR,
     gap_threshold: float = _SLEEP_GAP_THRESHOLD_S,
 ) -> SleepWakeResult:
@@ -130,6 +138,7 @@ def check_sleep_wake(
     Returns:
         SleepWakeResult with detection status and incomplete cycle info.
     """
+    db_path = _resolve_db(db_path)
     sleep_detected, gap_seconds = _detect_sleep_via_heartbeat(
         heartbeat_dir, gap_threshold
     )
@@ -182,7 +191,7 @@ def check_sleep_wake(
 
 
 def resume_cycle_if_needed(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     heartbeat_dir: Path = HEARTBEAT_DIR,
 ) -> bool:
     """Convenience function: check for sleep/wake and log resume decision.

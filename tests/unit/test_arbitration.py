@@ -155,7 +155,7 @@ class TestAllImmatureDisagree:
         result = arbitrate([s1, s2], cycle_id="c006")
 
         assert result.decision == ArbitrationDecision.ABORT_NO_MATURE_SOURCES
-        assert result.abort_reason == "NO_MATURE_SOURCES"
+        assert result.abort_reason == "NO_MAJORITY_DIRECTION"
 
 
 class TestMacroRegimeMultiplier:

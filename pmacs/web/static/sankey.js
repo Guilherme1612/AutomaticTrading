@@ -586,13 +586,43 @@ var PMACS_SANKEY = (function () {
         });
     }
 
+    /**
+     * Refresh data and re-render the current view.
+     * Called from SSE handlers when new agent/cycle data arrives.
+     */
+    function refresh() {
+        fetchData(function (err) {
+            if (!err) switchView(currentView);
+        });
+    }
+
     // Public API
     return {
         init: init,
         switchView: switchView,
         fetchData: fetchData,
+        refresh: refresh,
         renderProcessView: renderProcessView,
         renderNetworkView: renderNetworkView,
         renderMathView: renderMathView,
     };
 })();
+
+// Wire SSE events → sankey refresh (agent complete, cycle close, arbitration)
+if (typeof onSSE === "function") {
+    onSSE("agent", function (data) {
+        if (data.event_type === "agent.complete" || data.event_type === "crucible.complete") {
+            if (typeof PMACS_SANKEY !== "undefined") PMACS_SANKEY.refresh();
+        }
+    });
+    onSSE("cycle", function (data) {
+        if (data.event_type === "cycle.opened" || data.event_type === "cycle.closed") {
+            if (typeof PMACS_SANKEY !== "undefined") PMACS_SANKEY.refresh();
+        }
+    });
+    onSSE("decision", function (data) {
+        if (data.event_type === "decision.arbitrated") {
+            if (typeof PMACS_SANKEY !== "undefined") PMACS_SANKEY.refresh();
+        }
+    });
+}

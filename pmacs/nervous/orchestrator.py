@@ -80,7 +80,12 @@ class CycleLock:
         lock_path: Path to the lock file. Parent directories must exist.
     """
 
-    def __init__(self, lock_path: str | Path = "/tmp/pmacs_cycle.lock") -> None:
+    def __init__(self, lock_path: str | Path = "") -> None:
+        if not lock_path:
+            from pmacs.config import data_dir as _data_dir
+            data_dir = Path(_data_dir())
+            data_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = str(data_dir / "pmacs_cycle.lock")
         self._lock_path = Path(lock_path)
         self._fd = None
 
@@ -122,17 +127,23 @@ class CycleOrchestrator:
         audit_path: Path | None = None,
         sse_publisher: SSEPublisher | None = None,
         config: dict[str, Any] | None = None,
+        execution_adapter: Any | None = None,
     ) -> None:
         self._db_path = db_path
         self._audit_path = audit_path
         self._sse_publisher = sse_publisher
         self._config = config or {}
         self._lock_path: str = self._config.get(
-            "lock_path", "/tmp/pmacs_cycle.lock"
+            "lock_path", ""
         )
         self._clock_drift_threshold: float = float(
             self._config.get("clock_drift_threshold", 60.0)
         )
+
+        # Execution adapter (Architecture.md §4.1, §4.5)
+        # If not injected, create one from mode via factory.
+        # None means "no execution" (unit test mode).
+        self._exec_adapter = execution_adapter
 
         # Steps 0-5 are called directly in _run_pre_cycle().
         # Steps 6-12 and 13-28 are handled by _run_pre_cycle/_run_symbol/_run_post_cycle.
@@ -147,9 +158,10 @@ class CycleOrchestrator:
         # Paper ledger (created lazily or injected for testing)
         self._ledger: Any | None = None
 
-        # Storage adapters (lazy-initialized via _get_kuzu_adapter / _get_qdrant_adapter)
+        # Storage adapters (lazy-initialized via _get_kuzu_adapter / _get_qdrant_adapter / _get_duckdb_adapter)
         self._kuzu_adapter: Any | None = None
         self._qdrant_adapter: Any | None = None
+        self._duckdb_adapter: Any | None = None
 
         # Hardening state (S5-2: graceful shutdown + kill switch mid-cycle)
         self._shutdown_requested: bool = False
@@ -175,6 +187,67 @@ class CycleOrchestrator:
         "total_cycle": 1_800_000,  # 30 min
         "default": 30_000,
     }
+
+    def _upsert_holding(self, holding: Any, cycle_id: str) -> None:
+        """Persist a holding to SQLite (Architecture.md §8.5).
+
+        Uses UPSERT to handle both initial creation and state updates.
+        Called after every state transition that ends symbol processing.
+        """
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                conn.execute("""
+                    INSERT INTO holdings (id, ticker, state, cycle_id_opened, cycle_id_closed,
+                        entry_date, exit_date, entry_price_usd, exit_price_usd,
+                        position_size_usd, sector, verdict, conviction_score,
+                        abort_reason, stop_price_usd)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        state = excluded.state,
+                        cycle_id_closed = excluded.cycle_id_closed,
+                        entry_date = excluded.entry_date,
+                        exit_date = excluded.exit_date,
+                        entry_price_usd = excluded.entry_price_usd,
+                        exit_price_usd = excluded.exit_price_usd,
+                        position_size_usd = excluded.position_size_usd,
+                        sector = excluded.sector,
+                        verdict = excluded.verdict,
+                        conviction_score = excluded.conviction_score,
+                        abort_reason = excluded.abort_reason,
+                        stop_price_usd = excluded.stop_price_usd
+                """, [
+                    holding.id,
+                    holding.ticker,
+                    holding.state.value if hasattr(holding.state, 'value') else str(holding.state),
+                    getattr(holding, 'cycle_id_opened', cycle_id) or cycle_id,
+                    getattr(holding, 'cycle_id_closed', None),
+                    str(holding.entry_date) if getattr(holding, 'entry_date', None) else None,
+                    str(holding.exit_date) if getattr(holding, 'exit_date', None) else None,
+                    getattr(holding, 'entry_price_usd', None) or getattr(holding, 'entry_price', None),
+                    getattr(holding, 'exit_price_usd', None) or getattr(holding, 'exit_price', None) or (
+                        getattr(holding, 'current_price_usd', None) or getattr(holding, 'current_price', None)
+                        if (holding.state.value if hasattr(holding.state, 'value') else str(holding.state))
+                        in ('CLOSED', 'EXITED', 'STOPPED_OUT', 'ABORTED_LLM', 'INTERRUPTED',
+                            'EXIT_THESIS_INVALIDATED', 'EXIT_OPPORTUNITY_COST', 'EXIT_TRAILING_STOP',
+                            'EXIT_FAILED', 'DELISTED', 'RESOLUTION_TIMEOUT', 'PANIC_EXIT')
+                        else None
+                    ),
+                    getattr(holding, 'position_size_usd', 0.0) or 0.0,
+                    getattr(holding, 'sector', None),
+                    getattr(holding, 'verdict', None),
+                    getattr(holding, 'conviction_score', None),
+                    getattr(holding, 'abort_reason', None),
+                    getattr(holding, 'stop_price_usd', None),
+                ])
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            log_debug("HOLDING_PERSIST_FAILED",
+                payload={"holding_id": holding.id, "ticker": holding.ticker, "error": str(exc)},
+                level="ERROR", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                msg=f"Failed to persist holding {holding.id}: {exc}")
 
     # -- Public API --
 
@@ -235,7 +308,7 @@ class CycleOrchestrator:
             try:
                 # Step 0 — Initiate cycle
                 cycle_id = initiate_cycle(trigger, self._db_path, self._audit_path)
-                self._publish_sse("cycle", "cycle.opened", {
+                self._publish_sse("cycle", "cycle.open", {
                     "cycle_id": cycle_id,
                     "trigger": trigger,
                 })
@@ -254,19 +327,7 @@ class CycleOrchestrator:
                     self._step_checkpoint_resume(cycle_id, op_seq)
                     self._mark_op_complete(cycle_id, op_seq, "checkpoint_resume")
 
-                # Step 4 -- Kill switch check (MUST be after lock acquisition)
-                op_seq = 4
-                if not self._skip_if_complete(cycle_id, op_seq):
-                    self._step_kill_switch(cycle_id)
-                    self._mark_op_complete(cycle_id, op_seq, "kill_switch_check")
-
-                # Step 5 — Flywheel health snapshot
-                op_seq = 5
-                if not self._skip_if_complete(cycle_id, op_seq):
-                    self._step_flywheel_health(cycle_id)
-                    self._mark_op_complete(cycle_id, op_seq, "flywheel_health")
-
-                # Steps 2-3 (FX + corp actions), 6-12 (pipeline + queue):
+                # Steps 2-5 (FX + corp actions, kill switch, flywheel), 6-12 (pipeline + queue):
                 # pre-cycle data pipeline + queue composition
                 op_seq = self._run_pre_cycle(cycle_id, 3)
 
@@ -309,7 +370,7 @@ class CycleOrchestrator:
                 if not self._skip_if_complete(cycle_id, op_seq):
                     self._finalize_cycle_metrics(cycle_id)
                     close_cycle(cycle_id, self._db_path, self._audit_path)
-                    self._publish_sse("cycle", "cycle.closed", {
+                    self._publish_sse("cycle", "cycle.close", {
                         "cycle_id": cycle_id,
                         "metrics": self._cycle_metrics,
                     })
@@ -511,10 +572,22 @@ class CycleOrchestrator:
 
     def _step_flywheel_health(self, cycle_id: str) -> None:
         """Step 5: Snapshot flywheel health for cycle context."""
+        brier_avg: float = 0.0
+        sharpe: float = 0.0
+        drawdown: float = 0.0
+        duck = self._get_duckdb_adapter()
+        if duck is not None:
+            from pathlib import Path as _P
+            duckdb_path = _P(str(duck.db_path))
+            from pmacs.engines.flywheel_health import get_rolling_brier, get_rolling_sharpe, get_max_drawdown
+            brier_avg = get_rolling_brier(window=30, duckdb_path=duckdb_path, cycle_id=cycle_id)
+            sharpe = get_rolling_sharpe(window=20, duckdb_path=duckdb_path, cycle_id=cycle_id)
+            drawdown = get_max_drawdown(window=90, duckdb_path=duckdb_path, cycle_id=cycle_id)
+
         snap = snapshot_health(
-            rolling_brier_avg=0.0,
-            rolling_sharpe=0.0,
-            calibration_gap=0.0,
+            rolling_brier_avg=brier_avg,
+            rolling_sharpe=sharpe,
+            calibration_gap=brier_avg,  # gap = current avg brier (baseline until actuals arrive)
         )
         log_debug(
             "CYCLE_FLYWHEEL_HEALTH",
@@ -533,10 +606,11 @@ class CycleOrchestrator:
         )
 
     def _run_pre_cycle(self, cycle_id: str, start_op_seq: int) -> int:
-        """Steps 3, 6-12: Pre-cycle data pipeline and queue composition.
+        """Steps 2-5, 6-12: Pre-cycle data pipeline and queue composition.
 
         op_seq 3 = FX snapshot + corporate actions (Architecture.md steps 2-3)
-        op_seq 4-5 handled by run_cycle (kill switch, flywheel health)
+        op_seq 4 = Kill switch check (Architecture.md step 4)
+        op_seq 5 = Flywheel health snapshot (Architecture.md step 5)
         op_seq 6-12 = macro regime, catalysts, universe, gatekeeper,
                       lessons, overrides, queue composition
 
@@ -550,6 +624,18 @@ class CycleOrchestrator:
             self._timed_step(self._step_fx_snapshot, "fx_snapshot", cycle_id)
             self._step_corporate_actions(cycle_id)
             self._mark_op_complete(cycle_id, op_seq, "fx_snapshot")
+
+        # op_seq 4: Kill switch check (Architecture.md step 4 — MUST be after FX snapshot)
+        op_seq = 4
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_kill_switch(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "kill_switch_check")
+
+        # op_seq 5: Flywheel health snapshot (Architecture.md step 5)
+        op_seq = 5
+        if not self._skip_if_complete(cycle_id, op_seq):
+            self._step_flywheel_health(cycle_id)
+            self._mark_op_complete(cycle_id, op_seq, "flywheel_health")
 
         # Step 6: Macro regime
         op_seq = 6
@@ -727,14 +813,19 @@ class CycleOrchestrator:
         try:
             conn = sqlite3.connect(str(self._db_path))
             try:
-                entries = get_universe(conn, include_halted=False)
+                entries = get_universe(conn, include_halted=True)
             finally:
                 conn.close()
         except sqlite3.OperationalError:
             # Universe table may not exist yet (pre-bootstrap)
             entries = []
 
-        self._universe_tickers = [e.ticker for e in entries]
+        self._universe_tickers = [e.ticker for e in entries if not e.halted]
+        self._universe_priority = {
+            e.ticker: e.pinned_priority
+            for e in entries
+            if e.pinned_priority is not None
+        }
         halted = [e.ticker for e in entries if e.halted]
 
         log_debug(
@@ -800,27 +891,7 @@ class CycleOrchestrator:
 
     def _step_override_learning(self, cycle_id: str) -> None:
         """Step 11: Cluster recent operator overrides."""
-        from pmacs.engines.override_learning import cluster_overrides
-
-        try:
-            conn = sqlite3.connect(str(self._db_path))
-            try:
-                rows = conn.execute(
-                    "SELECT original_verdict, override_verdict, ticker "
-                    "FROM operator_overrides "
-                    "ORDER BY id DESC LIMIT 50"
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.OperationalError:
-            rows = []
-
-        overrides = [
-            {"from_verdict": r[0], "to_verdict": r[1], "ticker": r[2]}
-            for r in rows
-        ]
-        clusters = cluster_overrides(overrides)
-
+        overrides, clusters = self._query_override_clusters()
         log_debug(
             "CYCLE_OVERRIDE_LEARNING",
             payload={
@@ -853,11 +924,28 @@ class CycleOrchestrator:
         except sqlite3.OperationalError:
             pass
 
+        # Load prior cycle conviction scores to promote high-conviction tickers to P2
+        prior_conviction: dict[str, float] = {}
+        try:
+            conn2 = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn2.execute(
+                    "SELECT ticker, conviction_score FROM decisions "
+                    "WHERE cycle_id = (SELECT id FROM cycles ORDER BY opened_at DESC LIMIT 1 OFFSET 1)"
+                ).fetchall()
+                prior_conviction = {r[0]: r[1] for r in rows if r[1] is not None}
+            finally:
+                conn2.close()
+        except Exception:
+            pass
+
         queue = compose_queue(
             universe_tickers=self._universe_tickers,
             pinned_tickers=pinned_tickers,
             cycle_id=cycle_id,
             gatekeeper_results=self._gatekeeper_results,
+            universe_priority=getattr(self, "_universe_priority", None),
+            prior_conviction=prior_conviction,
         )
 
         # Write queue to SQLite
@@ -941,14 +1029,15 @@ class CycleOrchestrator:
         return None
 
     def _get_qdrant_adapter(self) -> Any | None:
-        """Lazy-initialize and return the Qdrant adapter (Architecture.md §8.7)."""
+        """Lazy-initialize and return the Qdrant adapter (embedded mode, Architecture.md §8.7)."""
         if self._qdrant_adapter is not None:
             return self._qdrant_adapter
         try:
             from pmacs.storage.qdrant import QdrantAdapter
+            from pathlib import Path as _P
 
-            url = self._config.get("qdrant_url", "http://127.0.0.1:6333")
-            adapter = QdrantAdapter(url=url)
+            qdrant_path = _P(str(self._db_path)).parent / "pmacs_qdrant"
+            adapter = QdrantAdapter(path=str(qdrant_path))
             if adapter._ensure_client():
                 adapter.create_collections()
                 self._qdrant_adapter = adapter
@@ -956,6 +1045,44 @@ class CycleOrchestrator:
         except Exception:
             pass
         return None
+
+    def _get_duckdb_adapter(self) -> Any | None:
+        """Lazy-initialize and return the DuckDB analytics adapter (Architecture.md §8.5)."""
+        if self._duckdb_adapter is not None:
+            return self._duckdb_adapter
+        try:
+            from pmacs.storage.duckdb import DuckDBAdapter
+            from pathlib import Path as _P
+
+            duckdb_path = _P(str(self._db_path)).parent / "pmacs_analytics.duckdb"
+            adapter = DuckDBAdapter(db_path=duckdb_path)
+            adapter.init_tables()
+            self._duckdb_adapter = adapter
+            return adapter
+        except Exception:
+            pass
+        return None
+
+    def _get_persona_brier_data(self) -> dict[str, tuple[float, int]]:
+        """Fetch per-persona (avg_brier, sample_count) from DuckDB for arbitration weighting.
+
+        Returns dict mapping persona name -> (rolling_brier, historical_n).
+        Falls back to empty dict if DuckDB is unavailable or has no data.
+        """
+        duck = self._get_duckdb_adapter()
+        if duck is None:
+            return {}
+        try:
+            conn = duck._get_conn()
+            if conn is None:
+                return {}
+            rows = conn.execute(
+                "SELECT persona, AVG(brier) as avg_brier, COUNT(*) as n "
+                "FROM persona_performance GROUP BY persona"
+            ).fetchall()
+            return {str(r[0]): (float(r[1]), int(r[2])) for r in rows}
+        except Exception:
+            return {}
 
     def _get_price_cache(self) -> Any | None:
         """Lazy-initialize and return the PriceCache (Architecture.md §6.1)."""
@@ -971,33 +1098,33 @@ class CycleOrchestrator:
         except Exception:
             return None
 
+    def _get_ledger(self) -> Any | None:
+        """Lazy-initialize and return the CashLedger (Architecture.md §9).
+
+        Seeds the ledger with starting capital on first access.
+        Returns None if the database is unavailable.
+        """
+        if self._ledger is not None:
+            return self._ledger
+        try:
+            from pmacs.engines.cash_ledger import CashLedger
+
+            ledger = CashLedger(db_path=self._db_path)
+            ledger.seed(cycle_id="")
+            self._ledger = ledger
+            return ledger
+        except Exception:
+            return None
+
     def _run_symbol(
         self, cycle_id: str, item: Any | None, op_seq: int
     ) -> int:
         """Steps 13a-13p: Per-symbol processing pipeline.
 
-        13a — Create Holding + transition to PHASE1_RESEARCH
-        13b — Antipattern check
-        13c — Episodic context build
-        13d — Persona slot dispatch (parallel, 270s timeout)
-        13e — Arbitration
-        13f-13p — Stubs for future waves
-
-        Hardening (S5-1):
-            - Persona dispatch: 270s hard timeout, ABORTED_LLM on timeout
-            - Crucible: 90s per cycle (180s total) hard timeout, default severity 0.5
-            - Evidence scoped to call stack (no module-level caches)
-
-        Args:
-            cycle_id: Current cycle identifier.
-            item: QueueItem for the symbol to process.
-            op_seq: Current operation sequence number.
-
-        Returns:
-            Next op_seq after symbol processing.
+        Delegates to sub-methods for each major step group.
+        Returns the next op_seq after symbol processing.
         """
         from pmacs.schemas.contracts import Holding, HoldingState
-        from pmacs.schemas.queue import QueueItem
         from pmacs.engines.state_machine import transition
 
         if item is None:
@@ -1022,15 +1149,77 @@ class CycleOrchestrator:
         # Track holding for potential INTERRUPT on mid-cycle abort (S5-2)
         self._symbol_holdings[ticker] = holding
 
+        # Emit agent.queued for all personas that will analyse this symbol
+        for slot_id, persona_names in self.PERSONA_SLOT_MAP.items():
+            for persona_name in persona_names:
+                self._publish_sse("agent", "agent.queued", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "persona": persona_name, "slot": slot_id,
+                })
+
         # -- Step 13b: Antipattern check ---
+        abort = self._step_13b_antipattern(holding, ticker, cycle_id, op)
+        if abort is not None:
+            return abort
+
+        # -- Step 13c: Episodic context build ---
+        brief = self._step_13c_episodic_context(ticker, cycle_id)
+
+        # -- Steps 13d: Evidence + persona dispatch ---
+        result = self._step_13d_personas(holding, ticker, cycle_id, op, brief)
+        if isinstance(result, int):
+            return result  # abort path
+        holding, persona_results, evidence_packets, op = result
+
+        # -- Step 13e: Arbitration ---
+        result = self._step_13e_arbitration(holding, ticker, cycle_id, op, persona_results)
+        if isinstance(result, int):
+            return result  # abort path
+        holding, arbitrated, op = result
+
+        # -- Steps 13f-13g: Crucible ---
+        result = self._step_13fg_crucible(holding, ticker, cycle_id, op, evidence_packets, arbitrated, brief)
+        if isinstance(result, int):
+            return result  # abort path
+        holding, crucible_severity, op = result
+
+        # -- Steps 13h-13l: EV, sizing, conviction, risk gate ---
+        result = self._step_13h_l_decision(holding, ticker, cycle_id, op, arbitrated, crucible_severity)
+        if isinstance(result, int):
+            return result  # abort path
+        holding, verdict, conviction_score, risk_result, ev_result, sizing_result, is_bootstrap, op = result
+
+        # -- Steps 13m-13n: Memo + scan record ---
+        op = self._step_13mn_post_decision(holding, ticker, cycle_id, op, evidence_packets, brief, verdict, conviction_score, arbitrated, crucible_severity)
+
+        # -- Steps 13o-13p: Execution + catastrophe net ---
+        op = self._step_13op_execution(holding, ticker, cycle_id, op, verdict, conviction_score, risk_result, sizing_result, ev_result, arbitrated)
+
+        # Symbol processing complete — persist holding and remove from tracking (S5-2)
+        self._upsert_holding(holding, cycle_id)
+        self._symbol_holdings.pop(ticker, None)
+
+        return op  # Next op_seq after symbol block
+
+    # -- _run_symbol sub-methods --
+
+    def _step_13b_antipattern(
+        self, holding: Any, ticker: str, cycle_id: str, op: int
+    ) -> int | None:
+        """Step 13b: Antipattern check. Returns op_seq if aborted, None to continue."""
         from pmacs.engines.memory import check_antipattern
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
 
         antipattern = check_antipattern(ticker, cycle_id)
         if antipattern is not None:
-            holding = transition(
+            # Use ABORTED_LLM (valid from PHASE1_RESEARCH onward);
+            # ABORTED_PRE_LLM is only valid from CANDIDATE state.
+            transition(
                 holding, HoldingState.ABORTED_LLM,
                 f"antipattern_detected:{antipattern}", cycle_id, op,
             )
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             log_debug(
                 "SYMBOL_ABORTED_ANTIPATTERN",
@@ -1044,17 +1233,18 @@ class CycleOrchestrator:
                 cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted: antipattern '{antipattern}' detected",
             )
-            return op + 1  # Skip to next symbol
+            return op + 1
+        return None
 
-        # -- Step 13c: Episodic context build ---
-        # Agents.md §18: 200-word brief from macro, failures, track record, lessons
-        # S6-2 edge case: stores unavailable -> fallback to minimal brief
+    def _step_13c_episodic_context(
+        self, ticker: str, cycle_id: str
+    ) -> str:
+        """Step 13c: Build episodic context brief. Returns brief string."""
         from pmacs.agents.episodic_context import build_context_brief
 
         regime_label = "UNCERTAIN"
         regime_conf = 0.0
         if self._macro_regime_result is not None:
-            # MacroRegimeOutput has regime and regime_confidence fields
             raw = getattr(self._macro_regime_result, "raw_output", "")
             if raw:
                 import json as _json
@@ -1065,10 +1255,10 @@ class CycleOrchestrator:
                 except (ValueError, TypeError):
                     pass
 
-        # Fetch real store data for episodic context (Agents.md §18)
         recent_failures: list[dict] | None = None
         recent_lessons: list[str] | None = None
         fde_history: list[dict] | None = None
+        affinity_data: dict | None = None
 
         kuzu = self._get_kuzu_adapter()
         if kuzu is not None:
@@ -1078,6 +1268,18 @@ class CycleOrchestrator:
                     recent_failures = [
                         {"taxonomy": f.get("fa.taxonomy", ""), "summary": f.get("fa.summary", "")}
                         for f in failures
+                    ]
+                # FDE history from KuzuDB
+                fde_rows = kuzu.query(
+                    "MATCH (fa:FailedAssumption)-[:CLASSIFIED_FROM]->(h:Holding) "
+                    "WHERE h.ticker = $ticker RETURN fa.taxonomy, fa.severity "
+                    "ORDER BY fa.id DESC LIMIT 3",
+                    {"ticker": ticker},
+                )
+                if fde_rows:
+                    fde_history = [
+                        {"taxonomy": r.get("fa.taxonomy", ""), "severity": r.get("fa.severity", 0.0)}
+                        for r in fde_rows
                     ]
             except Exception:
                 pass
@@ -1095,8 +1297,59 @@ class CycleOrchestrator:
             except Exception:
                 pass
 
+        # Persona-ticker affinity from DuckDB
+        duckdb_adapter = self._get_duckdb_adapter()
+        if duckdb_adapter is not None:
+            try:
+                rows = duckdb_adapter.execute(
+                    "SELECT avg_brier, cycle_count FROM persona_ticker_affinity "
+                    "WHERE ticker = ? ORDER BY avg_brier ASC LIMIT 1",
+                    [ticker],
+                )
+                if rows:
+                    affinity_data = {"avg_brier": rows[0][0], "cycle_count": rows[0][1]}
+            except Exception:
+                pass
+
+        # Prior verdict for this ticker (long-term memory)
+        prior_verdict: str | None = None
+        prior_conviction: float | None = None
+        prior_key_signal: str | None = None
+        prior_decided_at: str | None = None
+        ticker_analysis_count: int = 0
         try:
-            brief = build_context_brief(
+            conn_prior = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn_prior.execute(
+                    "SELECT verdict, conviction_score, decided_at "
+                    "FROM decisions WHERE ticker = ? "
+                    "ORDER BY decided_at DESC LIMIT 1",
+                    (ticker,),
+                ).fetchall()
+                if rows:
+                    prior_verdict = rows[0][0]
+                    prior_conviction = rows[0][1]
+                    prior_decided_at = (rows[0][2] or "")[:10]
+                count_rows = conn_prior.execute(
+                    "SELECT COUNT(*) FROM decisions WHERE ticker = ?",
+                    (ticker,),
+                ).fetchone()
+                ticker_analysis_count = count_rows[0] if count_rows else 0
+                # Try to get prior key_signal from memos if available
+                memo_rows = conn_prior.execute(
+                    "SELECT substr(raw_text, 1, 300) FROM memos WHERE ticker = ? "
+                    "ORDER BY decided_at DESC LIMIT 1",
+                    (ticker,),
+                ).fetchall()
+                if memo_rows and memo_rows[0][0]:
+                    prior_key_signal = memo_rows[0][0][:200]
+            finally:
+                conn_prior.close()
+        except Exception:
+            pass
+
+        try:
+            return build_context_brief(
                 persona="all",
                 ticker=ticker,
                 regime=regime_label,
@@ -1104,33 +1357,36 @@ class CycleOrchestrator:
                 recent_failures=recent_failures,
                 recent_lessons=recent_lessons or None,
                 fde_history=fde_history,
+                affinity_data=affinity_data,
+                prior_verdict=prior_verdict,
+                prior_conviction=prior_conviction,
+                prior_key_signal=prior_key_signal,
+                prior_decided_at=prior_decided_at,
+                ticker_analysis_count=ticker_analysis_count,
             )
         except Exception as exc:
-            # Fallback to minimal brief on any storage failure
-            brief = f"MACRO CONTEXT: regime={regime_label} confidence={regime_conf:.2f}"
             log_debug(
                 "EPISODIC_CONTEXT_FALLBACK",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "error": str(exc),
-                },
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
                 level="WARN",
                 error_code="STALE_DATA",
                 cycle_id=cycle_id,
-                msg=f"Episodic context build failed for {ticker}, "
-                    f"using minimal brief: {exc}",
+                msg=f"Episodic context build failed for {ticker}, using minimal brief: {exc}",
             )
+            return f"MACRO CONTEXT: regime={regime_label} confidence={regime_conf:.2f}"
 
-        # -- Step 13d: Persona slot dispatch (S5-1: 270s timeout) ---
-        # Evidence is local to this call — no module-level caches between symbols.
-        # S6-2 edge case: evidence gateway timeout -> per-symbol abort with DATA_UNAVAILABLE
+    def _step_13d_personas(
+        self, holding: Any, ticker: str, cycle_id: str, op: int, brief: str
+    ) -> int | tuple[Any, dict, list, int]:
+        """Step 13d: Evidence fetch + persona dispatch.
+        Returns int (abort) or (holding, results, evidence, op)."""
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
+
         try:
             from pmacs.data.evidence_router import fetch_evidence_for_ticker
             evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
-            evidence: list[Any] = list(evidence_packet.evidence)
-            # TODO: Future refinement -- filter evidence per persona using
-            # PERSONA_EVIDENCE_MAP before passing to _dispatch_personas.
+            evidence_packets: list[Any] = [evidence_packet]
         except Exception as exc:
             log_debug(
                 "EVIDENCE_FETCH_FAILED",
@@ -1140,10 +1396,9 @@ class CycleOrchestrator:
                 cycle_id=cycle_id,
                 msg=f"Evidence fetch failed for {ticker}: {exc}",
             )
-            evidence = []
+            evidence_packets = []
 
-        # -- Fetch real-time price for sizing and execution (Architecture.md §6.1) --
-        current_price: float = 1.0  # fallback default
+        current_price: float = 1.0
         price_cache = self._get_price_cache()
         if price_cache is not None:
             fetched = price_cache.get_price(ticker, cycle_id)
@@ -1159,11 +1414,14 @@ class CycleOrchestrator:
                     msg=f"Price unavailable for {ticker}, using fallback 1.0",
                 )
 
+        # Store current_price for later use by sizing
+        self._current_price = current_price
+
         persona_results: dict[str, Any] = {}
         persona_timed_out = False
         try:
             persona_results = self._dispatch_personas_with_timeout(
-                evidence=evidence,
+                evidence=evidence_packets,
                 brief=brief,
                 cycle_id=cycle_id,
                 ticker=ticker,
@@ -1173,28 +1431,16 @@ class CycleOrchestrator:
             persona_timed_out = True
 
         if persona_timed_out or not persona_results:
-            # Timeout or all personas failed — transition to PHASE1_TIMEOUT then ABORTED_LLM
             reason = "persona_dispatch_timeout:270s" if persona_timed_out else "all_personas_failed"
             if persona_timed_out:
-                # Transition through PHASE1_TIMEOUT first (valid from PHASE1_RESEARCH)
-                holding = transition(
-                    holding, HoldingState.PHASE1_TIMEOUT,
-                    reason, cycle_id, op,
-                )
+                transition(holding, HoldingState.PHASE1_TIMEOUT, reason, cycle_id, op)
                 op += 1
-            holding = transition(
-                holding, HoldingState.ABORTED_LLM,
-                reason, cycle_id, op,
-            )
+            transition(holding, HoldingState.ABORTED_LLM, reason, cycle_id, op)
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             log_debug(
                 "SYMBOL_ABORTED_" + ("TIMEOUT" if persona_timed_out else "ALL_PERSONAS_FAILED"),
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "reason": reason,
-                },
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id, "reason": reason},
                 level="WARN",
                 error_code="ABORTED_LLM",
                 cycle_id=cycle_id,
@@ -1202,33 +1448,31 @@ class CycleOrchestrator:
             )
             return op + 1
 
-        op += 1
+        return holding, persona_results, evidence_packets, op + 1
 
-        # -- Step 13e: Arbitration ---
+    def _step_13e_arbitration(
+        self, holding: Any, ticker: str, cycle_id: str, op: int, persona_results: dict
+    ) -> int | tuple[Any, Any, int]:
+        """Step 13e: Arbitration. Returns int (abort) or (holding, arbitrated, op)."""
         from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
-        from pmacs.schemas.agents import DirectionalProbability, PersonaName
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
 
         signals: list[ArbitrationSignal] = []
+        brier_data = self._get_persona_brier_data()
         for persona_name_str, raw_output in persona_results.items():
-            dp = self._extract_directional_probability(
-                persona_name_str, ticker, cycle_id, raw_output,
-            )
+            dp = self._extract_directional_probability(persona_name_str, ticker, cycle_id, raw_output)
             if dp is not None:
-                signals.append(ArbitrationSignal(dp))
+                avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
+                signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
 
         if not signals:
-            holding = transition(
-                holding, HoldingState.ABORTED_LLM,
-                "no_valid_directional_probs", cycle_id, op,
-            )
+            transition(holding, HoldingState.ABORTED_LLM, "no_valid_directional_probs", cycle_id, op)
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             log_debug(
                 "SYMBOL_ABORTED_NO_PROBS",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                },
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id},
                 level="WARN",
                 error_code="ABORTED_LLM",
                 cycle_id=cycle_id,
@@ -1237,17 +1481,12 @@ class CycleOrchestrator:
             return op + 1
 
         arbitrated = arbitrate(signals, cycle_id=cycle_id)
-
         log_debug(
             "SYMBOL_ARBITRATION_COMPLETE",
             payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
+                "cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
                 "decision": arbitrated.decision.value,
-                "p_up": arbitrated.p_up,
-                "p_flat": arbitrated.p_flat,
-                "p_down": arbitrated.p_down,
+                "p_up": arbitrated.p_up, "p_flat": arbitrated.p_flat, "p_down": arbitrated.p_down,
                 "signals_count": len(signals),
             },
             level="INFO",
@@ -1255,79 +1494,63 @@ class CycleOrchestrator:
             msg=f"Symbol {ticker} arbitration: {arbitrated.decision.value} "
                 f"(p_up={arbitrated.p_up:.2f}, p_down={arbitrated.p_down:.2f})",
         )
+        self._publish_sse("decision", "decision.arbitrated", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "decision": arbitrated.decision.value,
+            "p_up": round(arbitrated.p_up, 4),
+            "p_flat": round(arbitrated.p_flat, 4),
+            "p_down": round(arbitrated.p_down, 4),
+            "matured_sources": arbitrated.matured_sources_used,
+            "signals_count": len(signals),
+        })
+        return holding, arbitrated, op + 1
 
+    def _step_13fg_crucible(
+        self, holding: Any, ticker: str, cycle_id: str, op: int,
+        evidence_packets: list, arbitrated: Any, brief: str,
+    ) -> int | tuple[Any, float, int]:
+        """Steps 13f-13g: Crucible loop. Returns int (abort) or (holding, severity, op)."""
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
+
+        holding = transition(holding, HoldingState.PHASE2_CRUCIBLE, "phase2_crucible_start", cycle_id, op)
         op += 1
 
-        # -- Step 13f: Transition to PHASE2_CRUCIBLE ---
-        holding = transition(
-            holding, HoldingState.PHASE2_CRUCIBLE,
-            "phase2_crucible_start", cycle_id, op,
-        )
-        op += 1
-
-        # -- Step 13g: Crucible 2-iteration rewrite loop (Agents.md §16) ---
-        # State machine: INITIAL -> REWRITE -> DONE/ABORT
-        # Hard limits: 2 cycles max, 90s per cycle, 180s total, NO_TRADE on budget exhaust
         CRUCIBLE_MAX_CYCLES = 2
-        CRUCIBLE_PER_CYCLE_TIMEOUT = 90   # seconds (Architecture.md §17.3)
-
+        CRUCIBLE_PER_CYCLE_TIMEOUT = 90
         crucible_severity = 0.0
         crucible_state = "INITIAL"
         crucible_iterations = 0
         revised_evidence: list[Any] | None = None
         from pmacs.agents.crucible import CrucibleRunner
+        import json as _json
 
         crucible_runner = CrucibleRunner()
         crucible_start = time.monotonic()
-        import json as _json
 
         for _cycle_idx in range(CRUCIBLE_MAX_CYCLES):
             elapsed = time.monotonic() - crucible_start
             if elapsed > 180:
-                log_debug(
-                    "CRUCIBLE_BUDGET_EXHAUSTED",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                        "elapsed_s": elapsed,
-                    },
-                    level="WARN",
-                    error_code="CRUCIBLE_TIMEOUT",
-                    cycle_id=cycle_id,
-                    msg=f"Crucible 180s total budget exhausted for {ticker}",
-                )
+                log_debug("CRUCIBLE_BUDGET_EXHAUSTED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "elapsed_s": elapsed},
+                    level="WARN", error_code="CRUCIBLE_TIMEOUT", cycle_id=cycle_id,
+                    msg=f"Crucible 180s total budget exhausted for {ticker}")
                 crucible_state = "ABORT"
                 break
 
-            # Build evidence input: revised on 2nd iteration if available
-            ev_input = revised_evidence if revised_evidence is not None else evidence
-
+            ev_input = revised_evidence if revised_evidence is not None else evidence_packets
             try:
-                # Run Crucible with 90s per-cycle timeout
                 with ThreadPoolExecutor(max_workers=1) as crucible_pool:
                     crucible_future = crucible_pool.submit(
-                        crucible_runner.run,
-                        evidence=ev_input,
-                        episodic_context=brief,
-                    )
+                        crucible_runner.run, evidence=ev_input, episodic_context=brief)
                     try:
-                        crucible_output = crucible_future.result(
-                            timeout=CRUCIBLE_PER_CYCLE_TIMEOUT,
-                        )
+                        crucible_output = crucible_future.result(timeout=CRUCIBLE_PER_CYCLE_TIMEOUT)
                     except FuturesTimeoutError:
-                        log_debug(
-                            "CRUCIBLE_CYCLE_TIMEOUT",
-                            payload={
-                                "cycle_id": cycle_id,
-                                "ticker": ticker,
-                                "cycle": _cycle_idx + 1,
-                                "elapsed_s": time.monotonic() - crucible_start,
-                            },
-                            level="WARN",
-                            error_code="CRUCIBLE_TIMEOUT",
-                            cycle_id=cycle_id,
-                            msg=f"Crucible cycle {_cycle_idx + 1} timed out (90s) for {ticker}",
-                        )
+                        log_debug("CRUCIBLE_CYCLE_TIMEOUT",
+                            payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
+                                     "elapsed_s": time.monotonic() - crucible_start},
+                            level="WARN", error_code="CRUCIBLE_TIMEOUT", cycle_id=cycle_id,
+                            msg=f"Crucible cycle {_cycle_idx + 1} timed out (90s) for {ticker}")
                         crucible_state = "ABORT"
                         break
 
@@ -1335,372 +1558,248 @@ class CycleOrchestrator:
                     crucible_state = "ABORT"
                     break
 
-                # Parse severity from output
                 try:
                     crucible_data = _json.loads(crucible_output.raw_output)
-                    crucible_severity = float(
-                        crucible_data.get("severity_score", 0.5)
-                    )
+                    crucible_severity = float(crucible_data.get("severity", 0.5))
                 except (ValueError, TypeError, AttributeError):
-                    crucible_severity = 0.5  # moderate default on parse failure
+                    crucible_severity = 0.5
 
                 crucible_iterations += 1
+                log_debug("CRUCIBLE_CYCLE_COMPLETE",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
+                             "severity": crucible_severity},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Crucible cycle {_cycle_idx + 1} for {ticker}: severity={crucible_severity:.2f}")
 
-                log_debug(
-                    "CRUCIBLE_CYCLE_COMPLETE",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                        "cycle": _cycle_idx + 1,
-                        "severity": crucible_severity,
-                    },
-                    level="INFO",
-                    cycle_id=cycle_id,
-                    msg=f"Crucible cycle {_cycle_idx + 1} for {ticker}: severity={crucible_severity:.2f}",
-                )
-
-                # State transitions per Agents.md §16.1
                 if crucible_severity >= 0.6:
-                    # High severity -> immediate ABORT (NO_TRADE)
                     crucible_state = "ABORT"
                     break
-                elif (
-                    crucible_severity >= 0.3
-                    and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1
-                ):
-                    # Medium severity -> rebuild evidence brief for rewrite
+                elif crucible_severity >= 0.3 and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1:
                     crucible_state = "REWRITE"
                     attacks = crucible_data.get("attacks", [])
-                    revised_evidence = _rebuild_evidence_brief(
-                        evidence, attacks, arbitrated, ticker,
-                    )
-                    log_debug(
-                        "CRUCIBLE_REWRITE_TRIGGERED",
-                        payload={
-                            "cycle_id": cycle_id,
-                            "ticker": ticker,
-                            "cycle": _cycle_idx + 1,
-                            "severity": crucible_severity,
-                            "num_attacks": len(attacks),
-                        },
-                        level="INFO",
-                        cycle_id=cycle_id,
-                        msg=f"Crucible cycle 1 severity {crucible_severity:.2f}, rebuilding evidence for cycle 2",
-                    )
+                    revised_evidence = _rebuild_evidence_brief(evidence_packets, attacks, arbitrated, ticker)
+                    log_debug("CRUCIBLE_REWRITE_TRIGGERED",
+                        payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
+                                 "severity": crucible_severity, "num_attacks": len(attacks)},
+                        level="INFO", cycle_id=cycle_id,
+                        msg=f"Crucible cycle 1 severity {crucible_severity:.2f}, rebuilding evidence for cycle 2")
                 else:
-                    # Low severity or max cycles reached -> DONE
                     crucible_state = "DONE"
                     break
-
             except Exception as exc:
-                log_debug(
-                    "CRUCIBLE_EXCEPTION",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                        "cycle": _cycle_idx + 1,
-                        "error": str(exc),
-                    },
-                    level="WARN",
-                    error_code="ABORTED_LLM",
-                    cycle_id=cycle_id,
-                    msg=f"Crucible raised {type(exc).__name__} in cycle {_cycle_idx + 1} for {ticker}",
-                )
+                log_debug("CRUCIBLE_EXCEPTION",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1, "error": str(exc)},
+                    level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                    msg=f"Crucible raised {type(exc).__name__} in cycle {_cycle_idx + 1} for {ticker}")
                 crucible_state = "ABORT"
                 break
 
-        # Handle ABORT: transition to ABORTED_RISK, skip remaining pipeline
         if crucible_state == "ABORT":
-            holding = transition(
-                holding, HoldingState.ABORTED_RISK,
-                f"crucible_abort:severity={crucible_severity:.2f},iterations={crucible_iterations}",
-                cycle_id, op,
-            )
-            log_debug(
-                "SYMBOL_ABORTED_CRUCIBLE",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "crucible_severity": crucible_severity,
-                    "crucible_state": crucible_state,
-                    "crucible_iterations": crucible_iterations,
-                    "elapsed_s": time.monotonic() - crucible_start,
-                },
-                level="WARN",
-                error_code="ABORTED_CRUCIBLE",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}",
-            )
+            transition(holding, HoldingState.ABORTED_RISK,
+                f"crucible_abort:severity={crucible_severity:.2f},iterations={crucible_iterations}", cycle_id, op)
+            log_debug("SYMBOL_ABORTED_CRUCIBLE",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                         "crucible_severity": crucible_severity, "crucible_state": crucible_state,
+                         "crucible_iterations": crucible_iterations,
+                         "elapsed_s": time.monotonic() - crucible_start},
+                level="WARN", error_code="ABORTED_CRUCIBLE", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}")
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             return op + 1
 
-        log_debug(
-            "SYMBOL_CRUCIBLE_COMPLETE",
-            payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
-                "crucible_severity": crucible_severity,
-                "crucible_state": crucible_state,
-                "crucible_iterations": crucible_iterations,
-            },
-            level="INFO",
-            cycle_id=cycle_id,
-            msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}, state={crucible_state}, iterations={crucible_iterations}",
-        )
-        op += 1
+        log_debug("SYMBOL_CRUCIBLE_COMPLETE",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "crucible_severity": crucible_severity, "crucible_state": crucible_state,
+                     "crucible_iterations": crucible_iterations},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}, state={crucible_state}, iterations={crucible_iterations}")
+        self._publish_sse("decision", "decision.crucible_complete", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "severity": round(crucible_severity, 4),
+            "iterations": crucible_iterations,
+            "state": crucible_state,
+        })
+        return holding, crucible_severity, op + 1
 
-        # -- Step 13h: EV computation (real pricing) ---
+    def _step_13h_l_decision(
+        self, holding: Any, ticker: str, cycle_id: str, op: int,
+        arbitrated: Any, crucible_severity: float,
+    ) -> int | tuple[Any, Any, float, Any, Any, Any, bool, int]:
+        """Steps 13h-13l: EV, sizing, conviction, risk gate.
+        Returns int (abort) or (holding, verdict, conviction, risk_result, ev_result, sizing_result, is_bootstrap, op)."""
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
         from pmacs.engines.pricing import compute_ev, EvInputs
 
+        current_price = getattr(self, '_current_price', 0.0)
+
+        # 13h: EV
         ev_result = compute_ev(EvInputs(
-            p_up=arbitrated.p_up,
-            p_down=arbitrated.p_down,
-            atr_pct=None,          # todo: wire ATR provider when available
-            current_price=current_price,
+            p_up=arbitrated.p_up, p_down=arbitrated.p_down,
+            atr_pct=None, current_price=current_price,
         ))
-
-        log_debug(
-            "SYMBOL_EV_COMPUTED",
-            payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
-                "ev_pct": ev_result.expected_value_pct,
-                "ev_multiple": ev_result.ev_multiple,
-                "is_positive": ev_result.is_positive,
-                "target_gain_pct": ev_result.target_gain_pct,
-                "stop_loss_pct": ev_result.stop_loss_pct,
-            },
-            level="INFO",
-            cycle_id=cycle_id,
+        log_debug("SYMBOL_EV_COMPUTED",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "ev_pct": ev_result.expected_value_pct, "ev_multiple": ev_result.ev_multiple,
+                     "is_positive": ev_result.is_positive,
+                     "target_gain_pct": ev_result.target_gain_pct, "stop_loss_pct": ev_result.stop_loss_pct},
+            level="INFO", cycle_id=cycle_id,
             msg=f"Symbol {ticker} EV: {ev_result.expected_value_pct:.4f} "
-                f"(multiple={ev_result.ev_multiple:.2f}, "
-                f"target={ev_result.target_gain_pct:.2%}, "
-                f"stop={ev_result.stop_loss_pct:.2%})",
-        )
+                f"(multiple={ev_result.ev_multiple:.2f}, target={ev_result.target_gain_pct:.2%}, stop={ev_result.stop_loss_pct:.2%})")
         op += 1
 
-        # -- Step 13i: Transition to APPROVED_PENDING ---
-        holding = transition(
-            holding, HoldingState.APPROVED_PENDING,
-            "pipeline_approved", cycle_id, op,
-        )
+        # 13i: APPROVED_PENDING
+        holding = transition(holding, HoldingState.APPROVED_PENDING, "pipeline_approved", cycle_id, op)
         op += 1
 
-        # -- Step 13j: Sizing ---
+        # 13j: Sizing
         from pmacs.engines.sizing import size_position, SizingInputs
-
         portfolio_value = 5000.0
-        if self._ledger is not None:
-            portfolio_value = self._ledger.total_value
+        ledger = self._get_ledger() or self._ledger
+        if ledger is not None:
+            if hasattr(ledger, "get_snapshot"):
+                portfolio_value = ledger.get_snapshot()["total_value_usd"]
+            elif hasattr(ledger, "total_value"):
+                portfolio_value = ledger.total_value
 
-        is_bootstrap = (
-            arbitrated.decision.value == "PROCEED_BOOTSTRAP_LOW_CONFIDENCE"
-        )
-
+        is_bootstrap = arbitrated.decision.value == "PROCEED_BOOTSTRAP_LOW_CONFIDENCE"
         sizing_result = size_position(SizingInputs(
-            p_up=arbitrated.p_up,
-            p_down=arbitrated.p_down,
-            target_gain_pct=ev_result.target_gain_pct,
-            stop_loss_pct=ev_result.stop_loss_pct,
+            p_up=arbitrated.p_up, p_down=arbitrated.p_down,
+            target_gain_pct=ev_result.target_gain_pct, stop_loss_pct=ev_result.stop_loss_pct,
             matured_sources_used=arbitrated.matured_sources_used,
             is_limited_history=is_bootstrap,
-            portfolio_value_usd=portfolio_value,
-            current_price=current_price,
+            portfolio_value_usd=portfolio_value, current_price=current_price,
         ))
 
         if sizing_result.abort_reason:
-            holding = transition(
-                holding, HoldingState.ABORTED_RISK,
-                f"sizing_abort:{sizing_result.abort_reason}", cycle_id, op,
-            )
-            log_debug(
-                "SYMBOL_ABORTED_SIZING",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "abort_reason": sizing_result.abort_reason,
-                },
-                level="WARN",
-                error_code="SIZING_CAPPED",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted: sizing {sizing_result.abort_reason}",
-            )
+            transition(holding, HoldingState.ABORTED_RISK, f"sizing_abort:{sizing_result.abort_reason}", cycle_id, op)
+            log_debug("SYMBOL_ABORTED_SIZING",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id, "abort_reason": sizing_result.abort_reason},
+                level="WARN", error_code="SIZING_CAPPED", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: sizing {sizing_result.abort_reason}")
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             return op + 1
 
-        log_debug(
-            "SYMBOL_SIZING_COMPLETE",
-            payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
-                "target_usd": sizing_result.target_usd,
-                "target_shares": sizing_result.target_shares,
-                "haircuts": sizing_result.applied_haircuts,
-            },
-            level="INFO",
-            cycle_id=cycle_id,
-            msg=f"Symbol {ticker} sizing: ${sizing_result.target_usd:.2f} "
-                f"({sizing_result.target_shares:.2f} shares)",
-        )
+        log_debug("SYMBOL_SIZING_COMPLETE",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "target_usd": sizing_result.target_usd, "target_shares": sizing_result.target_shares,
+                     "haircuts": sizing_result.applied_haircuts},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} sizing: ${sizing_result.target_usd:.2f} ({sizing_result.target_shares:.2f} shares)")
+        self._publish_sse("decision", "decision.sized", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "target_usd": round(sizing_result.target_usd, 2),
+            "target_shares": round(sizing_result.target_shares, 4),
+            "haircuts": sizing_result.applied_haircuts,
+        })
         op += 1
 
-        # -- Step 13k: Conviction + Verdict ---
+        # 13k: Conviction + Verdict
         from pmacs.engines.conviction import compute_conviction, verdict_tier
         from pmacs.schemas.conviction import VerdictTier
-
-        conviction_score = compute_conviction(
-            arb=arbitrated,
-            crucible_severity=crucible_severity,
-            ev_multiple=ev_result.ev_multiple,
-            is_bootstrap=is_bootstrap,
-        )
+        conviction_score = compute_conviction(arb=arbitrated, crucible_severity=crucible_severity,
+                                              ev_multiple=ev_result.ev_multiple, is_bootstrap=is_bootstrap)
         verdict = verdict_tier(conviction_score)
-
-        log_debug(
-            "SYMBOL_CONVICTION_COMPUTED",
-            payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
-                "conviction_score": conviction_score,
-                "verdict": verdict.value,
-            },
-            level="INFO",
-            cycle_id=cycle_id,
-            msg=f"Symbol {ticker} conviction: {conviction_score:.4f} "
-                f"-> {verdict.value}",
-        )
+        log_debug("SYMBOL_CONVICTION_COMPUTED",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "conviction_score": conviction_score, "verdict": verdict.value},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} conviction: {conviction_score:.4f} -> {verdict.value}")
 
         if verdict == VerdictTier.SKIP:
-            holding = transition(
-                holding, HoldingState.ABORTED_RISK,
-                f"verdict_skip:conviction={conviction_score:.4f}", cycle_id, op,
-            )
-            log_debug(
-                "SYMBOL_ABORTED_VERDICT_SKIP",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "conviction_score": conviction_score,
-                },
-                level="INFO",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted: verdict SKIP "
-                    f"(conviction={conviction_score:.4f})",
-            )
+            transition(holding, HoldingState.ABORTED_RISK,
+                       f"verdict_skip:conviction={conviction_score:.4f}", cycle_id, op)
+            log_debug("SYMBOL_ABORTED_VERDICT_SKIP",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id, "conviction_score": conviction_score},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: verdict SKIP (conviction={conviction_score:.4f})")
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             return op + 1
-
         op += 1
 
-        # -- Step 13l: Risk gate ---
-        from pmacs.engines.portfolio_risk_gate import (
-            evaluate_risk_gate, RiskGateInputs,
-        )
-
+        # 13l: Risk gate
+        from pmacs.engines.portfolio_risk_gate import evaluate_risk_gate, RiskGateInputs
         current_position_count = 0
-        if self._ledger is not None:
-            current_position_count = self._ledger.position_count
+        if ledger is not None and hasattr(ledger, "position_count"):
+            current_position_count = ledger.position_count
+        elif ledger is not None:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM holdings WHERE state = 'ACTIVE'").fetchone()
+                current_position_count = row[0] if row else 0
+            finally:
+                conn.close()
 
         risk_result = evaluate_risk_gate(RiskGateInputs(
-            current_position_count=current_position_count,
-            max_concurrent_positions=5,
-            target_usd=sizing_result.target_usd,
-            portfolio_value_usd=portfolio_value,
-            max_position_pct=0.20,
-            sector=holding.sector,
+            current_position_count=current_position_count, max_concurrent_positions=5,
+            target_usd=sizing_result.target_usd, portfolio_value_usd=portfolio_value,
+            max_position_pct=0.20, sector=holding.sector,
         ))
 
         if not risk_result.passed:
-            holding = transition(
-                holding, HoldingState.ABORTED_RISK,
-                f"risk_gate:{','.join(risk_result.reasons)}", cycle_id, op,
-            )
-            log_debug(
-                "SYMBOL_ABORTED_RISK_GATE",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "reasons": risk_result.reasons,
-                },
-                level="INFO",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} aborted: risk gate blocked "
-                    f"({', '.join(risk_result.reasons)})",
-            )
+            transition(holding, HoldingState.ABORTED_RISK,
+                       f"risk_gate:{','.join(risk_result.reasons)}", cycle_id, op)
+            log_debug("SYMBOL_ABORTED_RISK_GATE",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id, "reasons": risk_result.reasons},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} aborted: risk gate blocked ({', '.join(risk_result.reasons)})")
+            self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
             return op + 1
 
-        log_debug(
-            "SYMBOL_RISK_GATE_PASSED",
-            payload={
-                "cycle_id": cycle_id,
-                "ticker": ticker,
-                "holding_id": holding.id,
-                "position_count": current_position_count,
-                "target_usd": sizing_result.target_usd,
-            },
-            level="INFO",
-            cycle_id=cycle_id,
-            msg=f"Symbol {ticker} risk gate: passed",
-        )
-        op += 1
+        log_debug("SYMBOL_RISK_GATE_PASSED",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "position_count": current_position_count, "target_usd": sizing_result.target_usd},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} risk gate: passed")
+        self._publish_sse("decision", "decision.final", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "verdict": verdict.value,
+            "conviction": round(conviction_score, 4),
+            "ev_pct": round(ev_result.expected_value_pct, 4),
+            "target_usd": round(sizing_result.target_usd, 2),
+            "risk_gate_passed": True,
+        })
+        return holding, verdict, conviction_score, risk_result, ev_result, sizing_result, is_bootstrap, op + 1
 
-        # -- Step 13m: Memo (best effort) ---
+    def _step_13mn_post_decision(
+        self, holding: Any, ticker: str, cycle_id: str, op: int,
+        evidence_packets: list, brief: str,
+        verdict: Any, conviction_score: float, arbitrated: Any,
+        crucible_severity: float = 0.0,
+    ) -> int:
+        """Steps 13m-13n: Memo writer + scan record."""
         from pmacs.agents.memo_writer import MemoWriterRunner
 
+        # 13m: Memo (best effort)
         try:
             memo_runner = MemoWriterRunner()
-            memo_output = memo_runner.run(
-                evidence=evidence, episodic_context=brief,
+            memo_runner.set_analytical_context(
+                arbitrated=arbitrated,
+                verdict=verdict,
+                conviction_score=conviction_score,
+                crucible_severity=crucible_severity,
+                persona_outputs=getattr(arbitrated, "persona_outputs", None),
             )
+            memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
             if memo_output is not None:
-                log_debug(
-                    "SYMBOL_MEMO_WRITTEN",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                        "holding_id": holding.id,
-                    },
-                    level="INFO",
-                    cycle_id=cycle_id,
-                    msg=f"Symbol {ticker} memo: written",
-                )
+                log_debug("SYMBOL_MEMO_WRITTEN",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id},
+                    level="INFO", cycle_id=cycle_id, msg=f"Symbol {ticker} memo: written")
             else:
-                log_debug(
-                    "SYMBOL_MEMO_SKIPPED",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                    },
-                    level="INFO",
-                    cycle_id=cycle_id,
-                    msg=f"Symbol {ticker} memo: skipped (LLM returned None)",
-                )
+                log_debug("SYMBOL_MEMO_SKIPPED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker},
+                    level="INFO", cycle_id=cycle_id, msg=f"Symbol {ticker} memo: skipped (LLM returned None)")
         except Exception as exc:
-            log_debug(
-                "SYMBOL_MEMO_EXCEPTION",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "error": str(exc),
-                },
-                level="WARN",
-                error_code="MEMO_WRITER_FAILED",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), "
-                    "continuing (best effort)",
-            )
-        op += 1
+            log_debug("SYMBOL_MEMO_EXCEPTION",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), continuing (best effort)")
 
-        # -- Step 13n: Scan record ---
+        # 13n: Scan record
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
             conn = sqlite3.connect(str(self._db_path))
@@ -1709,136 +1808,38 @@ class CycleOrchestrator:
                     "INSERT INTO scan_records "
                     "(ticker, cycle_id, verdict, conviction_score, direction, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        ticker,
-                        cycle_id,
-                        verdict.value,
-                        conviction_score,
-                        "UP" if arbitrated.p_up > arbitrated.p_down else "DOWN",
-                        now_iso,
-                    ),
+                    (ticker, cycle_id, verdict.value, conviction_score,
+                     "UP" if arbitrated.p_up > arbitrated.p_down else "DOWN", now_iso),
                 )
                 conn.commit()
             finally:
                 conn.close()
         except Exception as exc:
-            log_debug(
-                "SCAN_RECORD_WRITE_FAILED",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "error": str(exc),
-                },
-                level="WARN",
-                error_code="DB_WRITE_FAILED",
-                cycle_id=cycle_id,
-                msg=f"Scan record write failed for {ticker}: {exc}",
-            )
-        op += 1
+            log_debug("SCAN_RECORD_WRITE_FAILED",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                msg=f"Scan record write failed for {ticker}: {exc}")
 
-        # -- Step 13o: Execution (mock fill) ---
-        # Only execute if verdict is BUY or STRONG_BUY AND risk gate passed
-        if verdict in (VerdictTier.BUY, VerdictTier.STRONG_BUY) and risk_result.passed:
-            holding = transition(
-                holding, HoldingState.ACTIVE,
-                "execution_approved", cycle_id, op,
-            )
+        return op + 2
 
-            # Determine entry price from PriceCache (Architecture.md §6.1)
-            entry_price = current_price
-            shares = sizing_result.target_shares
-            stop_price = round(entry_price * (1 - ev_result.stop_loss_pct), 2)
+    def _step_13op_execution(
+        self, holding: Any, ticker: str, cycle_id: str, op: int,
+        verdict: Any, conviction_score: float,
+        risk_result: Any, sizing_result: Any, ev_result: Any, arbitrated: Any,
+    ) -> int:
+        """Steps 13o-13p: Execution + catastrophe net stop."""
+        from pmacs.engines.state_machine import transition
+        from pmacs.schemas.contracts import HoldingState
+        from pmacs.schemas.conviction import VerdictTier
+        from pmacs.schemas.system import is_shadow_active
 
-            # Execution fields set post-transition (not state-related):
-            holding.entry_price_usd = entry_price
-            holding.position_size_usd = sizing_result.target_usd
-            holding.stop_price_usd = stop_price
-            holding.verdict = verdict.value
-            holding.conviction_score = conviction_score
-            # Note: holding.sector is already set during Holding creation
+        current_price = getattr(self, '_current_price', 0.0)
 
-            # Mock fill via paper ledger
-            if self._ledger is not None:
-                try:
-                    self._ledger.open_position(
-                        ticker=ticker,
-                        shares=shares,
-                        price=entry_price,
-                        sector=holding.sector,
-                        stop_price=stop_price,
-                    )
-                except ValueError as exc:
-                    log_debug(
-                        "LEDGER_OPEN_POSITION_FAILED",
-                        payload={
-                            "cycle_id": cycle_id,
-                            "ticker": ticker,
-                            "error": str(exc),
-                        },
-                        level="WARN",
-                        error_code="LEDGER_CONSTRAINT",
-                        cycle_id=cycle_id,
-                        msg=f"Ledger rejected position for {ticker}: {exc}",
-                    )
-
-            # Create TradePlan and write to audit
-            from pmacs.schemas.trade import TradePlan, TradeDirection, OrderType
-
-            trade_plan = TradePlan(
-                id=str(uuid4()),
-                ticker=ticker,
-                direction=TradeDirection.BUY,
-                order_type=OrderType.LIMIT,
-                quantity=max(1, int(shares)),
-                price_usd=entry_price,
-                stop_price_usd=stop_price,
-                cycle_id=cycle_id,
-                holding_id=holding.id,
-                conviction_score=conviction_score,
-                verdict=verdict.value,
-            )
-
-            # Sign the trade plan
-            if self._audit_path is not None:
-                try:
-                    from pmacs.execution.signing import sign_bytes
-                    import hashlib
-
-                    plan_bytes = trade_plan.model_dump_json().encode()
-                    # Use a deterministic key for paper mode (no real signing key)
-                    # In production, keys come from config
-                    dummy_key = hashlib.sha256(b"pmacs_paper_mode").digest()
-                    signature = sign_bytes(plan_bytes, dummy_key)
-                    trade_plan = trade_plan.model_copy(update={
-                        "signature_b64": signature.hex(),
-                    })
-                except Exception:
-                    pass  # Best effort signing for paper mode
-
-                # Write trade to audit log
-                try:
-                    writer = AuditWriter(self._audit_path)
-                    writer.append(
-                        "trade_executed",
-                        {
-                            "trade_plan_id": trade_plan.id,
-                            "ticker": ticker,
-                            "direction": trade_plan.direction.value,
-                            "quantity": trade_plan.quantity,
-                            "price_usd": trade_plan.price_usd,
-                            "stop_price_usd": trade_plan.stop_price_usd,
-                            "conviction_score": conviction_score,
-                            "verdict": verdict.value,
-                            "holding_id": holding.id,
-                        },
-                        cycle_id=cycle_id,
-                    )
-                    writer.close()
-                except Exception:
-                    pass  # Best effort audit write
-
-            log_debug(
-                "SYMBOL_EXECUTED",
+        # SHADOW audit capture: log pre-execution decision (Phases.md §3.7)
+        # This runs regardless of mode — SHADOW is always-on for audit trail
+        current_mode = _current_mode(self._db_path)
+        if is_shadow_active(current_mode):
+            log_debug("SHADOW_AUDIT_RECORD",
                 payload={
                     "cycle_id": cycle_id,
                     "ticker": ticker,
@@ -1846,90 +1847,213 @@ class CycleOrchestrator:
                     "verdict": verdict.value,
                     "conviction_score": conviction_score,
                     "target_usd": sizing_result.target_usd,
-                    "shares": trade_plan.quantity,
-                    "entry_price": entry_price,
-                    "stop_price": stop_price,
+                    "target_shares": sizing_result.target_shares,
+                    "ev_pct": ev_result.expected_value_pct,
+                    "p_up": arbitrated.p_up,
+                    "p_down": arbitrated.p_down,
+                    "mode": current_mode,
                 },
                 level="INFO",
                 cycle_id=cycle_id,
-                msg=f"Symbol {ticker} executed: {verdict.value} "
-                    f"${sizing_result.target_usd:.2f} @ {entry_price}",
+                msg=f"Shadow audit: {ticker} verdict={verdict.value} conviction={conviction_score:.4f} "
+                    f"target=${sizing_result.target_usd:.2f} mode={current_mode}",
             )
 
-            # -- Step 13p: Catastrophe net stop --
+        if verdict not in (VerdictTier.BUY, VerdictTier.STRONG_BUY) or not risk_result.passed:
+            log_debug("SYMBOL_NO_EXECUTION",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                         "verdict": verdict.value, "risk_gate_passed": risk_result.passed},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Symbol {ticker}: no execution (verdict={verdict.value}, risk_gate={risk_result.passed})")
+            return op + 1
+
+        holding = transition(holding, HoldingState.ACTIVE, "execution_approved", cycle_id, op)
+        entry_price = current_price
+        shares = sizing_result.target_shares
+        stop_price = round(entry_price * (1 - ev_result.stop_loss_pct), 2)
+
+        # Execution fields set post-transition (not state-related):
+        holding.entry_price_usd = entry_price
+        holding.position_size_usd = sizing_result.target_usd
+        holding.stop_price_usd = stop_price
+        holding.verdict = verdict.value
+        holding.conviction_score = conviction_score
+
+        # Record in ledger
+        ledger = self._get_ledger() or self._ledger
+        if ledger is not None:
             try:
-                conn = sqlite3.connect(str(self._db_path))
+                if hasattr(ledger, "open_position"):
+                    ledger.open_position(ticker=ticker, shares=shares, price=entry_price,
+                                         sector=holding.sector, stop_price=stop_price)
+                elif hasattr(ledger, "apply_flow"):
+                    from pmacs.engines.cash_ledger import CashFlow
+                    cost = round(entry_price * shares, 2)
+                    ledger.apply_flow(CashFlow(
+                        flow_type="TRADE_BUY", amount_usd=-cost, reference_id=holding.id,
+                        description=f"BUY {shares} {ticker} @ ${entry_price:.2f}",
+                    ), cycle_id=cycle_id)
+            except ValueError as exc:
+                log_debug("LEDGER_OPEN_POSITION_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                    level="WARN", error_code="LEDGER_CONSTRAINT", cycle_id=cycle_id,
+                    msg=f"Ledger rejected position for {ticker}: {exc}")
+
+        # TradePlan + signing + execution adapter
+        from pmacs.schemas.trade import TradePlan, TradeDirection, OrderType
+        trade_plan = TradePlan(
+            id=str(uuid4()), ticker=ticker, direction=TradeDirection.BUY,
+            order_type=OrderType.LIMIT, quantity=max(1, int(shares)),
+            price_usd=entry_price, stop_price_usd=stop_price,
+            cycle_id=cycle_id, holding_id=holding.id,
+            conviction_score=conviction_score, verdict=verdict.value,
+        )
+
+        # Sign
+        if self._audit_path is not None:
+            try:
+                from pmacs.execution.signing import sign_bytes
+                import hashlib
+                plan_bytes = trade_plan.model_dump_json().encode()
+                signing_key_hex = self._config.get("execution_signing_key")
+                if signing_key_hex:
+                    private_key = bytes.fromhex(signing_key_hex)
+                else:
+                    actual_mode = _current_mode(self._db_path)
+                    if actual_mode not in (Mode.INSTALLING.value, Mode.SHADOW.value, Mode.PAPER.value):
+                        raise RuntimeError(
+                            f"Per-installation signing key not configured for LIVE mode "
+                            f"(current: {actual_mode}). Set execution_signing_key in config."
+                        )
+                    # Per-installation random key (not forgeable from source)
+                    key_path = self._db_path.parent / ".signing_key"
+                    if key_path.exists():
+                        private_key = key_path.read_bytes()[:32]
+                    else:
+                        import os
+                        private_key = os.urandom(32)
+                        key_path.write_bytes(private_key)
+                        key_path.chmod(0o600)
+                signature = sign_bytes(plan_bytes, private_key)
+                trade_plan = trade_plan.model_copy(update={"signature_b64": signature.hex()})
+                self._publish_sse("trade", "trade.signed", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "trade_plan_id": trade_plan.id,
+                })
+            except Exception:
+                pass
+
+        # Execution adapter
+        fill_price = entry_price
+        broker_order_id: str | None = None
+        stop_order_id: str | None = None
+
+        if self._exec_adapter is not None:
+            try:
+                import asyncio as _asyncio
+                loop = _asyncio.new_event_loop()
                 try:
-                    conn.execute(
-                        "INSERT INTO stop_events "
-                        "(holding_id, ticker, stop_type, trigger_price_usd, "
-                        "stop_price_usd, detected_at, cycle_id, status, stop_type_category) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            holding.id,
-                            ticker,
-                            "catastrophe_net",
-                            entry_price,
-                            stop_price,
-                            now_iso,
-                            cycle_id,
-                            "PENDING",
-                            "FIXED",
-                        ),
-                    )
-                    conn.commit()
+                    broker_order_id = loop.run_until_complete(self._exec_adapter.submit_order(trade_plan))
+                    self._publish_sse("trade", "trade.submitted", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "broker_order_id": broker_order_id,
+                    })
+                    fill = loop.run_until_complete(self._exec_adapter.poll_fill(broker_order_id))
+
+                    if fill.filled_price_usd and fill.filled_price_usd > 0:
+                        fill_price = fill.filled_price_usd
+                    holding.entry_price_usd = fill_price
+                    trade_plan = trade_plan.model_copy(update={"price_usd": fill_price})
+                    log_debug("TRADE_FILL_RECEIVED",
+                        payload={"cycle_id": cycle_id, "ticker": ticker, "broker_order_id": broker_order_id,
+                                 "fill_price": fill_price, "fill_qty": fill.filled_quantity, "status": fill.status},
+                        level="INFO", cycle_id=cycle_id,
+                        msg=f"Fill received for {ticker}: {fill.status} @ ${fill_price}")
+                    self._publish_sse("trade", "trade.filled", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "fill_price": fill_price,
+                        "fill_qty": fill.filled_quantity,
+                        "broker_order_id": broker_order_id,
+                        "status": fill.status,
+                    })
+
+                    if fill.status in ("FILLED", "PARTIAL") and fill.filled_quantity > 0:
+                        try:
+                            stop_order_id = loop.run_until_complete(
+                                self._exec_adapter.place_stop_order(ticker=ticker, stop_price=stop_price, qty=fill.filled_quantity))
+                        except Exception as exc:
+                            log_debug("CATASTROPHE_NET_FAILED",
+                                payload={"ticker": ticker, "error": str(exc)},
+                                level="CRITICAL", error_code="CATASTROPHE_NET_FAILED", cycle_id=cycle_id,
+                                msg=f"Catastrophe-net stop FAILED for {ticker}: {exc}")
                 finally:
-                    conn.close()
+                    loop.close()
             except Exception as exc:
-                log_debug(
-                    "STOP_EVENT_WRITE_FAILED",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": ticker,
-                        "error": str(exc),
-                    },
-                    level="WARN",
-                    error_code="DB_WRITE_FAILED",
-                    cycle_id=cycle_id,
-                    msg=f"Stop event write failed for {ticker}: {exc}",
+                log_debug("TRADE_EXECUTION_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                    level="ERROR", error_code="TRADE_REJECTED", cycle_id=cycle_id,
+                    msg=f"Trade execution failed for {ticker}: {exc}")
+                self._publish_sse("trade", "trade.rejected", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:80]}",
+                })
+
+        # Audit
+        if self._audit_path is not None:
+            try:
+                writer = AuditWriter(self._audit_path)
+                audit_payload = {
+                    "trade_plan_id": trade_plan.id, "ticker": ticker,
+                    "direction": trade_plan.direction.value, "quantity": trade_plan.quantity,
+                    "price_usd": fill_price, "stop_price_usd": stop_price,
+                    "conviction_score": conviction_score, "verdict": verdict.value,
+                    "holding_id": holding.id,
+                }
+                if broker_order_id:
+                    audit_payload["broker_order_id"] = broker_order_id
+                if stop_order_id:
+                    audit_payload["stop_order_id"] = stop_order_id
+                writer.append("trade_executed", audit_payload, cycle_id=cycle_id)
+                writer.close()
+            except Exception:
+                pass
+
+        log_debug("SYMBOL_EXECUTED",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "verdict": verdict.value, "conviction_score": conviction_score,
+                     "target_usd": sizing_result.target_usd, "shares": trade_plan.quantity,
+                     "entry_price": entry_price, "stop_price": stop_price},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} executed: {verdict.value} ${sizing_result.target_usd:.2f} @ {entry_price}")
+
+        # 13p: Catastrophe net stop
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                conn.execute(
+                    "INSERT INTO stop_events "
+                    "(holding_id, ticker, stop_type, trigger_price_usd, "
+                    "stop_price_usd, detected_at, cycle_id, status, stop_type_category) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (holding.id, ticker, "catastrophe_net", entry_price, stop_price,
+                     now_iso, cycle_id, "PENDING", "FIXED"),
                 )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            log_debug("STOP_EVENT_WRITE_FAILED",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                msg=f"Stop event write failed for {ticker}: {exc}")
 
-            log_debug(
-                "SYMBOL_CATASTROPHE_NET_SET",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "stop_price": stop_price,
-                    "entry_price": entry_price,
-                },
-                level="INFO",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker} catastrophe-net stop set at {stop_price}",
-            )
-            op += 1
-        else:
-            # Verdict was HOLD or risk gate blocked — no execution
-            log_debug(
-                "SYMBOL_NO_EXECUTION",
-                payload={
-                    "cycle_id": cycle_id,
-                    "ticker": ticker,
-                    "holding_id": holding.id,
-                    "verdict": verdict.value,
-                    "risk_gate_passed": risk_result.passed,
-                },
-                level="INFO",
-                cycle_id=cycle_id,
-                msg=f"Symbol {ticker}: no execution "
-                    f"(verdict={verdict.value}, risk_gate={risk_result.passed})",
-            )
-            op += 1
-
-        # Symbol processing complete — remove from tracking (S5-2)
-        self._symbol_holdings.pop(ticker, None)
-
-        return op  # Next op_seq after symbol block
+        log_debug("SYMBOL_CATASTROPHE_NET_SET",
+            payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
+                     "stop_price": stop_price, "entry_price": entry_price},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Symbol {ticker} catastrophe-net stop set at {stop_price}")
+        return op + 1
 
     def _run_all_symbols(self, cycle_id: str, start_op_seq: int) -> int:
         """Iterate over the queue and run _run_symbol for each item.
@@ -1995,6 +2119,11 @@ class CycleOrchestrator:
                 )
                 break
 
+            self._publish_sse("cycle", "ticker_progress", {
+                "cycle_id": cycle_id, "event": "ticker_progress",
+                "ticker": item.ticker,
+                "progress": f"{symbols_processed + 1}/{len(self._queue)}",
+            })
             prev_op = op_seq
             op_seq = self._run_symbol(cycle_id, item, op_seq)
             symbols_processed += 1
@@ -2045,6 +2174,102 @@ class CycleOrchestrator:
 
         return op_seq
 
+    # -- Billing integration (Phase 16) --
+
+    def _log_call_billing(self, runner: Any, cycle_id: str) -> None:
+        """Log billing for a completed persona call.
+
+        Reads runner._last_call_usage (set by _call_llm_* in base.py),
+        computes body cost, writes to DuckDB + SQLite, and spawns
+        background reconciliation if generation_id is present.
+        """
+        usage = getattr(runner, "_last_call_usage", None)
+        if usage is None:
+            return
+
+        try:
+            from uuid import uuid4
+
+            from pmacs.billing.reconciler import spawn_reconcile_call
+            from pmacs.billing.usage_logger import log_usage
+            from pmacs.schemas.billing import BodyCost, EstimatedCost
+
+            # Get model_id from runner's active backend
+            backend_name, backend_cfg = runner._get_active_backend()
+            model_id = backend_cfg.get("default_model", backend_name)
+
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            generation_id = usage.get("generation_id")
+
+            # Body cost from token counts (use $0/m token conservative fallback)
+            # Actual pricing comes from pricing.py cache when available
+            from pmacs.billing.pricing import get_pricing
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                pricing = get_pricing(conn, model_id)
+            finally:
+                conn.close()
+
+            if pricing is not None:
+                body_cost_usd = (
+                    prompt_tokens * pricing.input_price_per_token
+                    + completion_tokens * pricing.output_price_per_token
+                )
+            else:
+                # No pricing data yet — log $0, reconciliation will correct
+                body_cost_usd = 0.0
+
+            call_id = str(uuid4())
+            call_record = BodyCost(
+                call_id=call_id,
+                cycle_id=cycle_id,
+                persona=runner.persona_name,
+                model_id=model_id,
+                generation_id=generation_id,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                body_cost_usd=body_cost_usd,
+            )
+            estimated = EstimatedCost(
+                persona=runner.persona_name,
+                model_id=model_id,
+                estimated_input_tokens=prompt_tokens,
+                estimated_output_tokens=completion_tokens,
+                estimated_cost_usd=body_cost_usd,
+            )
+
+            duckdb_adapter = self._get_duckdb_adapter()
+            sqlite_conn = sqlite3.connect(str(self._db_path))
+            try:
+                log_usage(sqlite_conn, duckdb_adapter, call_record, estimated)
+            finally:
+                sqlite_conn.close()
+
+            # Spawn background reconciliation for remote calls
+            if generation_id:
+                duckdb_path = str(Path(str(self._db_path)).parent / "pmacs_analytics.duckdb")
+                spawn_reconcile_call(
+                    call_id=call_id,
+                    generation_id=generation_id,
+                    sqlite_conn_path=str(self._db_path),
+                    duckdb_path=duckdb_path,
+                )
+
+        except Exception as exc:
+            log_debug(
+                "BILLING_LOG_FAILED",
+                payload={
+                    "persona": runner.persona_name,
+                    "cycle_id": cycle_id,
+                    "error": str(exc),
+                },
+                level="WARN",
+                error_code="RECONCILIATION_FAILED",
+                cycle_id=cycle_id,
+                msg=f"Billing log failed for {runner.persona_name}: {exc}",
+            )
+
     # -- Hardening helpers (S5-1, S5-2) --
 
     def _dispatch_personas_with_timeout(
@@ -2057,7 +2282,7 @@ class CycleOrchestrator:
     ) -> dict[str, Any]:
         """Wrap _dispatch_personas with a hard timeout.
 
-        Raises TimeoutError if persona dispatch exceeds timeout_seconds.
+        Evidence filtering is handled inside _dispatch_personas per persona.
         """
         results: dict[str, Any] = {}
         # NOTE: On timeout, the persona dispatch thread continues running in the
@@ -2095,10 +2320,10 @@ class CycleOrchestrator:
         return results
 
     def _interrupt_remaining_holdings(self, cycle_id: str, op_seq: int) -> None:
-        """Transition any tracked non-terminal holdings to INTERRUPTED (S5-2).
+        """Transition any tracked non-terminal holdings during mid-cycle abort.
 
-        Called during mid-cycle abort. Only transitions holdings still in
-        non-terminal states via the state machine.
+        ACTIVE holdings → INTERRUPTED (resumable per spec §8.2).
+        Pre-decision holdings → appropriate ABORT state.
         """
         from pmacs.engines.state_machine import transition, is_valid_transition
         from pmacs.schemas.contracts import HoldingState, TERMINAL_STATES
@@ -2106,17 +2331,38 @@ class CycleOrchestrator:
         op = op_seq
         interrupted: list[str] = []
 
+        # Map pre-decision states to their abort target
+        _PRE_DECISION_ABORTS = {
+            HoldingState.CANDIDATE: HoldingState.ABORTED_PRE_LLM,
+            HoldingState.PHASE1_RESEARCH: HoldingState.ABORTED_LLM,
+            HoldingState.PHASE1_TIMEOUT: HoldingState.ABORTED_LLM,
+            HoldingState.PHASE2_CRUCIBLE: HoldingState.ABORTED_LLM,
+            HoldingState.APPROVED_PENDING: HoldingState.ABORTED_LLM,
+            HoldingState.THESIS_AGING_REVIEW: HoldingState.EXIT_THESIS_INVALIDATED,
+        }
+
         for ticker, holding in list(self._symbol_holdings.items()):
             if holding.state in TERMINAL_STATES:
                 continue
-            if is_valid_transition(holding.state, HoldingState.INTERRUPTED):
+
+            if holding.state == HoldingState.ACTIVE:
+                target = HoldingState.INTERRUPTED
+            elif holding.state in _PRE_DECISION_ABORTS:
+                target = _PRE_DECISION_ABORTS[holding.state]
+            elif holding.state == HoldingState.HALTED:
+                target = HoldingState.PANIC_EXIT
+            else:
+                continue
+
+            if is_valid_transition(holding.state, target):
                 holding = transition(
                     holding,
-                    HoldingState.INTERRUPTED,
+                    target,
                     "mid_cycle_abort",
                     cycle_id,
                     op,
                 )
+                self._upsert_holding(holding, cycle_id)
                 interrupted.append(ticker)
                 op += 1
 
@@ -2215,6 +2461,7 @@ class CycleOrchestrator:
           Slot 2: [InsiderActivityRunner, ShortInterestRunner, ForensicsRunner]
 
         Within each slot: sequential. Across slots: parallel (3 futures).
+        Evidence is filtered per persona using PERSONA_EVIDENCE_MAP before dispatch.
         Total timeout: 270s. Individual persona failures are logged and skipped.
 
         Args:
@@ -2233,6 +2480,7 @@ class CycleOrchestrator:
         from pmacs.agents.insider_activity import InsiderActivityRunner
         from pmacs.agents.short_interest import ShortInterestRunner
         from pmacs.agents.forensics import ForensicsRunner
+        from pmacs.data.evidence_router import filter_evidence_for_persona
         from pmacs.schemas.data import EvidencePacket
 
         # Build runner instances — all take (cycle_id=, audit_writer=None)
@@ -2259,9 +2507,22 @@ class CycleOrchestrator:
             results: list[tuple[str, Any]] = []
             for runner in runners:
                 try:
-                    output = runner.run(evidence, episodic_context=brief)
+                    persona_evidence = filter_evidence_for_persona(
+                        evidence, runner.persona_name,
+                    )
+                    self._publish_sse("agent", "agent.running", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name,
+                    })
+                    output = runner.run(persona_evidence, episodic_context=brief)
                     if output is not None:
                         results.append((runner.persona_name, output))
+                        # Phase 16 billing: log usage after successful call
+                        self._log_call_billing(runner, cycle_id)
+                        self._publish_sse("agent", "agent.complete", {
+                            "cycle_id": cycle_id, "ticker": ticker,
+                            "persona": runner.persona_name,
+                        })
                     else:
                         log_debug(
                             "PERSONA_RETURNED_NONE",
@@ -2274,6 +2535,11 @@ class CycleOrchestrator:
                             cycle_id=cycle_id,
                             msg=f"Persona {runner.persona_name} returned None for {ticker}",
                         )
+                        self._publish_sse("agent", "agent.failed", {
+                            "cycle_id": cycle_id, "ticker": ticker,
+                            "persona": runner.persona_name,
+                            "reason": "returned_none",
+                        })
                 except Exception as exc:
                     log_debug(
                         "PERSONA_EXCEPTION",
@@ -2287,6 +2553,11 @@ class CycleOrchestrator:
                         cycle_id=cycle_id,
                         msg=f"Persona {runner.persona_name} raised {type(exc).__name__} for {ticker}",
                     )
+                    self._publish_sse("agent", "agent.failed", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name,
+                        "reason": f"{type(exc).__name__}: {str(exc)[:80]}",
+                    })
             return results
 
         # Dispatch 3 slots in parallel
@@ -2503,179 +2774,156 @@ class CycleOrchestrator:
 
     def _step_weekly_reeval(self, cycle_id: str) -> None:
         """Step 14: Re-evaluate active holdings >= 7 days since last re-eval."""
+        from datetime import date, timedelta
+
+        conn = sqlite3.connect(str(self._db_path))
         try:
-            conn = sqlite3.connect(str(self._db_path))
-            try:
-                rows = conn.execute(
-                    "SELECT id, ticker, entry_price_usd, position_size_usd, "
-                    "last_reeval_at FROM holdings WHERE state = 'ACTIVE'"
-                ).fetchall()
-            finally:
-                conn.close()
+            rows = conn.execute(
+                "SELECT id, ticker, entry_price_usd, position_size_usd, "
+                "last_reeval_at FROM holdings WHERE state = 'ACTIVE'"
+            ).fetchall()
         except sqlite3.OperationalError:
             rows = []
 
-        from datetime import date, timedelta
-
         reevaluated = 0
         seven_days_ago = date.today() - timedelta(days=7)
-        for row in rows:
-            last_reeval = row[4]  # last_reeval_at (string or None)
-            if last_reeval is None:
-                needs_reeval = True
-            else:
-                try:
-                    reeval_date = date.fromisoformat(str(last_reeval)[:10])
-                    needs_reeval = reeval_date <= seven_days_ago
-                except (ValueError, TypeError):
+        try:
+            for row in rows:
+                last_reeval = row[4]  # last_reeval_at (string or None)
+                if last_reeval is None:
                     needs_reeval = True
+                else:
+                    try:
+                        reeval_date = date.fromisoformat(str(last_reeval)[:10])
+                        needs_reeval = reeval_date <= seven_days_ago
+                    except (ValueError, TypeError):
+                        needs_reeval = True
 
-            if needs_reeval:
-                reevaluated += 1
-                reeval_outcome = "unknown"
-                try:
-                    # -- Re-eval pipeline: fetch evidence, run personas, arbitrate --
-                    from pmacs.data.evidence_router import fetch_evidence_for_ticker
-                    from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
-                    from pmacs.engines.state_machine import transition, is_valid_transition
-                    from pmacs.schemas.contracts import Holding, HoldingState
+                if needs_reeval:
+                    reevaluated += 1
+                    reeval_outcome = "unknown"
+                    try:
+                        # -- Re-eval pipeline: fetch evidence, run personas, arbitrate --
+                        from pmacs.data.evidence_router import fetch_evidence_for_ticker
+                        from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
+                        from pmacs.engines.state_machine import transition, is_valid_transition
+                        from pmacs.schemas.contracts import Holding, HoldingState
 
-                    ticker = row[1]
-                    holding_id = row[0]
+                        ticker = row[1]
+                        holding_id = row[0]
 
-                    # Fetch fresh evidence
-                    evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
-                    evidence_list: list[Any] = list(evidence_packet.evidence)
+                        # Fetch fresh evidence
+                        evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
+                        evidence_list: list[Any] = list(evidence_packet.evidence)
 
-                    # Build a minimal brief for re-eval
-                    brief = f"WEEKLY_REEVAL: ticker={ticker}"
+                        # Build a minimal brief for re-eval
+                        brief = f"WEEKLY_REEVAL: ticker={ticker}"
 
-                    # Dispatch personas with a 180s timeout (shorter than normal 270s)
-                    persona_results = self._dispatch_personas_with_timeout(
-                        evidence=evidence_list,
-                        brief=brief,
-                        cycle_id=cycle_id,
-                        ticker=ticker,
-                        timeout_seconds=180,
-                    )
-
-                    # Extract signals and arbitrate
-                    signals: list[ArbitrationSignal] = []
-                    for persona_name_str, raw_output in persona_results.items():
-                        dp = self._extract_directional_probability(
-                            persona_name_str, ticker, cycle_id, raw_output,
+                        # Dispatch personas with a 180s timeout (shorter than normal 270s)
+                        persona_results = self._dispatch_personas_with_timeout(
+                            evidence=evidence_list,
+                            brief=brief,
+                            cycle_id=cycle_id,
+                            ticker=ticker,
+                            timeout_seconds=180,
                         )
-                        if dp is not None:
-                            signals.append(ArbitrationSignal(dp))
 
-                    if signals:
-                        arbitrated = arbitrate(signals, cycle_id=cycle_id)
+                        # Extract signals and arbitrate
+                        brier_data = self._get_persona_brier_data()
+                        signals: list[ArbitrationSignal] = []
+                        for persona_name_str, raw_output in persona_results.items():
+                            dp = self._extract_directional_probability(
+                                persona_name_str, ticker, cycle_id, raw_output,
+                            )
+                            if dp is not None:
+                                avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
+                                signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
 
-                        if (
-                            arbitrated.decision.value.startswith("PROCEED")
-                            and arbitrated.p_up >= arbitrated.p_down
-                        ):
-                            # Thesis still valid — stay ACTIVE
-                            reeval_outcome = "thesis_valid"
-                            next_review = (date.today() + timedelta(days=7)).isoformat()
-                            conn2 = sqlite3.connect(str(self._db_path))
-                            try:
-                                conn2.execute(
+                        if signals:
+                            arbitrated = arbitrate(signals, cycle_id=cycle_id)
+
+                            if (
+                                arbitrated.decision.value.startswith("PROCEED")
+                                and arbitrated.p_up >= arbitrated.p_down
+                            ):
+                                # Thesis still valid — stay ACTIVE
+                                reeval_outcome = "thesis_valid"
+                                next_review = (date.today() + timedelta(days=7)).isoformat()
+                                conn.execute(
                                     "UPDATE holdings SET last_reeval_at = ?, "
                                     "thesis_review_due_date = ? WHERE id = ?",
                                     (date.today().isoformat(), next_review, holding_id),
                                 )
-                                conn2.commit()
-                            finally:
-                                conn2.close()
-                        else:
-                            # Thesis invalidated — transition to EXIT_THESIS_INVALIDATED
-                            reeval_outcome = "thesis_invalidated"
-                            holding = Holding(
-                                id=holding_id,
-                                ticker=ticker,
-                                state=HoldingState.ACTIVE,
-                                cycle_id_opened=cycle_id,
-                            )
-                            if is_valid_transition(
-                                holding.state, HoldingState.EXIT_THESIS_INVALIDATED,
-                            ):
-                                transition(
-                                    holding,
-                                    HoldingState.EXIT_THESIS_INVALIDATED,
-                                    f"reeval_thesis_invalidated:p_down={arbitrated.p_down:.2f}",
-                                    cycle_id,
-                                    0,
-                                )
-                            conn2 = sqlite3.connect(str(self._db_path))
-                            try:
-                                conn2.execute(
-                                    "UPDATE holdings SET state = ?, last_reeval_at = ? "
-                                    "WHERE id = ?",
+                            else:
+                                # Thesis invalidated — transition to EXIT_THESIS_INVALIDATED
+                                reeval_outcome = "thesis_invalidated"
+                                # Use targeted SQL to avoid overwriting entry_price/size/etc with NULL
+                                conn.execute(
+                                    "UPDATE holdings SET state = ?, abort_reason = ?, "
+                                    "last_reeval_at = ? WHERE id = ?",
                                     (
                                         HoldingState.EXIT_THESIS_INVALIDATED.value,
+                                        f"reeval_thesis_invalidated:p_down={arbitrated.p_down:.2f}",
                                         date.today().isoformat(),
                                         holding_id,
                                     ),
                                 )
-                                conn2.commit()
-                            finally:
-                                conn2.close()
-                    else:
-                        # No valid signals — update date only, don't exit
-                        reeval_outcome = "no_signals"
-                        conn2 = sqlite3.connect(str(self._db_path))
-                        try:
-                            conn2.execute(
+                                log_debug(
+                                    "REVAL_THESIS_INVALIDATED",
+                                    payload={"holding_id": holding_id, "ticker": ticker,
+                                             "p_down": arbitrated.p_down},
+                                    level="INFO", cycle_id=cycle_id,
+                                    msg=f"Re-eval: {ticker} thesis invalidated (p_down={arbitrated.p_down:.2f})",
+                                )
+                        else:
+                            # No valid signals — update date only, don't exit
+                            reeval_outcome = "no_signals"
+                            conn.execute(
                                 "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
                                 (date.today().isoformat(), holding_id),
                             )
-                            conn2.commit()
-                        finally:
-                            conn2.close()
 
-                except Exception as exc:
-                    # Re-eval pipeline failure — fall back to date update only
-                    reeval_outcome = f"error:{str(exc)[:80]}"
+                    except Exception as exc:
+                        # Re-eval pipeline failure — fall back to date update only
+                        reeval_outcome = f"error:{str(exc)[:80]}"
+                        log_debug(
+                            "REEVAL_PIPELINE_FALLBACK",
+                            payload={
+                                "cycle_id": cycle_id,
+                                "ticker": row[1],
+                                "holding_id": row[0],
+                                "error": str(exc)[:200],
+                            },
+                            level="WARN",
+                            error_code="REEVAL_FAILED",
+                            cycle_id=cycle_id,
+                            msg=f"Re-eval pipeline failed for {row[1]}: {exc}, "
+                                f"falling back to date update",
+                        )
+                        try:
+                            conn.execute(
+                                "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
+                                (date.today().isoformat(), row[0]),
+                            )
+                        except sqlite3.OperationalError:
+                            pass
+
+                    conn.commit()
+
                     log_debug(
-                        "REEVAL_PIPELINE_FALLBACK",
+                        "REEVAL_SYMBOL_OUTCOME",
                         payload={
                             "cycle_id": cycle_id,
                             "ticker": row[1],
                             "holding_id": row[0],
-                            "error": str(exc)[:200],
+                            "outcome": reeval_outcome,
                         },
-                        level="WARN",
-                        error_code="REEVAL_FAILED",
+                        level="INFO",
                         cycle_id=cycle_id,
-                        msg=f"Re-eval pipeline failed for {row[1]}: {exc}, "
-                            f"falling back to date update",
+                        msg=f"Re-eval for {row[1]}: {reeval_outcome}",
                     )
-                    try:
-                        conn2 = sqlite3.connect(str(self._db_path))
-                        try:
-                            conn2.execute(
-                                "UPDATE holdings SET last_reeval_at = ? WHERE id = ?",
-                                (date.today().isoformat(), row[0]),
-                            )
-                            conn2.commit()
-                        finally:
-                            conn2.close()
-                    except sqlite3.OperationalError:
-                        pass
-
-                log_debug(
-                    "REEVAL_SYMBOL_OUTCOME",
-                    payload={
-                        "cycle_id": cycle_id,
-                        "ticker": row[1],
-                        "holding_id": row[0],
-                        "outcome": reeval_outcome,
-                    },
-                    level="INFO",
-                    cycle_id=cycle_id,
-                    msg=f"Re-eval for {row[1]}: {reeval_outcome}",
-                )
+        finally:
+            conn.close()
 
         log_debug(
             "CYCLE_WEEKLY_REEVAL",
@@ -2744,8 +2992,12 @@ class CycleOrchestrator:
         from pmacs.engines.reconciliation import reconcile_paper_ledger
 
         ledger_total = 0.0
-        if self._ledger is not None:
-            ledger_total = self._ledger.total_value
+        ledger = self._get_ledger() or self._ledger
+        if ledger is not None:
+            if hasattr(ledger, "get_snapshot"):
+                ledger_total = ledger.get_snapshot()["total_value_usd"]
+            elif hasattr(ledger, "total_value"):
+                ledger_total = ledger.total_value
 
         # For paper mode, broker_total == ledger_total (no real broker)
         result = reconcile_paper_ledger(
@@ -2881,6 +3133,21 @@ class CycleOrchestrator:
                 # Accumulate per-persona (here we use ticker as proxy)
                 persona_briers[ticker] = brier
 
+        # Persist Brier scores to DuckDB persona_performance (step 19)
+        duck = self._get_duckdb_adapter()
+        if duck is not None and persona_briers:
+            avg_brier = sum(persona_briers.values()) / len(persona_briers)
+            for _ticker, _brier in persona_briers.items():
+                duck.insert_persona_performance(
+                    persona="arbitration",
+                    cycle_id=cycle_id,
+                    ticker=_ticker,
+                    p_up=0.0, p_flat=0.0, p_down=0.0,
+                    brier=_brier,
+                    direction_correct=False,
+                )
+            duck.insert_rolling_metric(cycle_id, "avg_brier", avg_brier)
+
         if len(persona_briers) >= 20:
             current_weights = {k: 1.0 / len(persona_briers) for k in persona_briers}
             new_weights = refit_persona_weights(
@@ -2986,6 +3253,11 @@ class CycleOrchestrator:
                 attributed += 1
             except Exception:
                 pass
+
+        # Persist attribution count as rolling metric (step 21)
+        duck = self._get_duckdb_adapter()
+        if duck is not None:
+            duck.insert_rolling_metric(cycle_id, "attributions", float(attributed))
 
         log_debug(
             "CYCLE_CAUSAL_ATTRIBUTION",
@@ -3108,26 +3380,12 @@ class CycleOrchestrator:
 
     def _step_override_learning_post(self, cycle_id: str) -> None:
         """Step 24: Evaluate recent override outcomes (post-cycle)."""
-        from pmacs.engines.override_learning import cluster_overrides
+        overrides, clusters = self._query_override_clusters()
 
-        try:
-            conn = sqlite3.connect(str(self._db_path))
-            try:
-                rows = conn.execute(
-                    "SELECT original_verdict, override_verdict, ticker "
-                    "FROM operator_overrides "
-                    "ORDER BY id DESC LIMIT 50"
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.OperationalError:
-            rows = []
-
-        overrides = [
-            {"from_verdict": r[0], "to_verdict": r[1], "ticker": r[2]}
-            for r in rows
-        ]
-        clusters = cluster_overrides(overrides)
+        # Persist cluster count as rolling metric (step 24)
+        duck = self._get_duckdb_adapter()
+        if duck is not None:
+            duck.insert_rolling_metric(cycle_id, "override_clusters", float(len(clusters)))
 
         log_debug(
             "CYCLE_OVERRIDE_LEARNING_POST",
@@ -3158,7 +3416,7 @@ class CycleOrchestrator:
                     "'EXIT_OPPORTUNITY_COST', 'EXIT_TRAILING_STOP', 'EXIT_FAILED', "
                     "'RESOLVED_DOWN', 'RESOLVED_MIXED', 'RESOLUTION_TIMEOUT', "
                     "'PANIC_EXIT', 'ABORTED_LLM', 'ABORTED_RISK', 'ABORTED_PRE_LLM', "
-                    "'DELISTED', 'INTERRUPTED') "
+                    "'DELISTED') "
                     "LIMIT 50"
                 ).fetchall()
             finally:
@@ -3217,6 +3475,20 @@ class CycleOrchestrator:
                     finally:
                         conn2.close()
                 except sqlite3.OperationalError:
+                    pass
+
+                # Write taxonomy count to DuckDB (step 25)
+                try:
+                    _duck = self._get_duckdb_adapter()
+                    if _duck is not None and result.primary.value != "UNCLASSIFIED":
+                        _now = datetime.now(timezone.utc).isoformat()
+                        _duck.insert_failure_taxonomy_count(
+                            taxonomy=result.primary.value,
+                            cycle_id=cycle_id,
+                            window_start=_now,
+                            window_end=_now,
+                        )
+                except Exception:
                     pass
             except Exception:
                 pass
@@ -3397,6 +3669,38 @@ class CycleOrchestrator:
     def _skip_if_complete(self, cycle_id: str, op_seq: int) -> bool:
         """Check idempotency — skip if op already completed."""
         return is_completed(cycle_id, op_seq, self._db_path)
+
+    # -- Shared helpers --
+
+    def _query_override_clusters(
+        self,
+    ) -> tuple[list[dict[str, str]], list[Any]]:
+        """Query recent operator overrides and cluster them.
+
+        Shared by _step_override_learning (step 11) and
+        _step_override_learning_post (step 24) to avoid duplication.
+        """
+        from pmacs.engines.override_learning import cluster_overrides
+
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT original_verdict, override_verdict, ticker "
+                    "FROM operator_overrides "
+                    "ORDER BY id DESC LIMIT 50"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            rows = []
+
+        overrides = [
+            {"from_verdict": r[0], "to_verdict": r[1], "ticker": r[2]}
+            for r in rows
+        ]
+        clusters = cluster_overrides(overrides)
+        return overrides, clusters
 
     # -- SSE helper --
 
@@ -3587,14 +3891,8 @@ def _rebuild_evidence_brief(
 
 
 def _current_mode(db_path: Path) -> str:
-    """Read current mode from mode_history or default to INSTALLING."""
-    conn = sqlite3.connect(str(db_path))
-    try:
-        row = conn.execute(
-            "SELECT to_mode FROM mode_history ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        if row is not None:
-            return row[0]
-    finally:
-        conn.close()
-    return Mode.INSTALLING.value
+    """Read current mode from mode_history or default to INSTALLING.
+
+    Delegates to CycleOrchestrator._current_mode to avoid duplication.
+    """
+    return CycleOrchestrator._current_mode(db_path)

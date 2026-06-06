@@ -1,118 +1,68 @@
 # PMACS Security Audit Report
 
-**Date:** 2026-05-17
-**Scope:** Full codebase -- all security-critical subsystems
-**Auditor:** Claude Code (security audit)
-**Spec references:** Architecture.md S5, S13, S16, S18; Source.md S4, S5
+**Date:** 2026-05-28
+**Scope:** Full codebase -- Five Non-Negotiables, 15 Anti-Patterns, additional security checks
+**Auditor:** Claude Code (security audit, gsd-secure-phase)
+**Spec references:** Architecture.md S5, S13, S16; Source.md S4, S5; CLAUDE.md (Five Non-Negotiables)
 
 ---
 
 ## Executive Summary
 
-Full source code audit of `pmacs/` against the Five Non-Negotiables, 15 Anti-Patterns, and
-the user's 10-point security checklist. The system demonstrates strong security posture in
-its architecture. **18 of 21 findings PASS.** Three findings require attention: one CRITICAL
-(totally broken TOTP on mutation promote/rollback), one HIGH (difflib.HtmlDiff XSS in
-mutation diff endpoint), and one MEDIUM (environment variable secret for Finnhub).
-
----
-
-## CRITICAL Findings
-
-### SEC-CRIT-01: Mutation Promote/Rollback TOTP Enforcement Is Non-Functional
-
-**Severity:** CRITICAL
-**Category:** Authentication bypass
-**Files:** `pmacs/web/routes/settings.py:140-151, 213-224`
-**Spec violation:** Architecture.md S16.10 -- "ALL mutations require operator TOTP"
-
-**Description:**
-The `/api/mutation/promote` and `/api/mutation/rollback` endpoints attempt server-side TOTP
-verification but the import path is broken:
-
-```python
-from pmacs.data.keychain import get_api_key  # Line 142
-```
-
-`pmacs/data/keychain.py` does not exist. The correct module is `pmacs/storage/keychain.py`.
-This raises `ModuleNotFoundError`, which is caught by the bare `except Exception: pass` on
-line 149. Execution falls through to the promotion logic at line 152 **without any TOTP
-verification**.
-
-The comment says "TOTP not configured -- allow in development mode only" but this bypass
-activates unconditionally in production because the import always fails.
-
-**Impact:** Any HTTP client on localhost can POST to `/api/mutation/promote` with any
-6-digit string in `totp_code` and the mutation will be approved. This violates Non-
-Negotiable #5 and Anti-Pattern #11.
-
-**Same vulnerability exists in:** `/api/mutation/rollback` (line 216: same broken import,
-same bare except).
-
-**Remediation:** Fix the import path:
-```python
-from pmacs.storage.keychain import get_api_key  # Not pmacs.data.keychain
-```
+Full source code audit of `pmacs/` against the Five Non-Negotiables, all 15 Anti-Patterns from
+Architecture.md S16, and supplementary security checks. **Previous CRITICAL and HIGH findings
+(SEC-CRIT-01, SEC-HIGH-01) from the 2026-05-17 audit have been remediated.** One new HIGH
+finding: Non-Negotiable #4 (local-only execution) is violated by the active model registry
+configuration routing LLM calls through OpenRouter (cloud). One MEDIUM finding persists.
+**22 of 25 findings PASS.**
 
 ---
 
 ## HIGH Findings
 
-### SEC-HIGH-01: difflib.HtmlDiff Output Served as Raw HTML -- XSS Vector
+### SEC-HIGH-02: Active LLM Backend Routes Through Cloud (Non-Negotiable #4 Violation)
 
 **Severity:** HIGH
-**Category:** Injection (XSS)
-**Files:** `pmacs/web/routes/settings.py:250-298`
-**Spec violation:** Architecture.md S18.6 -- "HTMX templates use Jinja2 autoescape"
+**Category:** Architecture violation -- cloud LLM calls
+**Files:** `config/model_registry.json:39`, `pmacs/agents/base.py:389-392`
+**Spec violation:** Architecture.md S4.1 -- "Local-only execution. No cloud LLM calls."
+CLAUDE.md Non-Negotiable #4.
 
 **Description:**
-The `/api/mutation/{candidate_id}/diff` endpoint generates HTML via `difflib.HtmlDiff().make_table()`
-and returns it as JSON (`diff_html` field). The `baseline_value` and `candidate_value` columns in
-`mutation_proposals` come from the mutation engine's candidate generator. While these are currently
-machine-generated, the `HtmlDiff` output embeds text content in `<td>` cells without escaping.
+The model registry has `"active": "openrouter"` which routes all LLM inference through
+`https://openrouter.ai/api/v1` via the `_call_llm_openai` code path (base.py:551).
 
-If a mutation candidate's `baseline_value` or `candidate_value` ever contains HTML injection
-payloads (e.g., from a corrupted DB or future code change), the diff HTML will contain
-unescaped attacker-controlled content. The client-side JS would need to use `innerHTML`
-to render this, creating an XSS vector.
+```json
+"openrouter": {
+  "default_model": "deepseek/deepseek-v4-pro",
+  "structured_output": "json_schema",
+  "api_key_ref": "pmacs.credentials.openrouter_api_key",
+  "base_url": "https://openrouter.ai/api/v1"
+},
+"active": "openrouter"
+```
 
-**Current risk:** Lower because mutation values are machine-generated and the endpoint
-is loopback-only. But the pattern is unsafe.
+The dispatch logic (base.py:386-392) uses `structured_output` to select the code path:
+`json_schema` -> `_call_llm_openai()` -> cloud HTTP request.
 
-**Remediation:** Either:
-(a) Escape the baseline/candidate text before passing to `difflib.HtmlDiff()`, or
-(b) Return unified diff text only and render it in a `<pre>` block on the client side.
+The pf firewall rules (ops/install_pf_rules.sh) only block the `_pmacs_inference` user
+(llama-server process). The agent code making the cloud LLM calls runs in `pmacs-nervous`,
+which is NOT pf-blocked from internet. The firewall is structurally incomplete for the
+current active backend configuration.
+
+**Impact:** All LLM inference payloads (including evidence, thesis, analysis) are sent to a
+third-party cloud service. This violates the "local-only execution" non-negotiable and
+contradicts the spec requirement that inference be pf-blocked from internet.
+
+**Remediation:** Change `model_registry.json` active backend to `"llama_server"` or `"ollama"`
+(both local). If cloud backends are needed for development/testing, gate them behind a mode
+flag that prevents use in PAPER or higher modes.
 
 ---
 
 ## MEDIUM Findings
 
-### SEC-MED-01: Finnhub API Key Read from Environment Variable
-
-**Severity:** MEDIUM
-**Category:** Secret exposure
-**Files:** `pmacs/cortex/stop_loss_daemon.py:129`
-**Spec violation:** Architecture.md S16.13 -- "Never log API keys"
-
-**Description:**
-```python
-api_key = os.environ.get("FINNHUB_API_KEY", "")
-```
-
-The Finnhub API key is read from an environment variable instead of macOS Keychain. All
-other credentials in the system use Keychain. Environment variables are visible to any
-process via `/proc/*/environ` (Linux) or `ps eww` (macOS) and can leak into crash dumps
-and debugging tools.
-
-The key is passed to `fetch_quote()` and used in an HTTP request. If the request fails and
-the URL (including potential query parameters) is logged, the key could be exposed.
-
-**Remediation:** Use `pmacs.storage.keychain.get_api_key("pmacs.finnhub", "api_key")`
-consistent with the Alpaca credential pattern.
-
----
-
-### SEC-MED-02: Alpaca Credentials in HTTP Request Headers (Stop-Loss Daemon)
+### SEC-MED-02: Alpaca Credentials Passed as HTTP Headers (Logging Risk)
 
 **Severity:** MEDIUM
 **Category:** Secret exposure
@@ -138,51 +88,69 @@ that is not controlled by PMACS scrubbing.
 
 ---
 
+### SEC-MED-03: Write Endpoints Not TOTP-Gated (Settings, Pipeline, Universe)
+
+**Severity:** MEDIUM
+**Category:** Missing authentication
+**Files:**
+- `pmacs/web/routes/settings.py:234` (`/api/settings/inference/provider`)
+- `pmacs/web/routes/settings.py:251` (`/api/settings/inference/api-key`)
+- `pmacs/web/routes/settings.py:282` (`/api/settings/inference/model`)
+- `pmacs/web/routes/pipeline.py:174-248` (queue reorder/pin/promote/save, cycle start)
+- `pmacs/web/routes/universe.py:112-210` (universe add/remove/bulk-tag/bulk-remove)
+
+**Description:**
+Multiple write endpoints that modify system state lack TOTP verification:
+
+1. **Inference provider switching** -- allows changing the active LLM backend without TOTP.
+   Combined with SEC-HIGH-02, an attacker on localhost could switch to a malicious backend.
+2. **API key storage** -- allows writing arbitrary API keys to keychain without TOTP.
+3. **Cycle start** -- allows triggering trading cycles without TOTP.
+4. **Queue management** -- allows reordering the trading pipeline without TOTP.
+
+The following endpoints ARE correctly TOTP-gated (verified):
+- `/api/mutation/promote`, `/api/mutation/reject`, `/api/mutation/rollback`
+- `/api/cortex/kill-switch/disengage`
+- `/api/totp/verify`
+- `/api/settings/cost/caps`
+
+**Risk assessment:** All endpoints are loopback-only (127.0.0.1 binding), reducing
+exposure to local privilege escalation. However, any process running on the same machine
+can call these endpoints. In a single-operator local system this is acceptable for
+operational endpoints (queue, universe), but inference provider switching and API key
+storage should be TOTP-gated.
+
+**Remediation:** Add TOTP verification to inference provider/API key endpoints at minimum.
+
+---
+
 ## LOW Findings
 
-### SEC-LOW-01: NTP Check Uses Hardcoded External Host
+### SEC-LOW-01: Exception Message Leaking in Web Responses
 
 **Severity:** LOW
-**Category:** Network exposure
-**Files:** `pmacs/cortex/clock_monitor.py:17`
+**Category:** Information disclosure
+**Files:**
+- `pmacs/web/routes/settings.py:381` (`str(exc)` in inference test response)
+- `pmacs/web/routes/wizard.py:290, 360-408, 466-509, 585` (multiple `str(exc)` in responses)
 
 **Description:**
-NTP drift check connects to `time.google.com:123`. The spec says `pmacs-inference` is
-pf-blocked from internet. This module is in `pmacs-cortex`, which does have limited
-network access per Architecture.md S4.1. The connection is UDP (port 123) to a well-known
-NTP server. This is expected for time verification but the host is hardcoded and cannot be
-configured.
-
-**Risk:** Minimal. UDP NTP is standard, `time.google.com` is reputable, and the check
-fails silently if network is unavailable (line 54).
-
----
-
-### SEC-LOW-02: Wizard Credential Storage Lacks Key Allowlist
-
-**Severity:** LOW
-**Category:** Privilege escalation
-**Files:** `pmacs/web/routes/wizard.py:152-158`
-
-**Description:**
-Step 4 of the first-run wizard stores arbitrary form data into macOS Keychain:
+Several web endpoints return `str(exc)` in JSON error responses. This can leak internal
+implementation details (file paths, module names, stack information) to the client.
 
 ```python
-creds = {k: str(v) for k, v in form_data.items() if v}
-for key, value in creds.items():
-    keyring.set_password("pmacs.credentials", key, value)
+return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
 ```
 
-There is no validation that the keys are expected credential names. A crafted form
-submission could store arbitrary key-value pairs in the Keychain under the
-`pmacs.credentials` service.
+**Risk:** Low because the dashboard is loopback-only and single-operator. But it violates
+defense-in-depth principles.
 
-**Risk:** Low because the wizard is a one-time setup accessible only from localhost, and
-the form is generated server-side. But a defensive allowlist would prevent abuse.
+**Remediation:** Replace `str(exc)` with generic error messages in production. Log the
+full exception server-side.
 
 ---
 
-### SEC-LOW-03: In-Memory Session Store Loses Sessions on Restart
+### SEC-LOW-02: In-Memory Session Store Loses Sessions on Restart
 
 **Severity:** LOW
 **Category:** Availability
@@ -191,264 +159,383 @@ the form is generated server-side. But a defensive allowlist would prevent abuse
 **Description:**
 `SessionManager` stores the active session in a Python `dataclass` attribute. If the
 `pmacs-nervous` process restarts, the session is lost and the operator must re-authenticate.
-This is not a security vulnerability per spec, but it means there is no persistent audit
-trail of session creation/destruction.
 
 **Risk:** Acceptable for a single-operator local system.
 
 ---
 
+### SEC-LOW-03: Hardcoded NTP Host
+
+**Severity:** LOW
+**Category:** Network exposure
+**Files:** `pmacs/cortex/clock_monitor.py`
+
+**Description:**
+NTP drift check connects to `time.google.com:123`. The host is hardcoded and cannot be
+configured. The module is in `pmacs-cortex` which has limited network access per spec.
+Fails silently if network is unavailable.
+
+**Risk:** Minimal. Acceptable.
+
+---
+
+### SEC-LOW-04: Wizard Credential Storage Lacks Key Allowlist
+
+**Severity:** LOW
+**Category:** Privilege escalation
+**Files:** `pmacs/web/routes/wizard.py:152-158`
+
+**Description:**
+Step 4 of the first-run wizard stores arbitrary form data into macOS Keychain without
+validating that the keys are expected credential names. A crafted form submission could
+store arbitrary key-value pairs in the Keychain under `pmacs.credentials`.
+
+**Risk:** Low because the wizard is one-time, localhost-only, and the form is generated
+server-side.
+
+---
+
+## Previously Reported Findings -- Status Update
+
+| Previous ID | Description | Status |
+|-------------|-------------|--------|
+| SEC-CRIT-01 | Mutation promote/rollback TOTP bypass (broken import path) | **FIXED** -- all imports now use `pmacs.storage.keychain` |
+| SEC-HIGH-01 | difflib.HtmlDiff XSS in mutation diff endpoint | **FIXED** -- now uses `difflib.unified_diff()` (line 572) |
+| SEC-MED-01 | Finnhub API key from environment variable | **FIXED** -- now uses `read_key("pmacs.finnhub.api_key")` from Keychain |
+
+---
+
 ## PASS Findings (Verified Secure)
 
-### SEC-PASS-01: No Trojan/Backdoor Code Found
+### SEC-PASS-01: NN#1 -- LLMs Never Sign Trades
 
 **Evidence:**
-- Zero phone-home, telemetry, analytics, or beacon code in `pmacs/` source.
-- No `requests`, `urllib`, `httpx` calls to external services except:
-  - `httpx.get()` to `data.alpaca.markets` (paper trading API, expected per spec)
-  - `urllib.request.urlopen()` to `127.0.0.1:8000/health` (local health check)
-  - `httpx.get()` to `finnhub` via data gateway (price data, expected per spec)
-  - NTP UDP to `time.google.com` (clock sync, expected per spec)
-- No hidden functionality beyond spec. All features map to documented spec sections.
+- `pmacs/execution/signing.py`: Ed25519 signing isolated in execution module only.
+- `pmacs/execution/service.py`: UDS server verifies Ed25519 signature before accepting trade.
+  Client-side `sign_and_send()` requires the private key (line 290-291).
+- `pmacs/agents/` directory: Zero imports of `execution.signing`, `execution.service`, or
+  any trade submission code. Agents produce structured JSON via GBNF grammars and Pydantic
+  schemas only.
+- No code path from agent output to trade signing without passing through the deterministic
+  engines (arbitration, sizing) and the UDS execution service.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-02: No SQL Injection Vectors
+### SEC-PASS-02: NN#2 -- LLMs Never Math
 
 **Evidence:**
-- All SQLite queries use parameterized `?` placeholders:
-  - `stop_loss_daemon.py:67-84` -- parameterized INSERT
-  - `settings.py:155-158` -- parameterized UPDATE with `(req.candidate_id,)`
-  - `kill_switch.py:121-126` -- parameterized UPDATE
-  - `self_check.py:93-98` -- parameterized UPDATE
-- `sqlite.py:262` -- table name interpolation in `_column_exists()` has regex guard
-  `re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table)` rejecting non-identifier input.
-- KuzuDB queries use parameterized `$variable` syntax throughout `kuzu.py`.
-- No string formatting (`f"SELECT..."`) of SQL queries in production code.
+- All probability combination, sizing, conviction, and arbitration logic is in `pmacs/engines/`:
+  - `arbitration.py`: Brier-inverse weighted combination
+  - `sizing.py`: Position sizing
+  - `conviction.py`: Conviction scalar computation
+- `pmacs/agents/` contains zero functions for `combine`, `arbitrate`, `size`, or `prob`.
+- Three-layer validation (Grammar -> Pydantic -> Sanity) per Agents.md S3 ensures LLM
+  outputs are structured data, never used directly for calculations.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-03: No Command Injection Vectors
+### SEC-PASS-03: NN#3 -- Every State Transition Is Hash-Chained
 
 **Evidence:**
-- `subprocess` usage is limited to:
-  - `pmacs/storage/keychain.py` -- hardcoded `["security", "find-generic-password", ...]` commands.
-    No user input in command arguments.
-  - `pmacs/installer/steps/totp_enroll.py` -- `qr` binary invocation with hardcoded args.
-- `pmacs/installer/steps/check_system.py:51` -- `__import__(dep)` for dependency checking.
-  `dep` comes from a hardcoded list, not user input.
-- No `os.system()`, `os.popen()`, or shell=True in subprocess calls.
+- `pmacs/engines/state_machine.py:88-105`: Every state transition writes to audit log via
+  `AuditWriter.append()` with `prev_sha256` chain.
+- `pmacs/storage/audit.py`: Hash chain with `sha256(ts || prev_sha || event_type || canonical_json)`.
+  `os.fsync()` after every write. Rotation preserves chain across files.
+- `pmacs/data/canonical.py`: `canonical_json()` with `sort_keys=True`, `separators=(",",":")`,
+  `allow_nan=False` for deterministic serialization.
+- `pmacs/storage/audit.py:AuditVerifier`: Full and incremental chain verification implemented.
+- Kill switch state changes, trade executions, mutation promotions all write to audit chain.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-04: No Dangerous Deserialization
+### SEC-PASS-04: NN#4 -- Local-Only Execution (Infrastructure)
 
 **Evidence:**
-- Zero usage of `pickle.load`, `pickle.loads`, `marshal.load`, `yaml.load`, `shelve.open`.
-- No `eval()` or `exec()` in production code.
-- `exec()` appears only in vendored minified JS (`htmx.min.js`, `d3.min.js`, `tailwind.min.js`)
-  which is expected for these libraries and they are local static files.
+- `ops/install_pf_rules.sh`: pf firewall blocks `_pmacs_inference` user from all outbound
+  except loopback. Properly implemented.
+- `pmacs/cli.py`: All web servers start with `--host 127.0.0.1` (loopback only).
+- No `0.0.0.0` bindings found anywhere.
+- `pmacs-execution`: Unix Domain Socket (no network at all).
+- Qdrant: localhost default.
+- Zero telemetry, analytics, or phone-home code.
+- **NOTE:** The active backend config violates this at the application level (SEC-HIGH-02).
+  The infrastructure (pf rules, binding) is correct. The config is wrong.
 
-**Verdict:** PASS
+**Verdict:** PASS (infrastructure) / FAIL (active configuration -- see SEC-HIGH-02)
 
 ---
 
-### SEC-PASS-05: Network Services Bound to Localhost Only
-
-**Evidence:**
-- No `0.0.0.0` or `INADDR_ANY` bindings found anywhere in codebase.
-- `pmacs-inference` (llama-server): `http://127.0.0.1:8080` (localhost only)
-- `pmacs-nervous`: `http://127.0.0.1:8000` (localhost only)
-- `pmacs-dashboard`: `http://127.0.0.1:8001` (localhost only per spec S4.1)
-- `pmacs-execution`: Unix Domain Socket (`/var/db/pmacs/exec.sock`) -- no network at all
-- Qdrant: `http://127.0.0.1:6333` (localhost default)
-- Ollama fallback: `http://127.0.0.1:11434` (localhost only)
-- Only external outbound connections: Alpaca API (broker, required), Finnhub (data, required),
-  NTP (time sync, required)
-
-**Verdict:** PASS
-
----
-
-### SEC-PASS-06: No Committed Secrets
-
-**Evidence:**
-- `.gitignore` excludes `.env`, `*.pem`, `*.key`, `credentials.json`, `*.db`, `*.log`
-- Config files in `config/` contain zero credentials:
-  - `risk.toml`: Thresholds only
-  - `crucible.toml`: Time budgets only
-  - `mutation.toml`: Activation thresholds only
-  - `model_registry.json`: Local URLs and model names only
-  - `model_hashes.toml`: GGUF SHA256 hashes (not secrets)
-  - `source_criticality.toml`: Priority labels only
-  - `notification.toml`: Level preferences only
-  - `resources.toml`: Hardware budgets only
-- All credentials stored in macOS Keychain via `keyring` library.
-- `pmacs/storage/keychain.py:_scrub_secrets()` redacts secrets from error messages.
-
-**Verdict:** PASS
-
----
-
-### SEC-PASS-07: Ed25519 Signing Correctly Implemented
-
-**Evidence:**
-- `pmacs/execution/signing.py`: Uses `cryptography` library's `Ed25519PrivateKey`.
-  Standard, audited implementation.
-- Private key files created with `chmod 0o600` (owner read/write only).
-- `pmacs/execution/service.py:104-108`: Server verifies both that the public key matches
-  the trusted key AND that the Ed25519 signature is valid. Double verification.
-- `pmacs/execution/service.py:278-314`: Client-side `sign_and_send()` derives public key
-  from private key, never stores or transmits the private key.
-- No agent code imports execution modules. LLMs cannot sign trades (Non-Negotiable #1).
-
-**Verdict:** PASS
-
----
-
-### SEC-PASS-08: Hash Chain Audit Log Integrity
-
-**Evidence:**
-- `pmacs/storage/audit.py`: Hash chain implemented per spec with `prev_sha256`.
-- `os.fsync()` after every write (durability guarantee).
-- `AuditVerifier.verify_full()` recomputes every hash and checks chain continuity.
-- `canonical_json()` uses `sort_keys=True`, `separators=(",",":")`, `allow_nan=False`
-  ensuring deterministic serialization.
-- Tampering with any line breaks the chain at the next entry.
-
-**Verdict:** PASS
-
----
-
-### SEC-PASS-09: Kill Switch Correctly Enforced
+### SEC-PASS-05: NN#5 -- Operator Owns Kill Switch
 
 **Evidence:**
 - `pmacs/cortex/kill_switch.py:engage()`: No TOTP required (safer to over-trigger).
 - `pmacs/cortex/kill_switch.py:disengage()`: Requires `verify_totp()` with valid code.
+  Also re-checks that the underlying trigger condition has resolved before allowing
+  disengagement (lines 234-253).
 - `pmacs/cortex/totp.py:verify_totp()`: Uses `hmac.compare_digest()` (timing-safe).
   Window of +/-1 period (30s). Proper base32 decoding.
-- `pmacs/cortex/self_check.py:engage_kill_switch_direct()`: Meta-monitor can engage
-  kill switch directly via SQLite when cortex is unresponsive. Cannot disengage.
 - Kill switch state persisted in SQLite singleton with `CHECK (id = 1)` constraint.
+- `pmacs/web/routes/cortex.py:133-166`: Disengage endpoint verifies TOTP server-side.
+- `pmacs/web/routes/cortex.py:111-130`: Engage endpoint requires NO TOTP (correct).
+- Mutation flagging on kill switch engagement (kill_switch.py:160-179).
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-10: TOTP Implementation Is RFC 6238 Compliant
+### SEC-PASS-06: Anti-Pattern #1 -- holding.state = "ABORTED_LLM" (forbidden direct mutation)
 
 **Evidence:**
-- `pmacs/cortex/totp.py`: 30s period, 6 digits, SHA-1, `hmac.compare_digest()`.
-- Secret generation uses `secrets.token_bytes(20)` (cryptographic RNG).
-- `+/-1` period window for clock skew tolerance.
-- No shortcuts, no bypass paths in the core TOTP module itself.
-- The bypass in settings.py is an import error (SEC-CRIT-01), not a TOTP flaw.
+- Grep for `holding.state = "ABORTED_LLM"`: Zero matches.
+- Grep for `.state =` in all `pmacs/` Python files: Only match is `state_machine.py:71`
+  (`holding.state = new_state`), which is the ONE allowed location.
+- All other `.state` references are reads (`==`), not writes (`=`).
+- Orchestrator uses `transition(holding, HoldingState.ABORTED_LLM, ...)` correctly.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-11: Jinja2 Autoescape Explicitly Configured
+### SEC-PASS-07: Anti-Pattern #2 -- json.dumps(payload) for audit
 
 **Evidence:**
-- `pmacs/web/app.py:43-46`:
-  ```python
-  _jinja_env = Environment(
-      loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
-      autoescape=select_autoescape(["html", "htm"]),
-  )
-  ```
-- Prior audit finding (WEB-1 from `.planning/phases/SECURITY.md`) has been remediated.
-- No `|safe` filter usage found in templates.
+- `pmacs/storage/audit.py:100`: Uses `canonical_json(payload)` for all audit writes.
+- The two `json.dumps(payload)` usages found are:
+  - `stop_loss_daemon.py:179`: heartbeat file (not audit)
+  - `logsys/dead_letter.py:67`: dead letter storage (not audit)
+- Both are for non-audit purposes. Audit chain uses canonical_json exclusively.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-12: Security Headers Present
+### SEC-PASS-08: Anti-Pattern #3 -- Custom rate-limit logic
 
 **Evidence:**
-- `pmacs/web/app.py:17-36`: `SecurityHeadersMiddleware` adds:
-  - `X-Content-Type-Options: nosniff`
-  - `X-Frame-Options: DENY`
-  - `Referrer-Policy: same-origin`
-  - `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; ...`
-- Prior audit finding (WEB-5) has been remediated.
-- CSP allows `'unsafe-inline'` for HTMX compatibility -- acceptable trade-off.
+- `pmacs/nervous/rate_limit.py`: Centralized `BUCKETS` dict with `TokenBucket` implementation.
+- `pmacs/data/gateway.py`: Per-source `TokenBucket` with `DEFAULT_RATES`.
+- All rate limiting uses `BUCKETS["source"].acquire()` pattern.
+- No ad-hoc `time.sleep()` or custom counter-based rate limiting found.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-13: No Path Traversal Vectors
+### SEC-PASS-09: Anti-Pattern #4 -- Mutating evidence packets in staleness checks
 
 **Evidence:**
-- No `../` patterns in file operations.
-- `Path()` objects used consistently, which normalize path components.
-- Database paths come from configuration, not user input.
-- Template names come from hardcoded dictionaries, not URL parameters.
+- `pmacs/agents/base.py:345-369`: `_sanitize_evidence_packets()` creates new packets via
+  `model_copy(update=...)` rather than mutating originals.
+- Evidence sanitization returns new string values; original packets are not modified.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-14: Dependencies Are Clean
+### SEC-PASS-10: Anti-Pattern #5 -- cycle_id=None on audit-emitting functions
 
 **Evidence:**
-- `pyproject.toml` dependencies are all well-known, mainstream packages:
-  - `pydantic>=2.5`, `httpx>=0.27`, `cryptography>=42.0`, `keyring>=25.0`,
-    `fastapi>=0.110`, `uvicorn>=0.29`, `jinja2>=3.1.6`, `duckdb>=1.5.2`,
-    `alpaca-py>=0.30`, `kuzu>=0.5.0`, `qdrant-client>=1.12.0`,
-    `sentence-transformers>=3.0.0`, `pytz>=2024.1`
-- No suspicious or obscure packages.
-- No packages with known supply-chain attack history.
-- Build system: `hatchling` (Python standard).
+- `pmacs/logsys/debug_log.py:220-224`: `log_debug()` raises `ValueError` if `cycle_id is None`
+  for any event type not in `SYSTEM_EVENT_TYPES`. This is enforced at runtime.
+- `pmacs/execution/catastrophe_net.py:168-171`: `execute_exit()` raises `ValueError` if
+  `cycle_id` is empty.
+- System-level events (process lifecycle, health, storage) are properly exempted in
+  `SYSTEM_EVENT_TYPES` frozenset (160 entries).
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-15: LLMs Cannot Sign Trades or Perform Math
+### SEC-PASS-11: Anti-Pattern #6 -- Day 1 bootstrap aborting everything
 
 **Evidence:**
-- `pmacs/agents/` directory: Zero imports of `execution.signing`, `execution.service`, or
-  any trade submission code. Agents produce structured JSON via GBNF grammars and Pydantic
-  schemas only.
-- All probability combination, sizing, and arbitration in `pmacs/engines/`:
-  - `arbitration.py`: Brier-inverse weighted combination
-  - `sizing.py`: Position sizing
-  - `conviction.py`: Conviction scalar computation
-- Three-layer validation (Grammar -> Pydantic -> Sanity) per Agents.md S3.
+- `pmacs/engines/arbitration.py:223`: Uses `ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE`
+  when all immature personas agree on direction.
+- `pmacs/schemas/arbitration.py:19`: Proper enum value.
+- `pmacs/nervous/orchestrator.py:1487`: Checks for bootstrap decision value.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-16: Rate Limiting Follows BUCKETS Pattern
+### SEC-PASS-12: Anti-Pattern #7 -- Tight broker-side stops
 
 **Evidence:**
-- `pmacs/data/gateway.py`: `TokenBucket` with per-source `DEFAULT_RATES`.
-- `pmacs/nervous/rate_limit.py`: `BUCKETS = {"totp_verify": TokenBucket(rate=5, period=60.0)}`.
-- All HTTP data calls acquire from bucket before sending.
-- No custom rate-limit logic found outside the BUCKETS pattern.
+- `pmacs/execution/catastrophe_net.py`: Broker receives ONLY catastrophe-net stop at 15% below
+  entry (CATASTROPHE_NET_PCT constant).
+- Docstring explicitly states: "PMACS manages tight stops internally. The broker receives only
+  a catastrophe-net stop" (line 4-5).
+- `pmacs/engines/trailing_stop.py`: Tight stops managed internally by PMACS.
 
 **Verdict:** PASS
 
 ---
 
-### SEC-PASS-17: Prompt Injection Defense Implemented
+### SEC-PASS-13: Anti-Pattern #8 -- eur_per_usd field
+
+**Evidence:**
+- Grep for `eur_per_usd`: Only in guard/validator code.
+- `pmacs/schemas/currency.py:25-31`: `_no_eur_per_usd_field()` model validator rejects the
+  field and raises `ValueError`. Also checks `model_dump()` output.
+- `pmacs/constants.py:127`: `FX_CONVENTION = "usd_per_eur"` with comment "NEVER use eur_per_usd".
+- `eur_per_usd` exists only as a computed property (inverse of `usd_per_eur`), not a stored field.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-14: Anti-Pattern #9 -- Mutation Engine writing production state directly
+
+**Evidence:**
+- `pmacs/mutation/daemon.py`: Mutation daemon reads data, generates proposals, writes to
+  `mutation_proposals` table. Does NOT write to `model_registry.json`.
+- `pmacs/mutation/promotion.py:103`: Imports `apply_candidate_to_registry` from
+  `pmacs.nervous.mutation` -- separate process (structural isolation).
+- `pmacs/nervous/mutation.py:1-8`: Explicitly documents structural separation:
+  "This module lives in pmacs-nervous because the mutation process MUST NOT have write
+  access to production config files."
+- `pmacs/nervous/mutation.py:21-60`: `atomic_write_config()` with temp-file + rename (POSIX
+  atomicity).
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-15: Anti-Pattern #10 -- Mutation A/B running in PAPER
+
+**Evidence:**
+- `pmacs/mutation/ab_runner.py:38`: Docstring explicitly states "Candidate arm always runs
+  SHADOW-only (Architecture.md S16 anti-pattern)."
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-16: Anti-Pattern #11 -- Any mutation auto-applying
+
+**Evidence:**
+- `pmacs/mutation/promotion.py:81-82`: `operator_promote()` requires `totp_code` parameter,
+  raises `PermissionError` if TOTP verification fails.
+- `pmacs/mutation/daemon.py:7`: "All promotions require operator TOTP. No auto-promote."
+- `pmacs/web/routes/settings.py:398-427`: Server-side TOTP verification enforced on promote.
+- No `auto_promote` or `auto-apply` logic found anywhere in codebase.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-17: Anti-Pattern #12 -- Runtime prompt edits
+
+**Evidence:**
+- Prompt templates loaded from static `.md` files at agent initialization.
+- `pmacs/agents/memo_writer.py:47`: Template loaded from `prompts/memo_writer.md`.
+- No code that writes to or modifies prompt template files at runtime.
+- Mutation Engine proposes prompt changes as candidates, which require operator TOTP to
+  promote (see SEC-PASS-16).
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-18: Anti-Pattern #13 -- Backtesting against historical LLM outputs
+
+**Evidence:**
+- No `backtest.*llm`, `llm.*backtest`, or `historical.*llm.*output` patterns found.
+- No code that replays historical LLM outputs through the pipeline for evaluation.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-19: Anti-Pattern #14 -- Logging secrets
+
+**Evidence:**
+- No logging of API keys, TOTP secrets, or signing keys found.
+- `pmacs/installer/steps/verify_llm.py:99`: Logs `api_key_ref` (key name like
+  `pmacs.credentials.anthropic_api_key`), not the key value.
+- `pmacs/storage/keychain.py`: Has `_scrub_secrets()` that redacts secrets from error messages.
+- `pmacs/logsys/debug_log.py`: No secret filtering needed because secrets are never passed
+  to the logging system.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-20: Anti-Pattern #15 -- Missing error_code on WARN+ debug events
+
+**Evidence:**
+- `pmacs/logsys/debug_log.py:207-217`: `log_debug()` raises `ValueError` if `error_code` is
+  `None` for WARN or ERROR levels. Also validates that `error_code` is in `VALID_ERROR_CODES`
+  registry.
+- `pmacs/logsys/error_classifier.py:120-172`: Comprehensive registry of 70+ canonical error
+  codes covering all subsystems.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-21: No SQL Injection Vectors
+
+**Evidence:**
+- All SQLite queries use parameterized `?` placeholders.
+- `pmacs/storage/sqlite.py:311-314`: Table name interpolation has regex guard
+  `re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table)`.
+- No string formatting of SQL queries with user input.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-22: No Hardcoded Secrets
+
+**Evidence:**
+- All API keys retrieved from macOS Keychain via `keyring` library at runtime.
+- Config files contain zero credentials (verified: `model_registry.json`, `risk.toml`,
+  `crucible.toml`, `mutation.toml`, `resources.toml`).
+- `.gitignore` excludes `.env`, `*.pem`, `*.key`, `credentials.json`.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-23: Prompt Injection Defense
 
 **Evidence:**
 - `pmacs/data/gateway.py:sanitize_evidence()`: 7 compiled regex patterns detect injection
-  attempts. Matches are replaced with `[SANITIZED]`. Detection is logged with
-  `PROMPT_INJECTION_DETECTED` error code.
-- Agents.md S19.2 compliance: Layer 1 defense active.
+  attempts. Matches replaced with `[SANITIZED]`.
+- `pmacs/agents/base.py:345-369`: All evidence packets sanitized before passing to LLM.
+- Detection logged with `PROMPT_INJECTION_DETECTED` error code.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-24: TOTP Implementation RFC 6238 Compliant
+
+**Evidence:**
+- `pmacs/cortex/totp.py`: 30s period, 6 digits, SHA-1, `hmac.compare_digest()` (timing-safe).
+- Secret generation uses `secrets.token_bytes(20)` (cryptographic RNG).
+- +/-1 period window for clock skew tolerance.
+
+**Verdict:** PASS
+
+---
+
+### SEC-PASS-25: Network Services Bound to Localhost Only
+
+**Evidence:**
+- No `0.0.0.0` bindings found.
+- `pmacs-nervous`: `127.0.0.1:8000`
+- `pmacs-dashboard`: `127.0.0.1:8001`
+- `pmacs-inference`: `127.0.0.1:8080`
+- `pmacs-execution`: Unix Domain Socket (no network)
+- Security headers middleware present (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`).
 
 **Verdict:** PASS
 
@@ -456,104 +543,81 @@ trail of session creation/destruction.
 
 ## Summary Table
 
-| ID | Finding | Severity | Verdict |
-|----|---------|----------|---------|
-| SEC-CRIT-01 | Mutation promote/rollback TOTP bypass (broken import) | CRITICAL | OPEN |
-| SEC-HIGH-01 | difflib.HtmlDiff XSS in mutation diff endpoint | HIGH | OPEN |
-| SEC-MED-01 | Finnhub API key from environment variable | MEDIUM | OPEN |
-| SEC-MED-02 | Alpaca credentials in httpx headers (logging risk) | MEDIUM | OPEN |
-| SEC-LOW-01 | Hardcoded NTP host | LOW | ACCEPTED |
-| SEC-LOW-02 | Wizard credential storage lacks allowlist | LOW | ACCEPTED |
-| SEC-LOW-03 | In-memory session store | LOW | ACCEPTED |
-| SEC-PASS-01 | No trojan/backdoor code | -- | PASS |
-| SEC-PASS-02 | No SQL injection vectors | -- | PASS |
-| SEC-PASS-03 | No command injection vectors | -- | PASS |
-| SEC-PASS-04 | No dangerous deserialization | -- | PASS |
-| SEC-PASS-05 | Services bound to localhost only | -- | PASS |
-| SEC-PASS-06 | No committed secrets | -- | PASS |
-| SEC-PASS-07 | Ed25519 signing correctly implemented | -- | PASS |
-| SEC-PASS-08 | Hash chain audit log integrity | -- | PASS |
-| SEC-PASS-09 | Kill switch correctly enforced | -- | PASS |
-| SEC-PASS-10 | TOTP implementation RFC 6238 compliant | -- | PASS |
-| SEC-PASS-11 | Jinja2 autoescape explicitly configured | -- | PASS |
-| SEC-PASS-12 | Security headers present | -- | PASS |
-| SEC-PASS-13 | No path traversal vectors | -- | PASS |
-| SEC-PASS-14 | Dependencies are clean | -- | PASS |
-| SEC-PASS-15 | LLMs cannot sign trades or perform math | -- | PASS |
-| SEC-PASS-16 | Rate limiting follows BUCKETS pattern | -- | PASS |
-| SEC-PASS-17 | Prompt injection defense implemented | -- | PASS |
+| ID | Finding | Severity | Status |
+|----|---------|----------|--------|
+| SEC-CRIT-01 | Mutation TOTP bypass (broken import) | CRITICAL | **FIXED** |
+| SEC-HIGH-01 | difflib.HtmlDiff XSS | HIGH | **FIXED** |
+| SEC-MED-01 | Finnhub API key from env var | MEDIUM | **FIXED** |
+| SEC-HIGH-02 | Active LLM backend routes through cloud | HIGH | **OPEN** |
+| SEC-MED-02 | Alpaca credentials in httpx headers | MEDIUM | **OPEN** |
+| SEC-MED-03 | Write endpoints not TOTP-gated | MEDIUM | **OPEN** |
+| SEC-LOW-01 | Exception message leaking | LOW | ACCEPTED |
+| SEC-LOW-02 | In-memory session store | LOW | ACCEPTED |
+| SEC-LOW-03 | Hardcoded NTP host | LOW | ACCEPTED |
+| SEC-LOW-04 | Wizard credential storage lacks allowlist | LOW | ACCEPTED |
+| SEC-PASS-01 through SEC-PASS-25 | (25 verified controls) | -- | PASS |
 
 ---
 
-## Five Non-Negotiables Re-Verification
+## Five Non-Negotiables Verification
 
 | NN | Requirement | Status | Evidence |
 |----|-------------|--------|----------|
-| 1 | LLMs never sign trades | PASS | SEC-PASS-07, SEC-PASS-15 |
-| 2 | LLMs never math | PASS | SEC-PASS-15 |
-| 3 | Hash-chained audit log | PASS | SEC-PASS-08 |
-| 4 | Local-only execution | PASS | SEC-PASS-01, SEC-PASS-05 |
-| 5 | Operator owns kill switch | PASS (core) / FAIL (web layer) | SEC-PASS-09, SEC-CRIT-01 |
+| 1 | LLMs never sign trades | PASS | SEC-PASS-01 |
+| 2 | LLMs never math | PASS | SEC-PASS-02 |
+| 3 | Every state transition hash-chained | PASS | SEC-PASS-03 |
+| 4 | Local-only execution | **FAIL** | SEC-PASS-04 (infra) + SEC-HIGH-02 (config) |
+| 5 | Operator owns kill switch | PASS | SEC-PASS-05 |
 
 ---
 
-## Findings Requiring Remediation
+## Anti-Pattern Compliance (Architecture.md S16)
 
-### 1. SEC-CRIT-01: Mutation Promote/Rollback TOTP Bypass (CRITICAL)
-
-- **File:** `pmacs/web/routes/settings.py:142, 216`
-- **Fix:** Change `from pmacs.data.keychain import get_api_key` to
-  `from pmacs.storage.keychain import get_api_key` in both promote and rollback handlers.
-- **Effort:** 2 lines changed.
-
-### 2. SEC-HIGH-01: difflib.HtmlDiff XSS (HIGH)
-
-- **File:** `pmacs/web/routes/settings.py:279-283`
-- **Fix:** Use `difflib.unified_diff()` text output only, or HTML-escape cell contents
-  before passing to `HtmlDiff`.
-- **Effort:** 10-15 lines changed.
-
-### 3. SEC-MED-01: Finnhub Key from Environment Variable (MEDIUM)
-
-- **File:** `pmacs/cortex/stop_loss_daemon.py:129`
-- **Fix:** Replace `os.environ.get("FINNHUB_API_KEY", "")` with
-  `get_api_key("pmacs.finnhub", "api_key")` from Keychain.
-- **Effort:** 3 lines changed.
-
-### 4. SEC-MED-02: Alpaca Credentials in httpx Headers (MEDIUM)
-
-- **File:** `pmacs/cortex/stop_loss_daemon.py:146-155`
-- **Fix:** Configure httpx client with header redaction, or use Alpaca SDK which handles
-  authentication internally.
-- **Effort:** 5-10 lines changed.
+| # | Anti-Pattern | Status | Evidence |
+|---|-------------|--------|----------|
+| 1 | holding.state = "ABORTED_LLM" | PASS | SEC-PASS-06 |
+| 2 | json.dumps(payload) for audit | PASS | SEC-PASS-07 |
+| 3 | Custom rate-limit logic | PASS | SEC-PASS-08 |
+| 4 | Mutating evidence in staleness checks | PASS | SEC-PASS-09 |
+| 5 | cycle_id=None on audit-emitting functions | PASS | SEC-PASS-10 |
+| 6 | Day 1 bootstrap aborts everything | PASS | SEC-PASS-11 |
+| 7 | Tight broker-side stops | PASS | SEC-PASS-12 |
+| 8 | eur_per_usd field | PASS | SEC-PASS-13 |
+| 9 | Mutation writes production state | PASS | SEC-PASS-14 |
+| 10 | Mutation A/B in PAPER | PASS | SEC-PASS-15 |
+| 11 | Any mutation auto-applying | PASS | SEC-PASS-16 |
+| 12 | Runtime prompt edits | PASS | SEC-PASS-17 |
+| 13 | Backtesting against historical LLM outputs | PASS | SEC-PASS-18 |
+| 14 | Logging secrets | PASS | SEC-PASS-19 |
+| 15 | Missing error_code on WARN+ | PASS | SEC-PASS-20 |
 
 ---
 
 ## Architectural Strengths Observed
 
 1. **Defense in depth on trade execution:** Ed25519 signing -> UDS transport -> signature
-   verification -> broker adapter abstraction -> catastrophe-net stop. Five layers before
-   a trade reaches a broker.
+   verification -> broker adapter -> catastrophe-net stop. Five layers before a trade
+   reaches a broker.
 
-2. **Structural isolation of mutation engine:** The mutation process cannot write production
-   config. It writes only to `mutation_proposals` table. Promotion goes through nervous,
-   which lives in a separate process.
+2. **Structural isolation of mutation engine:** Mutation process cannot write production
+   config. Promotion goes through nervous (separate process). All mutations require
+   operator TOTP.
 
-3. **TOTP implementation correctness:** Uses `hmac.compare_digest()` (timing-safe), window
-   of +/-1 period, proper base32 encoding. No shortcuts in the core module.
+3. **Audit chain integrity:** `fsync` after every write, canonical JSON, hash recomputation,
+   full and incremental verification, rotation preserves chain.
 
-4. **Audit chain integrity:** `fsync` after every line, genesis hash, full and incremental
-   verification, hash recomputation matches spec exactly.
+4. **Secret management:** Keychain-based with `_scrub_secrets()` for error paths. No secrets
+   in config files, environment variables (Finhhub fixed), or logs.
 
-5. **Secret management:** Keychain-based with `_scrub_secrets()` for error paths. No secrets
-   in environment variables (except Finnhub -- see SEC-MED-01), config files, or logs.
+5. **TOTP correctness:** `hmac.compare_digest()` (timing-safe), proper window, cryptographic
+   RNG for secret generation.
 
-6. **Session management:** 256-bit tokens, single active session, 24h expiry.
+6. **Error code enforcement:** Runtime validation that all WARN+ events carry valid error
+   codes from the canonical registry. `cycle_id` required for non-system events.
 
 7. **No telemetry or phone-home:** Zero external calls beyond required data/broker APIs.
-   All vendor dependencies (HTMX, D3, Tailwind) vendored locally.
 
 ---
 
-*Audit complete. 4 open findings (1 CRITICAL, 1 HIGH, 2 MEDIUM). System requires the
-SEC-CRIT-01 fix before LIVE-READY status can be confirmed.*
+*Audit complete. 3 open findings (1 HIGH, 2 MEDIUM). Previous CRITICAL finding remediated.
+Non-Negotiable #4 violation (SEC-HIGH-02) requires config change before LIVE-READY status.*

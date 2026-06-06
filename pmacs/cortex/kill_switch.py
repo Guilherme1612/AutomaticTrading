@@ -17,6 +17,14 @@ from typing import Any
 
 from pmacs.cortex.totp import verify_totp
 from pmacs.logsys import log_debug
+from pmacs.nervous.sse_publisher import publish_system_event
+
+
+def _resolve_db(db_path: Path | str | None) -> Path:
+    if db_path is None:
+        from pmacs.config import data_dir
+        return data_dir() / "pmacs.db"
+    return Path(db_path)
 
 
 class KillSwitchState(str, enum.Enum):
@@ -48,7 +56,7 @@ CREATE TABLE IF NOT EXISTS kill_switch (
 );
 """
 
-# The 10 triggers from Architecture.md §13.1
+# The triggers from Architecture.md §13.1 + Phase 16 budget triggers (12 total)
 TRIGGER_IDS: tuple[str, ...] = (
     "AUDIT_CHAIN_INTEGRITY",
     "ROLLING_5D_LOSS",
@@ -60,6 +68,10 @@ TRIGGER_IDS: tuple[str, ...] = (
     "META_MONITOR_UNRESPONSIVE",
     "CRASH_LOOP",
     "MODEL_INTEGRITY",
+    "CYCLE_BLOCKED_BUDGET_DAILY",
+    "CYCLE_BLOCKED_BUDGET_MONTHLY",
+    "MANUAL",
+    "CATASTROPHE_CANCEL_FAILED",
 )
 
 
@@ -88,7 +100,7 @@ def _get_db(db_path: str | Path) -> sqlite3.Connection:
 def engage(
     reason: str,
     trigger: str,
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     cycle_id: str = "",
 ) -> None:
@@ -104,6 +116,7 @@ def engage(
         audit_path: Optional path to audit log file.
         cycle_id: Optional cycle ID for audit traceability.
     """
+    db_path = _resolve_db(db_path)
     conn = _get_db(db_path)
     try:
         now = datetime.now(timezone.utc).isoformat()
@@ -135,17 +148,32 @@ def engage(
             msg=f"KILL SWITCH ENGAGED: trigger={trigger}, reason={reason}",
         )
 
+        # Publish system SSE event (no-op if nervous not running)
+        publish_system_event("system.kill_switch_engaged", {
+            "trigger": trigger, "reason": reason, "engaged_at": now,
+        })
+
         # Write to audit log if path provided
         if audit_path is not None:
-            from pmacs.storage.audit import AuditWriter
+            try:
+                from pmacs.storage.audit import AuditWriter
 
-            writer = AuditWriter(audit_path)
-            writer.append(
-                "KILL_SWITCH_ENGAGED",
-                {"trigger": trigger, "reason": reason, "engaged_at": now},
-                cycle_id=cycle_id,
-            )
-            writer.close()
+                writer = AuditWriter(audit_path)
+                writer.append(
+                    "KILL_SWITCH_ENGAGED",
+                    {"trigger": trigger, "reason": reason, "engaged_at": now},
+                    cycle_id=cycle_id,
+                )
+                writer.close()
+            except Exception as audit_exc:
+                # Never block kill switch engagement, but log the failure
+                log_debug(
+                    "KILL_SWITCH_AUDIT_WRITE_FAILED",
+                    payload={"trigger": trigger, "audit_error": str(audit_exc)},
+                    level="ERROR",
+                    error_code="AUDIT_REPLICATION_FAILED",
+                    msg=f"Kill switch engaged but audit write failed: {audit_exc}",
+                )
 
         # Flag recent promoted mutations for operator review (Agents.md §17.4 Level 5)
         try:
@@ -177,7 +205,7 @@ def disengage(
     totp_secret: str,
     totp_code: str,
     reason: str,
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     cycle_id: str = "",
 ) -> bool:
@@ -199,6 +227,7 @@ def disengage(
     Raises:
         ValueError: If kill switch is not currently ENGAGED.
     """
+    db_path = _resolve_db(db_path)
     if not verify_totp(totp_secret, totp_code):
         log_debug(
             "KILL_SWITCH_DISENGAGE_TOTP_FAILED",
@@ -215,6 +244,31 @@ def disengage(
         current = conn.execute("SELECT state FROM kill_switch WHERE id = 1").fetchone()
         if not current or current[0] != KillSwitchState.ENGAGED.value:
             raise ValueError("Kill switch is not ENGAGED — cannot disengage")
+
+        # Architecture.md §13.2: Cortex confirms underlying condition resolved
+        trigger_name = conn.execute(
+            "SELECT trigger_name FROM kill_switch WHERE id = 1"
+        ).fetchone()
+        if trigger_name and trigger_name[0]:
+            # Re-run the specific trigger check to verify condition cleared
+            try:
+                trigger_checks = check_all_triggers(db_path=db_path)
+                still_triggered = [r for r in trigger_checks
+                                   if r.triggered and r.trigger_id == trigger_name[0]]
+                if still_triggered:
+                    reasons = "; ".join(r.reason for r in still_triggered)
+                    log_debug(
+                        "KILL_SWITCH_DISENGAGE_CONDITION_UNRESOLVED",
+                        payload={"trigger": trigger_name[0], "reasons": reasons},
+                        level="WARN",
+                        error_code="KILL_SWITCH_ENGAGED",
+                        cycle_id=cycle_id or None,
+                        msg=f"Kill switch disengaged but condition {trigger_name[0]} may still be active: {reasons}",
+                    )
+                    # Operator TOTP takes precedence — log warning but allow disengage
+            except Exception:
+                # If re-check fails, allow disengage (operator explicitly overriding)
+                pass
 
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -233,23 +287,37 @@ def disengage(
             msg=f"Kill switch DISENGAGED: reason={reason}",
         )
 
-        if audit_path is not None:
-            from pmacs.storage.audit import AuditWriter
+        # Publish system SSE event (no-op if nervous not running)
+        publish_system_event("system.kill_switch_disengaged", {
+            "reason": reason, "disengaged_at": now,
+        })
 
-            writer = AuditWriter(audit_path)
-            writer.append(
-                "KILL_SWITCH_DISENGAGED",
-                {"reason": reason, "disengaged_at": now},
-                cycle_id=cycle_id,
-            )
-            writer.close()
+        if audit_path is not None:
+            try:
+                from pmacs.storage.audit import AuditWriter
+
+                writer = AuditWriter(audit_path)
+                writer.append(
+                    "KILL_SWITCH_DISENGAGED",
+                    {"reason": reason, "disengaged_at": now},
+                    cycle_id=cycle_id,
+                )
+                writer.close()
+            except Exception as audit_exc:
+                log_debug(
+                    "KILL_SWITCH_AUDIT_WRITE_FAILED",
+                    payload={"reason": reason, "audit_error": str(audit_exc)},
+                    level="ERROR",
+                    error_code="AUDIT_REPLICATION_FAILED",
+                    msg=f"Kill switch disengaged but audit write failed: {audit_exc}",
+                )
 
         return True
     finally:
         conn.close()
 
 
-def is_engaged(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> bool:
+def is_engaged(db_path: str | Path | None = None) -> bool:
     """Check if kill switch is currently engaged.
 
     Args:
@@ -258,6 +326,7 @@ def is_engaged(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> bool:
     Returns:
         True if ENGAGED, False if ARMED or table missing.
     """
+    db_path = _resolve_db(db_path)
     conn = _get_db(db_path)
     try:
         row = conn.execute("SELECT state FROM kill_switch WHERE id = 1").fetchone()
@@ -266,7 +335,7 @@ def is_engaged(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> bool:
         conn.close()
 
 
-def get_state(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> KillSwitchState:
+def get_state(db_path: str | Path | None = None) -> KillSwitchState:
     """Get current kill switch state.
 
     Args:
@@ -275,6 +344,7 @@ def get_state(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> KillSwitchState
     Returns:
         Current KillSwitchState enum value.
     """
+    db_path = _resolve_db(db_path)
     conn = _get_db(db_path)
     try:
         row = conn.execute("SELECT state FROM kill_switch WHERE id = 1").fetchone()
@@ -286,7 +356,7 @@ def get_state(db_path: str | Path = "/var/db/pmacs/pmacs.db") -> KillSwitchState
 
 
 def get_engagement_info(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Get engagement details (reason, trigger, time) if currently engaged.
 
@@ -296,6 +366,7 @@ def get_engagement_info(
     Returns:
         Dict with engagement info, or None if not engaged.
     """
+    db_path = _resolve_db(db_path)
     conn = _get_db(db_path)
     try:
         row = conn.execute(
@@ -315,13 +386,13 @@ def get_engagement_info(
 
 
 def check_all_triggers(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     heartbeat_dir: Path | None = None,
     gguf_path: str | Path | None = None,
     expected_gguf_hash: str | None = None,
 ) -> list[TriggerResult]:
-    """Evaluate all 10 kill switch triggers.
+    """Evaluate all 12 kill switch triggers.
 
     Args:
         db_path: Path to SQLite database.
@@ -333,6 +404,7 @@ def check_all_triggers(
     Returns:
         List of TriggerResult for each trigger evaluation.
     """
+    db_path = _resolve_db(db_path)
     results: list[TriggerResult] = []
 
     # 1. Audit chain integrity
@@ -422,33 +494,94 @@ def check_all_triggers(
         _check_model_integrity(gguf_path, expected_gguf_hash)
     )
 
+    # 11. Daily budget hard cap exceeded
+    results.append(
+        _check_budget_daily(db_path)
+    )
+
+    # 12. Monthly budget hard cap exceeded
+    results.append(
+        _check_budget_monthly(db_path)
+    )
+
+    # 13. Manual trigger — operator-initiated only, never auto-evaluated
+    results.append(
+        TriggerResult(
+            trigger_id="MANUAL",
+            triggered=False,
+            reason="Manual trigger is operator-initiated only",
+        )
+    )
+
+    # 14. Catastrophe cancel failed — runtime-only, checked during execution
+    results.append(
+        TriggerResult(
+            trigger_id="CATASTROPHE_CANCEL_FAILED",
+            triggered=False,
+            reason="Checked during trade execution",
+        )
+    )
+
     return results
 
 
 def _check_rolling_loss(db_path: str | Path) -> TriggerResult:
-    """Check rolling 5-day loss >10%."""
+    """Check rolling 5-day loss >10% (Architecture.md §13)."""
     from pmacs.constants import KILL_SWITCH_ROLLING_5D_LOSS_PCT
 
     try:
         conn = sqlite3.connect(str(db_path))
         try:
-            row = conn.execute(
+            # Get current value
+            current_row = conn.execute(
                 """SELECT total_value_usd FROM paper_account
                    ORDER BY snapshot_at DESC LIMIT 1"""
             ).fetchone()
-            if row is None:
+            if current_row is None:
                 return TriggerResult(
                     trigger_id="ROLLING_5D_LOSS",
                     triggered=False,
                     reason="No paper account data yet",
                 )
-            # Simplified check: compare latest to 5 days ago
-            # Full implementation needs 5-day window calculation
+            current_value = float(current_row[0])
+
+            # Get value from 5 days ago
+            five_day_row = conn.execute(
+                """SELECT total_value_usd FROM paper_account
+                   WHERE snapshot_at <= datetime('now', '-5 days')
+                   ORDER BY snapshot_at DESC LIMIT 1"""
+            ).fetchone()
+
+            if five_day_row is None:
+                return TriggerResult(
+                    trigger_id="ROLLING_5D_LOSS",
+                    triggered=False,
+                    reason="Insufficient history for 5-day comparison",
+                    details={"current_value": current_value},
+                )
+
+            prior_value = float(five_day_row[0])
+            if prior_value <= 0:
+                return TriggerResult(
+                    trigger_id="ROLLING_5D_LOSS",
+                    triggered=False,
+                    reason="Prior value zero or negative",
+                    details={"current_value": current_value, "prior_value": prior_value},
+                )
+
+            loss_pct = (prior_value - current_value) / prior_value
+            triggered = loss_pct > KILL_SWITCH_ROLLING_5D_LOSS_PCT
+
             return TriggerResult(
                 trigger_id="ROLLING_5D_LOSS",
-                triggered=False,
-                reason="Within tolerance",
-                details={"current_value": row[0]},
+                triggered=triggered,
+                reason=f"5-day loss {loss_pct:.1%} {'EXCEEDS' if triggered else 'within'} {KILL_SWITCH_ROLLING_5D_LOSS_PCT:.0%} threshold",
+                details={
+                    "current_value": current_value,
+                    "prior_value": prior_value,
+                    "loss_pct": round(loss_pct, 4),
+                    "threshold": KILL_SWITCH_ROLLING_5D_LOSS_PCT,
+                },
             )
         finally:
             conn.close()
@@ -585,6 +718,60 @@ def _check_crash_loop(db_path: str | Path) -> TriggerResult:
             trigger_id="CRASH_LOOP",
             triggered=False,
             reason=f"Check failed: {exc}",
+        )
+
+
+def _check_budget_daily(
+    db_path: str | Path | None = None,
+) -> TriggerResult:
+    """Check if daily budget hard cap has been exceeded."""
+    db_path = _resolve_db(db_path)
+    try:
+        from pmacs.billing.budget_enforcer import DEFAULT_DAILY_HARD_CAP, _get_period_total
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            current = _get_period_total(conn, "today")
+        finally:
+            conn.close()
+        triggered = current >= DEFAULT_DAILY_HARD_CAP
+        return TriggerResult(
+            trigger_id="CYCLE_BLOCKED_BUDGET_DAILY",
+            triggered=triggered,
+            reason=f"Daily spend ${current:.4f}/{DEFAULT_DAILY_HARD_CAP:.2f}",
+        )
+    except Exception as exc:
+        return TriggerResult(
+            trigger_id="CYCLE_BLOCKED_BUDGET_DAILY",
+            triggered=False,
+            reason=f"Check skipped: {exc}",
+        )
+
+
+def _check_budget_monthly(
+    db_path: str | Path | None = None,
+) -> TriggerResult:
+    """Check if monthly budget hard cap has been exceeded."""
+    db_path = _resolve_db(db_path)
+    try:
+        from pmacs.billing.budget_enforcer import DEFAULT_MONTHLY_HARD_CAP, _get_period_total
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            current = _get_period_total(conn, "this_month")
+        finally:
+            conn.close()
+        triggered = current >= DEFAULT_MONTHLY_HARD_CAP
+        return TriggerResult(
+            trigger_id="CYCLE_BLOCKED_BUDGET_MONTHLY",
+            triggered=triggered,
+            reason=f"Monthly spend ${current:.4f}/{DEFAULT_MONTHLY_HARD_CAP:.2f}",
+        )
+    except Exception as exc:
+        return TriggerResult(
+            trigger_id="CYCLE_BLOCKED_BUDGET_MONTHLY",
+            triggered=False,
+            reason=f"Check skipped: {exc}",
         )
 
 

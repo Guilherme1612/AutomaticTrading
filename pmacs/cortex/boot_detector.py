@@ -2,6 +2,8 @@
 
 Determines whether a new analysis cycle should be initiated on process startup.
 Checks last closed cycle timing, weekend status, and EOD data availability.
+On detection, calls the nervous orchestrator to actually open the cycle and
+writes an audit event.
 """
 from __future__ import annotations
 
@@ -13,82 +15,31 @@ from pathlib import Path
 from pmacs.logsys import log_debug
 
 
-def maybe_initiate_cycle(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
-    eod_time_hour: int = 16,
-    eod_time_minute: int = 30,
-    timezone_name: str = "US/Eastern",
-) -> str | None:
-    """Check if a cycle should be initiated on boot.
+def _should_skip_weekend(now: datetime) -> bool:
+    """Return True if it's a weekend (Saturday/Sunday)."""
+    return now.weekday() >= 5
 
-    Per Architecture.md §4.5:
-    - Skip if gap since last closed cycle < 24h
-    - Skip if weekend (simple weekday check)
-    - Skip if before EOD data time (16:30 ET)
-    - Warn if gap > 168h (7 days)
-    - Returns cycle_id if initiated, None if skipped
 
-    Args:
-        db_path: Path to SQLite database.
-        eod_time_hour: Hour of EOD data availability (default 16).
-        eod_time_minute: Minute of EOD data availability (default 30).
-        timezone_name: Timezone for EOD check (default US/Eastern).
-
-    Returns:
-        cycle_id string if a cycle should be initiated, None to skip.
-    """
-    now = datetime.now(timezone.utc)
-
-    # Check: is it a weekend? (simple check; pandas_market_calendars later)
-    # Monday=0, Sunday=6
-    weekday = now.weekday()
-    if weekday >= 5:  # Saturday=5, Sunday=6
-        log_debug(
-            "BOOT_CYCLE_SKIPPED_WEEKEND",
-            payload={"weekday": weekday},
-            level="INFO",
-            msg="Skipping boot cycle: weekend",
-        )
-        return None
-
-    # Check: is it before EOD time?
-    # Convert current time to Eastern for EOD check
+def _should_skip_before_eod(
+    now: datetime,
+    eod_hour: int,
+    eod_minute: int,
+) -> bool:
+    """Return True if current ET time is before the EOD data window."""
     try:
         from zoneinfo import ZoneInfo
-
-        eastern = ZoneInfo("US/Eastern")
-        now_et = now.astimezone(eastern)
+        now_et = now.astimezone(ZoneInfo("US/Eastern"))
     except Exception:
-        # Fallback: use UTC-5 approximation
         from datetime import timedelta
-
         now_et = now - timedelta(hours=5)
 
-    current_time_et = now_et.hour * 60 + now_et.minute
-    eod_time_et = eod_time_hour * 60 + eod_time_minute
-    if current_time_et < eod_time_et:
-        log_debug(
-            "BOOT_CYCLE_SKIPPED_BEFORE_EOD",
-            payload={
-                "current_time_et": f"{now_et.hour:02d}:{now_et.minute:02d}",
-                "eod_time": f"{eod_time_hour:02d}:{eod_time_minute:02d}",
-            },
-            level="INFO",
-            msg="Skipping boot cycle: before EOD data time",
-        )
-        return None
+    return (now_et.hour * 60 + now_et.minute) < (eod_hour * 60 + eod_minute)
 
-    # Check: when was the last closed cycle?
-    p = Path(db_path)
-    if not p.exists():
-        # No database yet — first run, initiate cycle
-        log_debug(
-            "BOOT_CYCLE_INIT_FIRST_RUN",
-            payload={"reason": "no database"},
-            level="INFO",
-            msg="Initiating first boot cycle: no database found",
-        )
-        return str(uuid.uuid4())
+
+def _get_last_closed_gap_hours(db_path: Path, now: datetime) -> float | None:
+    """Return hours since last closed cycle, or None if no history."""
+    if not db_path.exists():
+        return None
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -97,59 +48,168 @@ def maybe_initiate_cycle(
                WHERE state = 'CLOSED'
                ORDER BY closed_at DESC LIMIT 1"""
         ).fetchone()
-
-        if row is None:
-            # No closed cycles — first run
-            log_debug(
-                "BOOT_CYCLE_INIT_NO_HISTORY",
-                payload={"reason": "no closed cycles"},
-                level="INFO",
-                msg="Initiating boot cycle: no closed cycles in history",
-            )
-            return str(uuid.uuid4())
-
-        last_closed_str = row[0]
-        if not last_closed_str:
-            return str(uuid.uuid4())
-
-        last_closed = datetime.fromisoformat(last_closed_str)
-        if last_closed.tzinfo is None:
-            last_closed = last_closed.replace(tzinfo=timezone.utc)
-
-        gap_hours = (now - last_closed).total_seconds() / 3600
-
-        # Skip if gap < 24h
-        if gap_hours < 24:
-            log_debug(
-                "BOOT_CYCLE_SKIPPED_RECENT",
-                payload={"gap_hours": round(gap_hours, 1)},
-                level="INFO",
-                msg=f"Skipping boot cycle: last closed {gap_hours:.1f}h ago (< 24h)",
-            )
+        if row is None or not row[0]:
             return None
 
-        # Warn if gap > 168h (7 days)
-        if gap_hours > 168:
-            log_debug(
-                "BOOT_CYCLE_LONG_GAP",
-                payload={"gap_hours": round(gap_hours, 1)},
-                level="WARN",
-                error_code="PROCESS_HEARTBEAT_MISSED",
-                msg=f"WARNING: gap since last cycle is {gap_hours:.1f}h (> 168h = 7 days)",
-            )
-
-        # Gap >= 24h and not weekend and after EOD — initiate cycle
-        cycle_id = str(uuid.uuid4())
-        log_debug(
-            "BOOT_CYCLE_INITIATED",
-            payload={
-                "cycle_id": cycle_id,
-                "gap_hours": round(gap_hours, 1),
-            },
-            level="INFO",
-            msg=f"Initiating boot cycle {cycle_id}: gap={gap_hours:.1f}h",
-        )
-        return cycle_id
-
+        last_closed = datetime.fromisoformat(row[0])
+        if last_closed.tzinfo is None:
+            last_closed = last_closed.replace(tzinfo=timezone.utc)
+        return (now - last_closed).total_seconds() / 3600
     finally:
         conn.close()
+
+
+def maybe_initiate_cycle(
+    db_path: str | Path | None = None,
+    audit_path: str | Path | None = None,
+    eod_time_hour: int = 16,
+    eod_time_minute: int = 30,
+    timezone_name: str = "US/Eastern",
+) -> str | None:
+    """Check if a cycle should be initiated on boot and initiate it.
+
+    Per Architecture.md §4.5:
+    - Skip if gap since last closed cycle < 24h
+    - Skip if weekend
+    - Skip if before EOD data time (16:30 ET)
+    - Warn if gap > 168h (7 days)
+    - On detection: call orchestrator.initiate_cycle and log audit event
+    - Returns cycle_id if initiated, None if skipped
+
+    Args:
+        db_path: Path to SQLite database.
+        audit_path: Path to audit log for recording boot initiation.
+        eod_time_hour: Hour of EOD data availability (default 16).
+        eod_time_minute: Minute of EOD data availability (default 30).
+        timezone_name: Timezone for EOD check (default US/Eastern).
+
+    Returns:
+        cycle_id string if a cycle was initiated, None if skipped.
+    """
+    if db_path is None:
+        from pmacs.config import data_dir
+        db_path = data_dir() / "pmacs.db"
+    now = datetime.now(timezone.utc)
+    db = Path(db_path)
+
+    # Check: is it a weekend?
+    if _should_skip_weekend(now):
+        log_debug(
+            "BOOT_CYCLE_SKIPPED_WEEKEND",
+            payload={"weekday": now.weekday()},
+            level="INFO",
+            msg="Skipping boot cycle: weekend",
+        )
+        return None
+
+    # Check: is it before EOD time?
+    if _should_skip_before_eod(now, eod_time_hour, eod_time_minute):
+        log_debug(
+            "BOOT_CYCLE_SKIPPED_BEFORE_EOD",
+            payload={
+                "current_time_et": now.strftime("%H:%M"),
+                "eod_time": f"{eod_time_hour:02d}:{eod_time_minute:02d}",
+            },
+            level="INFO",
+            msg="Skipping boot cycle: before EOD data time",
+        )
+        return None
+
+    # Check: when was the last closed cycle?
+    gap_hours = _get_last_closed_gap_hours(db, now)
+
+    # First run — no history
+    if gap_hours is None:
+        log_debug(
+            "BOOT_CYCLE_INIT_FIRST_RUN",
+            payload={"reason": "no database or no closed cycles"},
+            level="INFO",
+            msg="Initiating first boot cycle",
+        )
+        cycle_id = _do_initiate_cycle(db, audit_path, gap_hours=0)
+        return cycle_id
+
+    # Skip if gap < 24h
+    if gap_hours < 24:
+        log_debug(
+            "BOOT_CYCLE_SKIPPED_RECENT",
+            payload={"gap_hours": round(gap_hours, 1)},
+            level="INFO",
+            msg=f"Skipping boot cycle: last closed {gap_hours:.1f}h ago (< 24h)",
+        )
+        return None
+
+    # Warn if gap > 168h (7 days)
+    if gap_hours > 168:
+        log_debug(
+            "BOOT_CYCLE_LONG_GAP",
+            payload={"gap_hours": round(gap_hours, 1)},
+            level="WARN",
+            error_code="PROCESS_HEARTBEAT_MISSED",
+            msg=f"WARNING: gap since last cycle is {gap_hours:.1f}h (> 168h = 7 days)",
+        )
+
+    # Gap >= 24h, not weekend, after EOD — initiate cycle
+    cycle_id = _do_initiate_cycle(db, audit_path, gap_hours=gap_hours)
+    return cycle_id
+
+
+def _do_initiate_cycle(
+    db_path: Path,
+    audit_path: str | Path | None,
+    gap_hours: float,
+) -> str:
+    """Actually initiate the cycle via the nervous orchestrator.
+
+    Falls back to UUID generation if orchestrator is unavailable (e.g. tests).
+    """
+    cycle_id: str | None = None
+
+    try:
+        from pmacs.nervous.orchestrator import initiate_cycle
+        cycle_id = initiate_cycle(
+            trigger="BOOT_DETECTED",
+            db_path=db_path,
+            audit_path=Path(audit_path) if audit_path else None,
+        )
+    except Exception as exc:
+        log_debug(
+            "BOOT_CYCLE_ORCHESTRATOR_FALLBACK",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="PROCESS_HEARTBEAT_MISSED",
+            msg=f"Orchestrator unavailable, generating cycle_id locally: {exc}",
+        )
+        cycle_id = str(uuid.uuid4())
+
+    # Audit log the boot initiation
+    if audit_path:
+        try:
+            from pmacs.storage.audit import AuditWriter
+            writer = AuditWriter(audit_path)
+            writer.append(
+                "BOOT_CYCLE_INITIATED",
+                {
+                    "cycle_id": cycle_id,
+                    "gap_hours": round(gap_hours, 1),
+                    "trigger": "BOOT_DETECTED",
+                },
+                cycle_id=cycle_id,
+            )
+            writer.close()
+        except Exception as exc:
+            log_debug(
+                "BOOT_CYCLE_AUDIT_FAILED",
+                payload={"error": str(exc)},
+                level="WARN",
+                error_code="AUDIT_WRITE_FAILED",
+                msg=f"Failed to write boot audit event: {exc}",
+            )
+
+    log_debug(
+        "BOOT_CYCLE_INITIATED",
+        payload={"cycle_id": cycle_id, "gap_hours": round(gap_hours, 1)},
+        level="INFO",
+        msg=f"Boot cycle {cycle_id} initiated: gap={gap_hours:.1f}h",
+    )
+    return cycle_id

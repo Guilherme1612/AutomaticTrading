@@ -95,11 +95,14 @@ def transition(
     if audit_path is not None:
         from pmacs.storage.audit import AuditWriter
         writer = AuditWriter(audit_path)
-        writer.append(
-            "state_transition",
-            transition_event,
-            cycle_id=cycle_id,
-        )
+        try:
+            writer.append(
+                "state_transition",
+                transition_event,
+                cycle_id=cycle_id,
+            )
+        finally:
+            writer.close()
 
     log_debug(
         "STATE_TRANSITION",

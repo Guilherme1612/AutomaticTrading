@@ -1,0 +1,157 @@
+{# Wizard Step 10 — LLM Provider Selection (Source.md §12.1)
+   Choose: local llama-server, Anthropic, OpenAI, OpenRouter, or custom API.
+   Expects: current_step
+#}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">LLM Provider</h1>
+    <p class="text-text-secondary text-sm mb-8">Choose how PMACS runs LLM inference — local or cloud API.</p>
+
+    <form id="llm-provider-form" hx-post="/wizard/step/{{ current_step }}" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
+        <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6 space-y-5">
+
+            <!-- Local llama-server -->
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="llama_server">
+                <input type="radio" name="provider" value="llama_server"
+                       class="mt-1 accent-blue-500 provider-radio"
+                       checked
+                       onchange="toggleProviderFields()">
+                <div>
+                    <span class="text-sm font-medium text-text-primary">Local llama-server</span>
+                    <p class="text-xs text-text-muted mt-1">Runs inference on your machine using llama-server (port :8080). Fully offline, no API costs. Uses Qwen3.6-35B-A3B GGUF.</p>
+                </div>
+            </label>
+
+            <!-- Anthropic API -->
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="anthropic">
+                <input type="radio" name="provider" value="anthropic"
+                       class="mt-1 accent-blue-500 provider-radio"
+                       onchange="toggleProviderFields()">
+                <div>
+                    <span class="text-sm font-medium text-text-primary">Anthropic API</span>
+                    <p class="text-xs text-text-muted mt-1">Use Claude via Anthropic API. Better reasoning but requires internet and API credits (~$0.10-0.30 per cycle).</p>
+                </div>
+            </label>
+
+            <!-- OpenAI API -->
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="openai">
+                <input type="radio" name="provider" value="openai"
+                       class="mt-1 accent-blue-500 provider-radio"
+                       onchange="toggleProviderFields()">
+                <div>
+                    <span class="text-sm font-medium text-text-primary">OpenAI API</span>
+                    <p class="text-xs text-text-muted mt-1">Use GPT-4o via OpenAI API. Requires internet and API credits (~$0.10-0.30 per cycle).</p>
+                </div>
+            </label>
+
+            <!-- OpenRouter API -->
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="openrouter">
+                <input type="radio" name="provider" value="openrouter"
+                       class="mt-1 accent-blue-500 provider-radio"
+                       onchange="toggleProviderFields()">
+                <div>
+                    <span class="text-sm font-medium text-text-primary">OpenRouter API</span>
+                    <p class="text-xs text-text-muted mt-1">Access 200+ models via one API (OpenAI, Anthropic, Google, Meta, Mistral, and more). Pay per-token across providers.</p>
+                </div>
+            </label>
+
+            <!-- API-specific fields (hidden when llama_server is selected) -->
+            <div id="api-fields" class="hidden space-y-4 border-t border-border pt-4">
+                <!-- Model name -->
+                <div>
+                    <label for="api_model" class="text-sm font-medium text-text-primary block mb-2">Model Name</label>
+                    <p class="text-xs text-text-muted mb-2">e.g. gpt-4o, claude-sonnet-4-20250514, openai/gpt-4o, google/gemini-2.0-flash</p>
+                    <input type="text" name="api_model" id="api_model"
+                           placeholder="gpt-4o"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                </div>
+
+                <!-- API Key -->
+                <div>
+                    <label for="api_key" class="text-sm font-medium text-text-primary block mb-2">API Key</label>
+                    <p class="text-xs text-text-muted mb-2">Stored securely in system keychain. Never logged or exposed.</p>
+                    <input type="password" name="api_key" id="api_key"
+                           placeholder="sk-..."
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           autocomplete="off">
+                </div>
+
+                <!-- Base URL (optional, for proxy/compatible APIs) -->
+                <div>
+                    <label for="base_url" class="text-sm font-medium text-text-primary block mb-2">Base URL <span class="text-text-muted font-normal">(optional)</span></label>
+                    <p class="text-xs text-text-muted mb-2">Override API endpoint. Leave empty for provider default.</p>
+                    <input type="text" name="base_url" id="base_url"
+                           placeholder="https://api.openai.com/v1"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                </div>
+            </div>
+
+            <!-- Info note -->
+            <div class="p-3 bg-surface border border-border rounded">
+                <p class="text-xs text-text-muted">
+                    <strong class="text-text-secondary">Tip:</strong>
+                    You can switch providers later in Settings &mdash; no need to re-run the wizard.
+                    API keys are stored in your system keychain.
+                </p>
+            </div>
+        </div>
+
+        {% if error %}
+        {% include "wizard/_error.html" %}
+        {% endif %}
+
+        <div class="flex justify-end">
+            <button type="submit"
+                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                Next
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+// Provider metadata for API field placeholders
+const PROVIDER_META = {
+    anthropic: {
+        model: 'claude-sonnet-4-20250514',
+        key: 'sk-ant-...',
+        url: 'https://api.anthropic.com',
+    },
+    openai: {
+        model: 'gpt-4o',
+        key: 'sk-...',
+        url: 'https://api.openai.com/v1',
+    },
+    openrouter: {
+        model: 'openai/gpt-4o',
+        key: 'sk-or-...',
+        url: 'https://openrouter.ai/api/v1',
+    },
+};
+
+function toggleProviderFields() {
+    const selected = document.querySelector('input[name="provider"]:checked');
+    const apiFields = document.getElementById('api-fields');
+    const modelInput = document.getElementById('api_model');
+    const apiKeyInput = document.getElementById('api_key');
+    const baseUrlInput = document.getElementById('base_url');
+
+    if (selected && selected.value !== 'llama_server') {
+        apiFields.classList.remove('hidden');
+        const meta = PROVIDER_META[selected.value];
+        if (meta) {
+            modelInput.placeholder = meta.model;
+            apiKeyInput.placeholder = meta.key;
+            baseUrlInput.placeholder = meta.url;
+        } else {
+            // Generic OpenAI-compatible fallback
+            modelInput.placeholder = 'model-name';
+            apiKeyInput.placeholder = 'sk-...';
+            baseUrlInput.placeholder = 'https://api.example.com/v1';
+        }
+    } else {
+        apiFields.classList.add('hidden');
+    }
+}
+// Run on load in case of browser back-button
+document.addEventListener('DOMContentLoaded', toggleProviderFields);
+</script>

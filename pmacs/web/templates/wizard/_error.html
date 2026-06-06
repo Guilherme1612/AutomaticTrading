@@ -2,22 +2,22 @@
    Error code, spec reference, "Copy for Claude Code" button.
    Expects: error dict with {code, message, spec_ref}
 #}
-<div class="mt-4 p-4 bg-red-900/20 border border-red-700/40 rounded-lg">
+<div class="mt-4 p-4 bg-negative-soft border border-negative/30 rounded-lg">
     <div class="flex items-start justify-between mb-2">
         <div class="flex items-center gap-2">
             <span class="text-negative font-semibold text-sm">Error</span>
             {% if error.get("code") %}
-            <code class="text-xs font-mono bg-red-900/40 text-red-300 px-1.5 py-0.5 rounded">{{ error["code"] }}</code>
+            <code class="text-xs font-mono bg-negative/20 text-negative px-1.5 py-0.5 rounded">{{ error["code"] }}</code>
             {% endif %}
         </div>
         <button type="button"
                 onclick="navigator.clipboard.writeText(this.closest('.rounded-lg').querySelector('.error-copy-text').textContent)"
-                class="text-xs text-text-muted hover:text-text-secondary transition-colors px-2 py-1 rounded hover:bg-surface"
+                class="text-xs text-text-muted hover:text-text-secondary transition-colors px-2 py-1 rounded hover:bg-surface-elevated"
                 title="Copy error details for Claude Code">
             Copy for Claude Code
         </button>
     </div>
-    <p class="text-sm text-red-300 mb-2">{{ error.get("message", "An unexpected error occurred.") }}</p>
+    <p class="text-sm text-negative mb-2">{{ error.get("message", "An unexpected error occurred.") }}</p>
     {% if error.get("spec_ref") %}
     <p class="text-xs text-text-muted">Spec reference: <span class="font-mono">{{ error["spec_ref"] }}</span></p>
     {% endif %}

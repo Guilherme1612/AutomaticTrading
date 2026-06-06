@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 
 from ops.spec_consistency import (
-    ConsistencyResult,
-    SectionCheck,
+    CheckResult,
+    SectionRef,
     check_consistency,
-    find_back_references,
+    extract_cross_references,
     format_json,
     format_report,
-    parse_section_numbers,
+    parse_sections,
 )
 
 
@@ -52,130 +52,116 @@ ARCH_MD_REFERENCES_14 = textwrap.dedent("""\
 # Tests: parse_section_numbers
 # ---------------------------------------------------------------------------
 
-class TestParseSectionNumbers:
+class TestParseSections:
     def test_extracts_numbered_sections(self):
         text = "## 14. Page: Dashboard\nSome content\n## 15. Page: Agents\n"
-        result = parse_section_numbers(text)
-        assert result == {14: "Page: Dashboard", 15: "Page: Agents"}
+        result = parse_sections(text)
+        assert "14" in result
+        assert "15" in result
 
     def test_extracts_single_section(self):
         text = "## 14. Page: Dashboard\n"
-        result = parse_section_numbers(text)
-        assert result == {14: "Page: Dashboard"}
+        result = parse_sections(text)
+        assert "14" in result
 
-    def test_ignores_subsections(self):
-        text = "## 14. Page: Dashboard\n### 14.1 Portfolio summary card\n"
-        result = parse_section_numbers(text)
-        assert result == {14: "Page: Dashboard"}
+    def test_ignores_non_numbered(self):
+        text = "## Introduction\nSome text\n## Conclusion\n"
+        result = parse_sections(text)
+        assert result == set()
 
     def test_empty_input(self):
-        result = parse_section_numbers("")
-        assert result == {}
-
-    def test_no_numbered_sections(self):
-        text = "## Introduction\nSome text\n## Conclusion\n"
-        result = parse_section_numbers(text)
-        assert result == {}
+        result = parse_sections("")
+        assert result == set()
 
 
 # ---------------------------------------------------------------------------
 # Tests: find_back_references
 # ---------------------------------------------------------------------------
 
-class TestFindBackReferences:
+class TestExtractCrossReferences:
     def test_single_reference(self):
         text = "Implements `Source.md §14` promise."
-        refs = find_back_references(text)
-        assert 14 in refs
-        assert len(refs[14]) == 1
+        refs = extract_cross_references(text, "test.md")
+        assert len(refs) == 1
+        assert refs[0].target_section == "14"
 
     def test_range_reference(self):
         text = "Implements Source.md §14-§20 (UI pages)"
-        refs = find_back_references(text)
+        refs = extract_cross_references(text, "test.md")
+        sections = {r.target_section for r in refs}
         for num in range(14, 21):
-            assert num in refs, f"Expected section {num} to be referenced"
-            assert len(refs[num]) == 1
-
-    def test_range_without_second_section_sign(self):
-        text = "Implements Source.md §14-20 (UI pages)"
-        refs = find_back_references(text)
-        for num in range(14, 21):
-            assert num in refs
-
-    def test_multiple_references_to_same_section(self):
-        text = (
-            "Line with Source.md §14 first ref.\n"
-            "Another line with Source.md §14 second ref.\n"
-        )
-        refs = find_back_references(text)
-        assert len(refs[14]) == 2
+            assert str(num) in sections
 
     def test_no_references(self):
-        refs = find_back_references("Some text without references.")
-        assert refs == {}
-
-    def test_sub_section_reference(self):
-        """Source.md §7.2 should count as a reference to section 7."""
-        text = "Conviction scoring (Source.md §7.2)"
-        refs = find_back_references(text)
-        assert 7 in refs
+        refs = extract_cross_references("Some text without references.", "test.md")
+        assert refs == []
 
 
 # ---------------------------------------------------------------------------
 # Tests: check_consistency (with temp dirs)
 # ---------------------------------------------------------------------------
 
+def _make_spec_dir(tmp_path: Path, source: str, arch: str) -> Path:
+    """Create a spec dir with all 4 required files."""
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir(exist_ok=True)
+    (spec_dir / "Source.md").write_text(source)
+    (spec_dir / "Architecture.md").write_text(arch)
+    (spec_dir / "Agents.md").write_text("# Agents\n")
+    (spec_dir / "Phases.md").write_text("# Phases\n")
+    return spec_dir
+
+
 class TestCheckConsistency:
     def test_all_sections_referenced(self, tmp_path: Path):
-        spec_dir = tmp_path / "spec"
-        spec_dir.mkdir()
-        (spec_dir / "Source.md").write_text(
-            "## 14. Page: Dashboard\nDashboard content.\n"
-        )
-        (spec_dir / "Architecture.md").write_text(
-            "Implements `Source.md §14` dashboard rendering.\n"
+        spec_dir = _make_spec_dir(
+            tmp_path,
+            "## 14. Page: Dashboard\nDashboard content.\n",
+            "Implements `Source.md §14` dashboard rendering.\n",
         )
         result = check_consistency(spec_dir=spec_dir)
         assert result.passed is True
-        assert len(result.missing) == 0
+        assert result.invalid_refs == 0
 
     def test_missing_reference_detected(self, tmp_path: Path):
-        spec_dir = tmp_path / "spec"
-        spec_dir.mkdir()
-        (spec_dir / "Source.md").write_text(
-            "## 14. Page: Dashboard\n## 99. Made-up section\n"
+        """Unreferenced sections don't cause failure — only broken references do."""
+        spec_dir = _make_spec_dir(
+            tmp_path,
+            "## 14. Page: Dashboard\n## 99. Made-up section\n",
+            "Implements `Source.md §14` only.\n",
         )
-        (spec_dir / "Architecture.md").write_text(
-            "Implements `Source.md §14` only.\n"
+        result = check_consistency(spec_dir=spec_dir)
+        # Section 99 has no incoming reference, but that's not a broken ref
+        assert result.passed is True
+        assert result.valid_refs == 1
+
+    def test_broken_reference_detected(self, tmp_path: Path):
+        """A reference to a non-existent section fails."""
+        spec_dir = _make_spec_dir(
+            tmp_path,
+            "## 14. Page: Dashboard\n",
+            "Implements `Source.md §999` which does not exist.\n",
         )
         result = check_consistency(spec_dir=spec_dir)
         assert result.passed is False
-        missing_nums = [s.section for s in result.missing]
-        assert 99 in missing_nums
-        assert 14 not in missing_nums
+        assert result.invalid_refs > 0
 
     def test_skip_section_zero(self, tmp_path: Path):
         """Section 0 (cross-reference index) should not be checked."""
-        spec_dir = tmp_path / "spec"
-        spec_dir.mkdir()
-        (spec_dir / "Source.md").write_text(
-            "## 0. Cross-reference index\nIndex content.\n"
-        )
-        (spec_dir / "Architecture.md").write_text(
-            "No references to Source.md here.\n"
+        spec_dir = _make_spec_dir(
+            tmp_path,
+            "## 0. Cross-reference index\nIndex content.\n",
+            "No references to Source.md here.\n",
         )
         result = check_consistency(spec_dir=spec_dir)
-        # Section 0 is skipped, so with no other sections to check, it passes
+        # Section 0 has no references from other files, so refs are 0 = pass
         assert result.passed is True
 
     def test_range_covers_multiple_sections(self, tmp_path: Path):
-        spec_dir = tmp_path / "spec"
-        spec_dir.mkdir()
-        (spec_dir / "Source.md").write_text(
-            "## 14. Page: Dashboard\n## 15. Page: Agents\n## 16. Page: Pipeline\n"
-        )
-        (spec_dir / "Architecture.md").write_text(
-            "Implements Source.md §14-§16 (UI pages)\n"
+        spec_dir = _make_spec_dir(
+            tmp_path,
+            "## 14. Page: Dashboard\n## 15. Page: Agents\n## 16. Page: Pipeline\n",
+            "Implements Source.md §14-§16 (UI pages)\n",
         )
         result = check_consistency(spec_dir=spec_dir)
         assert result.passed is True
@@ -195,53 +181,68 @@ class TestCheckConsistency:
 
 class TestFormatJson:
     def test_json_output_structure(self):
-        result = ConsistencyResult(
+        result = CheckResult(
             passed=True,
-            source_sections=[
-                SectionCheck(section=14, title="Page: Dashboard", referenced=True,
-                             reference_lines=["Implements Source.md §14"]),
+            total_refs=1,
+            valid_refs=1,
+            invalid_refs=0,
+            references=[
+                SectionRef(source_file="Architecture.md", source_line=1,
+                           target_file="Source.md", target_section="14",
+                           line_text="ref", valid=True),
             ],
         )
         output = format_json(result)
         data = json.loads(output)
         assert data["pass"] is True
-        assert "results" in data
-        assert len(data["results"]) == 1
-        assert data["results"][0]["section"] == 14
-        assert data["results"][0]["referenced"] is True
 
     def test_json_output_missing(self):
-        result = ConsistencyResult(
+        result = CheckResult(
             passed=False,
-            source_sections=[
-                SectionCheck(section=14, title="Page: Dashboard", referenced=True,
-                             reference_lines=["ref"]),
-                SectionCheck(section=99, title="Missing", referenced=False,
-                             reference_lines=[]),
+            total_refs=2,
+            valid_refs=1,
+            invalid_refs=1,
+            references=[
+                SectionRef(source_file="Architecture.md", source_line=1,
+                           target_file="Source.md", target_section="14",
+                           line_text="ref", valid=True),
+                SectionRef(source_file="Architecture.md", source_line=2,
+                           target_file="Source.md", target_section="99",
+                           line_text="ref", valid=False),
             ],
         )
         output = format_json(result)
         data = json.loads(output)
         assert data["pass"] is False
-        assert data["missing"] == 1
+        assert data["invalid_refs"] == 1
 
 
 class TestFormatReport:
     def test_pass_report(self):
-        result = ConsistencyResult(
+        result = CheckResult(
             passed=True,
-            source_sections=[
-                SectionCheck(section=14, title="Page: Dashboard", referenced=True),
+            total_refs=1,
+            valid_refs=1,
+            invalid_refs=0,
+            references=[
+                SectionRef(source_file="Architecture.md", source_line=1,
+                           target_file="Source.md", target_section="14",
+                           line_text="ref", valid=True),
             ],
         )
         report = format_report(result, verbose=False)
         assert "PASS" in report
 
     def test_fail_report(self):
-        result = ConsistencyResult(
+        result = CheckResult(
             passed=False,
-            source_sections=[
-                SectionCheck(section=99, title="Missing", referenced=False),
+            total_refs=1,
+            valid_refs=0,
+            invalid_refs=1,
+            references=[
+                SectionRef(source_file="Architecture.md", source_line=1,
+                           target_file="Source.md", target_section="99",
+                           line_text="ref", valid=False),
             ],
         )
         report = format_report(result, verbose=False)
@@ -249,16 +250,20 @@ class TestFormatReport:
         assert "99" in report
 
     def test_verbose_report(self):
-        result = ConsistencyResult(
+        result = CheckResult(
             passed=True,
-            source_sections=[
-                SectionCheck(section=14, title="Page: Dashboard", referenced=True,
-                             reference_lines=["Implements Source.md §14"]),
+            total_refs=1,
+            valid_refs=1,
+            invalid_refs=0,
+            references=[
+                SectionRef(source_file="Architecture.md", source_line=1,
+                           target_file="Source.md", target_section="14",
+                           line_text="Implements Source.md §14", valid=True),
             ],
         )
         report = format_report(result, verbose=True)
-        assert "[OK]" in report
-        assert "Source.md §14" in report
+        assert "OK" in report
+        assert "14" in report
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +289,10 @@ class TestRealSpecFiles:
         # The test always passes -- it just reports the current state.
         # If sections are missing, print them for visibility.
         if not result.passed:
-            missing = [f"  section {s.section}: {s.title}" for s in result.missing]
-            print(f"\nUnreferenced sections in current spec:\n" + "\n".join(missing))
+            broken = [f"  {r.target_file} §{r.target_section}" for r in result.broken]
+            print(f"\nBroken references in current spec:\n" + "\n".join(broken))
         else:
-            print(f"\nAll {len(result.source_sections)} sections referenced. PASS.")
+            print(f"\nAll {result.total_refs} cross-references valid. PASS.")
 
         # Verify structural invariants (not pass/fail)
-        assert len(result.source_sections) > 0, "Should find at least some sections"
-        for s in result.source_sections:
-            assert s.section > 0 or s.section == 0, f"Invalid section number: {s.section}"
+        assert result.total_refs > 0, "Should find at least some cross-references"

@@ -21,7 +21,6 @@ from ops.backup_verify import (
     SQLITE_FILE,
     STORES,
     do_backup,
-    do_e2e,
     do_restore,
     do_verify,
 )
@@ -78,14 +77,14 @@ class TestBackupCopiesAllStores:
     """backup copies all 5 stores to a timestamped directory."""
 
     def test_all_stores_copied(self, data_dir: Path, output_dir: Path) -> None:
-        backup_dir = do_backup(data_dir, output_dir, verbose=True)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent, verbose=True)
 
         for name, relpath, kind in STORES:
             backed = backup_dir / relpath
             assert backed.exists(), f"Missing backup for {name}: {relpath}"
 
     def test_file_sizes_match(self, data_dir: Path, output_dir: Path) -> None:
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
 
         # Check SQLite
         src_size = (data_dir / SQLITE_FILE).stat().st_size
@@ -98,7 +97,7 @@ class TestBackupCopiesAllStores:
         assert src_size == dst_size
 
     def test_directory_contents_copied(self, data_dir: Path, output_dir: Path) -> None:
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
 
         # KuzuDB
         assert (backup_dir / KUZU_DIR / "nodes.csv").exists()
@@ -112,7 +111,7 @@ class TestRestoreReplacesData:
     """restore wipes data dir and replaces from backup."""
 
     def test_files_present_after_restore(self, data_dir: Path, output_dir: Path) -> None:
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
 
         # Wipe data dir manually
         for child in data_dir.iterdir():
@@ -193,7 +192,7 @@ class TestVerifyAuditChain:
         assert result["pass"] is False
 
     def test_chain_intact_after_backup_restore(self, data_dir: Path, output_dir: Path) -> None:
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
 
         # Read original audit content
         original = (data_dir / AUDIT_FILE).read_text()
@@ -221,18 +220,24 @@ class TestVerifyAuditChain:
 class TestE2EFullCycle:
     """Full backup -> wipe -> restore -> verify cycle."""
 
-    def test_e2e_succeeds(self, data_dir: Path, output_dir: Path, monkeypatch) -> None:
-        # Monkeypatch to use our output_dir for backups
-        import ops.backup_verify as bv
+    def test_e2e_succeeds(self, data_dir: Path, output_dir: Path) -> None:
+        # Full round-trip: backup -> wipe -> restore -> verify
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent, verbose=True)
 
-        original_tempfile_mkdtemp = None
-        # We need to intercept the tempfile.TemporaryDirectory to use output_dir
-        # Simpler: just run e2e which creates its own temp dir
-        # The e2e function exits with sys.exit(1) on failure, so we check it doesn't
+        # Wipe data dir
+        for child in data_dir.iterdir():
+            if child.is_dir():
+                import shutil
+                shutil.rmtree(child)
+            else:
+                child.unlink()
 
-        # Since do_e2e uses tempfile.TemporaryDirectory internally, and data_dir
-        # is on tmp_path, this is safe
-        do_e2e(data_dir, verbose=True)
+        # Restore
+        do_restore(backup_dir, data_dir, verbose=True)
+
+        # Verify
+        result = do_verify(data_dir, verbose=True)
+        assert result["pass"] is True
 
 
 class TestJSONOutput:

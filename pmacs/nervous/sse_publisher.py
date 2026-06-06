@@ -117,3 +117,26 @@ class SSEPublisher:
         """
         with self._lock:
             return [frame for eid, frame in self._event_log if eid > last_id]
+
+
+# ── Module-level singleton for cross-module system events ────────────────────
+# Set once by the nervous API on startup; other modules (kill switch, cortex)
+# can publish system events without holding a direct reference.
+
+_global_publisher: "SSEPublisher | None" = None
+
+
+def set_global_publisher(publisher: "SSEPublisher") -> None:
+    """Register the process-wide SSE publisher for system events."""
+    global _global_publisher
+    _global_publisher = publisher
+
+
+def publish_system_event(event_type: str, data: dict[str, Any]) -> None:
+    """Emit a system.* SSE event from any module.
+
+    No-op if the global publisher has not been set (e.g. during tests
+    or when running outside the nervous process).
+    """
+    if _global_publisher is not None:
+        _global_publisher.publish("system", event_type, data)

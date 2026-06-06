@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -54,7 +54,7 @@ def _insert_stop_event(
     cycle_id: str = "cycle-001",
 ) -> int:
     """Insert a stop event and return its ID."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """INSERT INTO stop_events
            (holding_id, ticker, stop_type, trigger_price_usd, stop_price_usd,
@@ -120,7 +120,7 @@ class TestProcessTrigger:
                 "stop_type": "FIXED_STOP",
                 "trigger_price_usd": 84.0,
                 "stop_price_usd": 85.0,
-                "detected_at": datetime.utcnow().isoformat(),
+                "detected_at": datetime.now(timezone.utc).isoformat(),
                 "cycle_id": "cycle-001",
                 "stop_type_category": "FIXED",
             }
@@ -147,7 +147,7 @@ class TestProcessTrigger:
                 "stop_type": "FIXED_STOP",
                 "trigger_price_usd": 84.0,
                 "stop_price_usd": 85.0,
-                "detected_at": datetime.utcnow().isoformat(),
+                "detected_at": datetime.now(timezone.utc).isoformat(),
                 "cycle_id": "cycle-001",
                 "stop_type_category": "FIXED",
             }
@@ -180,7 +180,7 @@ class TestProcessTrigger:
                 "stop_type": "FIXED_STOP",
                 "trigger_price_usd": 84.0,
                 "stop_price_usd": 85.0,
-                "detected_at": datetime.utcnow().isoformat(),
+                "detected_at": datetime.now(timezone.utc).isoformat(),
                 "cycle_id": "cycle-001",
                 "stop_type_category": "FIXED",
             }
@@ -207,7 +207,7 @@ class TestProcessTrigger:
                 "stop_type": "TRAILING_STOP",
                 "trigger_price_usd": 89.0,
                 "stop_price_usd": 90.0,
-                "detected_at": datetime.utcnow().isoformat(),
+                "detected_at": datetime.now(timezone.utc).isoformat(),
                 "cycle_id": "cycle-001",
                 "stop_type_category": "TRAILING",
             }

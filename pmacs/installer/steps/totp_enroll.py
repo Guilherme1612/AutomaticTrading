@@ -115,6 +115,7 @@ async def run(form_data: dict) -> dict:
             return {
                 "ok": False,
                 "_secret": secret,
+                "qr_data_uri": _generate_qr_data_uri(secret),
                 "message": "Please enter all 6 digits.",
             }
 
@@ -125,6 +126,7 @@ async def run(form_data: dict) -> dict:
                 return {
                     "ok": False,
                     "_secret": secret,
+                    "qr_data_uri": _generate_qr_data_uri(secret),
                     "message": "TOTP verified but secret storage failed. "
                                "Please check system keychain or run with --file-fallback.",
                 }
@@ -136,6 +138,7 @@ async def run(form_data: dict) -> dict:
             return {
                 "ok": False,
                 "_secret": secret,
+                "qr_data_uri": _generate_qr_data_uri(secret),
                 "message": "Invalid code. Please try again.",
             }
 

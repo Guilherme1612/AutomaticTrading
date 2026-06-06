@@ -5,17 +5,32 @@ Spec ref: Architecture.md §9.4
 Computes expected value from arbitrated probabilities and volatility-adjusted
 target gain / stop loss percentages.  The catastrophe-net stop is capped at
 15 % (Source.md non-negotiable).  When ATR data is unavailable the engine
-falls back to sensible defaults (10 % target, 15 % stop).
+falls back to config/risk.toml [pricing] defaults.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# -- Configurable thresholds (todo: read from risk.toml) ----------------------
-MIN_EV_THRESHOLD = 0.05          # 5 % minimum EV to justify a trade
-DEFAULT_TARGET_GAIN_PCT = 0.10   # 10 % when no ATR
-DEFAULT_STOP_LOSS_PCT = 0.15     # 15 % catastrophe-net
-MAX_STOP_LOSS_PCT = 0.15         # hard cap (Source.md §5)
+
+def _load_pricing_config() -> tuple[float, float, float]:
+    """Load pricing thresholds from config/risk.toml via typed config loader."""
+    try:
+        from pmacs.config import load_config
+        cfg = load_config()
+        return (
+            cfg.risk.minimum_ev_pct,
+            cfg.risk.default_target_gain_pct,
+            cfg.risk.default_stop_loss_pct,
+        )
+    except (FileNotFoundError, KeyError, TypeError, AttributeError):
+        return (0.01, 0.10, 0.15)
+
+
+_MIN_EV, _TARGET_GAIN, _STOP_LOSS = _load_pricing_config()
+MIN_EV_THRESHOLD: float = _MIN_EV
+DEFAULT_TARGET_GAIN_PCT: float = _TARGET_GAIN
+DEFAULT_STOP_LOSS_PCT: float = _STOP_LOSS
+MAX_STOP_LOSS_PCT: float = 0.15     # hard cap (Source.md §5, non-negotiable)
 
 
 @dataclass(frozen=True)
@@ -25,7 +40,8 @@ class EvInputs:
     target_gain_pct: float = DEFAULT_TARGET_GAIN_PCT
     stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT
     atr_pct: float | None = None   # ATR as % of price, if available
-    current_price: float = 1.0
+    current_price: float = 0.0  # must be set by caller; 0.0 causes safe zero-share sizing
+    cycle_id: str = ""  # Architecture.md §1.11: required on audit-emitting functions
 
 
 @dataclass(frozen=True)
@@ -78,6 +94,24 @@ def compute_ev(x: EvInputs) -> EvResult:
 
     ev = x.p_up * target_gain - x.p_down * stop_loss
     ev_multiple = ev / MIN_EV_THRESHOLD if MIN_EV_THRESHOLD > 0 else 0.0
+
+    from pmacs.logsys import log_debug
+    log_debug(
+        "PRICING_EV_COMPUTED",
+        payload={
+            "p_up": x.p_up,
+            "p_down": x.p_down,
+            "target_gain_pct": target_gain,
+            "stop_loss_pct": stop_loss,
+            "atr_pct": x.atr_pct,
+            "ev": round(ev, 6),
+            "ev_multiple": round(ev_multiple, 4),
+            "is_positive": ev > 0,
+        },
+        level="INFO",
+        cycle_id=x.cycle_id or None,
+        msg=f"EV computed: {ev:.6f} (multiple: {ev_multiple:.4f})",
+    )
 
     return EvResult(
         expected_value_pct=round(ev, 6),

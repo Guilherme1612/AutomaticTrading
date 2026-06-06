@@ -7,6 +7,7 @@ Resolves paths relative to the project root (directory containing pyproject.toml
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +29,26 @@ def _project_root() -> Path:
 
 PROJECT_ROOT = _project_root()
 CONFIG_DIR = PROJECT_ROOT / "config"
+
+
+def data_dir() -> Path:
+    """Return the PMACS data directory.
+
+    Resolves in this order:
+    1. PMACS_DATA_DIR environment variable
+    2. <PROJECT_ROOT>/data  (default for cloned repos)
+    """
+    return Path(os.environ.get("PMACS_DATA_DIR", str(PROJECT_ROOT / "data")))
+
+
+# Module-level convenience constants (evaluated once at import).
+# For function default parameters, use None sentinel and call data_dir() inside.
+DATA_DIR = data_dir()
+DB_PATH = DATA_DIR / "pmacs.db"
+DUCKDB_PATH = DATA_DIR / "pmacs_analytics.duckdb"
+HEARTBEAT_DIR = DATA_DIR / "heartbeats"
+AUDIT_LOG_PATH = DATA_DIR / "audit.log"
+PID_DIR = DATA_DIR / "pids"
 
 
 @dataclass(frozen=True)
@@ -60,6 +81,10 @@ class RiskConfig:
     minimum_ev_pct: float = 0.01
     half_kelly: bool = True
     correlation_floor: float = 0.30
+    max_position_usd: float = 1000.0
+    starting_capital_usd: float = 5000.0
+    default_target_gain_pct: float = 0.10
+    default_stop_loss_pct: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -93,6 +118,8 @@ class ModelBackend:
     url: str
     default_model: str
     structured_output: str
+    api_key_ref: str = ""
+    base_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -161,6 +188,8 @@ def _parse_risk(data: dict) -> RiskConfig:
     ks = data.get("kill_switch", {})
     ev = data.get("ev", {})
     sz = data.get("sizing", {})
+    cap = data.get("capital", {})
+    pr = data.get("pricing", {})
     return RiskConfig(
         max_single_position_pct=pos.get("max_single_position_pct", 0.20),
         max_concurrent_positions=pos.get("max_concurrent_positions", 5),
@@ -171,6 +200,10 @@ def _parse_risk(data: dict) -> RiskConfig:
         minimum_ev_pct=ev.get("minimum_ev_pct", 0.01),
         half_kelly=sz.get("half_kelly", True),
         correlation_floor=sz.get("correlation_floor", 0.30),
+        max_position_usd=sz.get("max_position_usd", 1000.0),
+        starting_capital_usd=cap.get("starting_usd", 5000.0),
+        default_target_gain_pct=pr.get("default_target_gain_pct", 0.10),
+        default_stop_loss_pct=pr.get("default_stop_loss_pct", 0.15),
     )
 
 
@@ -208,9 +241,11 @@ def _parse_model_registry(data: dict) -> ModelRegistry:
     backends = {}
     for name, bd in data.get("backends", {}).items():
         backends[name] = ModelBackend(
-            url=bd["url"],
-            default_model=bd["default_model"],
-            structured_output=bd["structured_output"],
+            url=bd.get("url", ""),
+            default_model=bd.get("default_model", ""),
+            structured_output=bd.get("structured_output", ""),
+            api_key_ref=bd.get("api_key_ref", ""),
+            base_url=bd.get("base_url", ""),
         )
     return ModelRegistry(
         backends=backends,

@@ -152,5 +152,21 @@ def create_adapter(
         Mode.LIVE_STANDARD.value,
         Mode.LIVE_EXPANDED.value,
     ):
-        raise NotImplementedError(f"LIVE modes not yet supported: {mode}")
+        if not api_key or not api_secret:
+            raise ValueError(
+                "api_key and api_secret required for LIVE modes"
+            )
+        try:
+            from pmacs.execution.ibkr_adapter import IBKRLiveAdapter
+        except ImportError as exc:
+            raise ImportError(
+                "IBKRLiveAdapter requires ib_insync package. "
+                "Install with: pip install ib_insync"
+            ) from exc
+
+        return IBKRLiveAdapter(
+            host="127.0.0.1",
+            port=7496,  # Live port (7497 = paper)
+            client_id=1,
+        )
     raise ValueError(f"Unknown mode: {mode}")

@@ -9,10 +9,184 @@
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
 }
+
+// ─── Relative Time ──────────────────────────────────────────────────────────
+
+/**
+ * Convert an ISO timestamp to a compact human-readable relative time string.
+ * @param {string} isoStr - ISO 8601 date string (e.g. "2026-06-01T18:52:00+00:00")
+ * @returns {string} e.g. "2d 4h ago", "1h 32m ago", "5m ago", "just now"
+ */
+function timeAgo(isoStr) {
+    if (!isoStr || isoStr === "--") return "--";
+    var then = new Date(isoStr);
+    if (isNaN(then.getTime())) return isoStr;
+    var now = new Date();
+    var diffMs = now - then;
+    if (diffMs < 0) return "just now";
+    var seconds = Math.floor(diffMs / 1000);
+    var minutes = Math.floor(seconds / 60);
+    var hours = Math.floor(minutes / 60);
+    var days = Math.floor(hours / 24);
+    var remHours = hours % 24;
+    var remMins = minutes % 60;
+    if (days > 0) return remHours > 0 ? days + "d " + remHours + "h ago" : days + "d ago";
+    if (hours > 0) return remMins > 0 ? hours + "h " + remMins + "m ago" : hours + "h ago";
+    if (minutes > 0) return minutes + "m ago";
+    return "just now";
+}
+
+/**
+ * Open a modal popup with full text content (for "Read more" expansions).
+ * @param {string} title - Modal heading
+ * @param {string} content - Full text to display (plain text, escaped internally)
+ */
+function openReadMoreModal(title, content) {
+    var modal = document.getElementById("read-more-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "read-more-modal";
+        modal.className = "fixed inset-0 z-[60] flex items-center justify-center p-4";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+        modal.setAttribute("aria-labelledby", "read-more-modal-title");
+        modal.innerHTML =
+            '<div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="document.getElementById(\'read-more-modal\').classList.add(\'hidden\')"></div>' +
+            '<div class="relative bg-surface-elevated border border-border-subtle rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">' +
+            '<div class="flex items-center justify-between px-6 py-4 border-b border-border-subtle flex-shrink-0">' +
+            '<h3 id="read-more-modal-title" class="text-sm font-semibold text-text-primary"></h3>' +
+            '<button onclick="document.getElementById(\'read-more-modal\').classList.add(\'hidden\')" ' +
+            'class="text-text-muted hover:text-text-primary transition-colors p-1 rounded-lg hover:bg-surface-sunken" aria-label="Close">' +
+            '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+            '</button></div>' +
+            '<div id="read-more-modal-content" class="px-6 py-5 overflow-y-auto text-sm text-text-secondary leading-relaxed flex-1"></div>' +
+            '</div>';
+        modal.setAttribute("tabindex", "-1");
+        document.body.appendChild(modal);
+        modal.addEventListener("keydown", function(e) {
+            if (e.key === "Escape") modal.classList.add("hidden");
+        });
+    }
+    document.getElementById("read-more-modal-title").textContent = title || "";
+    var contentEl = document.getElementById("read-more-modal-content");
+    // Render paragraphs from newlines
+    var escaped = (content || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    contentEl.innerHTML = "<p>" + escaped.replace(/\n\n+/g, "</p><p class='mt-3'>").replace(/\n/g, "<br>") + "</p>";
+    modal.classList.remove("hidden");
+    modal.focus();
+}
+
+/**
+ * Convert all [data-time-ago] elements to relative time.
+ * Supports optional [data-time-ago-prefix] to prepend a label.
+ * Re-runs every 60s to keep times current.
+ */
+function initTimeAgo() {
+    document.querySelectorAll("[data-time-ago]").forEach(function (el) {
+        var ts = el.getAttribute("data-time-ago");
+        if (!ts || ts === "--") return;
+        var prefix = el.getAttribute("data-time-ago-prefix");
+        el.textContent = prefix ? prefix + timeAgo(ts) : timeAgo(ts);
+    });
+}
+
+function updateNavActive() {
+    var path = window.location.pathname;
+    document.querySelectorAll("nav a[href]").forEach(function (link) {
+        var href = link.getAttribute("href");
+        var isActive = href === path || (href !== "/" && path.startsWith(href));
+        link.classList.toggle("active", isActive);
+        link.classList.toggle("bg-accent-soft", isActive);
+        link.classList.toggle("text-accent", isActive);
+        link.classList.toggle("font-medium", isActive);
+        link.classList.toggle("text-text-secondary", !isActive);
+        link.setAttribute("aria-current", isActive ? "page" : "false");
+    });
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    initTimeAgo();
+    setInterval(initTimeAgo, 60000);
+    updateNavActive();
+});
+// Re-run after HTMX content swaps (hx-boost navigation skips DOMContentLoaded)
+document.addEventListener("htmx:afterSettle", function () {
+    initTimeAgo();
+    updateNavActive();
+});
+
+// ─── CSRF Token (Architecture.md §18) ─────────────────────────────────────────
+
+function getCsrfToken() {
+    var name = "pmacs_csrf=";
+    var decodedCookie = decodeURIComponent(document.cookie);
+    var ca = decodedCookie.split(";");
+    for (var i = 0; i < ca.length; i++) {
+        var c = ca[i].trim();
+        if (c.indexOf(name) === 0) {
+            return c.substring(name.length);
+        }
+    }
+    return "";
+}
+
+function _csrfHeaders(headers) {
+    if (!headers) headers = {};
+    if (typeof headers === "object" && !(headers instanceof Headers)) {
+        var token = getCsrfToken();
+        if (token) {
+            headers["x-csrf-token"] = token;
+        }
+    }
+    return headers;
+}
+
+// Auto-attach CSRF token to all POST requests (fetch)
+// - Always reads fresh from cookie (no stale cache)
+// - Primes with a GET request if cookie missing (once only, no infinite loop)
+(function () {
+    var _fetch = window.fetch;
+    var _priming = false;
+
+    window.fetch = function (input, init) {
+        init = init || {};
+        if (init.method && init.method.toUpperCase() === "POST") {
+            init.headers = _csrfHeaders(init.headers);
+            var token = getCsrfToken();
+            if (!token && !_priming) {
+                // Cookie not set yet — prime with a GET, then retry (once only)
+                _priming = true;
+                return _fetch.call(window, "/?_csrf_prime=1", {method: "GET"}).then(function () {
+                    init.headers = _csrfHeaders(init.headers);
+                    _priming = false;
+                    return _fetch.call(window, input, init);
+                }).catch(function () {
+                    _priming = false;
+                    // Proceed without CSRF — server will return 403 if required
+                    return _fetch.call(window, input, init);
+                });
+            }
+        }
+        return _fetch.call(window, input, init);
+    };
+})();
+
+// Auto-attach CSRF token to HTMX POST requests
+// Attached to document (not body) outside DOMContentLoaded to avoid race condition
+document.addEventListener("htmx:configRequest", function (event) {
+    if (event.detail && event.detail.verb === "post") {
+        event.detail.headers["x-csrf-token"] = getCsrfToken();
+    }
+});
 
 // ─── Feature Detection ─────────────────────────────────────────────────────
 
@@ -84,7 +258,8 @@ function connectSSE() {
         eventSource.onerror = function () {
             var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
             console.warn("SSE connection lost, reconnecting in", delay, "ms (attempt", sseRetryCount + 1, "/", SSE_MAX_RETRIES, ")");
-            eventSource.close();
+            var es = eventSource;
+            if (es) { es.close(); }
             sseRetryCount++;
             sseReconnectTimer = setTimeout(connectSSE, delay);
         };
@@ -187,7 +362,8 @@ function showBlockingModal(title, message, buttons) {
     (buttons || []).forEach(function (btn) {
         var button = document.createElement("button");
         button.textContent = btn.label;
-        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-red-600 text-white hover:bg-red-700" : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300");
+        button.type = "button";
+        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-red-600 text-white hover:bg-red-700" : "bg-surface-sunken text-text-primary hover:bg-border");
         button.onclick = function () {
             modal.classList.add("hidden");
             if (btn.action) btn.action();
@@ -426,7 +602,7 @@ function renderCmdKResults(query) {
     filtered.forEach(function (item, idx) {
         var li = document.createElement("li");
         li.setAttribute("role", "option");
-        li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-zinc-100 text-sm";
+        li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-surface-sunken text-sm text-text-primary";
 
         li.innerHTML =
             '<span class="text-xs font-mono mr-3 px-1.5 py-0.5 rounded ' +
@@ -450,7 +626,7 @@ function renderCmdKResults(query) {
     // No results state
     if (filtered.length === 0) {
         var empty = document.createElement("li");
-        empty.className = "px-4 py-3 text-sm text-zinc-400 text-center";
+        empty.className = "px-4 py-3 text-sm text-text-muted text-center";
         empty.textContent = 'No results for "' + query + '"';
         results.appendChild(empty);
     }
@@ -460,9 +636,9 @@ function updateCmdKActiveItem(results) {
     var items = results.querySelectorAll("li[role='option']");
     items.forEach(function (li, idx) {
         if (idx === cmdKActiveIndex) {
-            li.classList.add("bg-zinc-100");
+            li.classList.add("bg-surface-sunken");
         } else {
-            li.classList.remove("bg-zinc-100");
+            li.classList.remove("bg-surface-sunken");
         }
     });
 }
@@ -479,18 +655,88 @@ function executeCmdKItem(item) {
 }
 
 function runCycleNow() {
-    showToast("Starting new cycle...", "info");
+    // Immediate UI feedback — disable button, show spinner
+    var btn = document.getElementById("run-cycle-btn");
+    var spinner = document.getElementById("run-cycle-spinner");
+    var label = document.getElementById("run-cycle-label");
+    if (btn) btn.disabled = true;
+    if (btn) btn.classList.add("opacity-60", "cursor-not-allowed");
+    if (spinner) spinner.classList.remove("hidden");
+    if (label) label.textContent = "Starting...";
+    showToast("Starting cycle...", "info");
+    // Immediately update cycle log on agents page
+    var feed = document.getElementById("cycle-log-feed");
+    if (feed) {
+        var empty = document.getElementById("cycle-log-empty");
+        if (empty) empty.classList.add("hidden");
+    }
+
     fetch("/api/cycle/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trigger: "manual" })
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            showToast(data.message || "Cycle started", "success");
+            var bar = document.getElementById("cycle-progress-bar");
+            if (bar) bar.classList.remove("hidden");
+            var indicator = document.getElementById("cycle-indicator");
+            if (indicator) indicator.textContent = "Cycle running...";
+        } else {
+            showToast("Failed: " + (data.error || "Unknown"), "error");
+            // Re-enable button on failure
+            if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); }
+            if (spinner) spinner.classList.add("hidden");
+            if (label) label.textContent = "Run cycle";
+        }
+    }).catch(function(err) {
+        showToast("Error: " + err.message, "error");
+        if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); }
+        if (spinner) spinner.classList.add("hidden");
+        if (label) label.textContent = "Run cycle";
+    });
+}
+
+function runQueueNow(tickers) {
+    if (!tickers || tickers.length === 0) {
+        showToast("Queue is empty", "warning");
+        return;
+    }
+    showToast("Starting queue cycle for: " + tickers.join(", "), "info");
+    fetch("/api/cycle/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: "queue", tickers: tickers })
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            showToast(data.message || "Queue cycle started", "success");
+            var bar = document.getElementById("cycle-progress-bar");
+            if (bar) bar.classList.remove("hidden");
+        } else {
+            showToast("Failed: " + (data.error || "Unknown"), "error");
+        }
+    }).catch(function(err) {
+        showToast("Error: " + err.message, "error");
+    });
+}
+
+function runSmokeTest() {
+    showToast("Running smoke-test cycle...", "info");
+    fetch("/api/cycle/smoke-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
     }).then(function (resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
     }).then(function (data) {
-        showToast("Cycle " + (data.cycle_id || "started"), "success");
+        showToast(data.message || "Smoke-test passed", "success");
+        if (data.reload) {
+            setTimeout(function () { window.location.reload(); }, 1500);
+        }
     }).catch(function (err) {
-        showToast("Cycle start failed: " + err.message, "error");
+        showToast("Smoke-test failed: " + err.message, "error");
     });
 }
 
@@ -504,19 +750,19 @@ function openCycleCompare() {
         modal.setAttribute("aria-label", "Compare cycles");
         modal.setAttribute("aria-modal", "true");
         modal.innerHTML =
-            '<div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-zinc-200 p-6">' +
-            '<h3 class="text-lg font-semibold text-zinc-900 mb-4">Compare Cycles</h3>' +
-            '<p class="text-sm text-zinc-500 mb-4">Select two cycle IDs to compare side-by-side (Source.md §15.9).</p>' +
+            '<div class="bg-surface-elevated rounded-lg shadow-xl w-full max-w-2xl border border-border p-6">' +
+            '<h3 class="text-lg font-semibold text-text-primary mb-4">Compare Cycles</h3>' +
+            '<p class="text-sm text-text-secondary mb-4">Select two cycle IDs to compare side-by-side (Source.md §15.9).</p>' +
             '<div class="grid grid-cols-2 gap-4 mb-4">' +
-            '  <div><label class="text-xs text-zinc-500 block mb-1">Cycle A</label>' +
-            '  <input id="cycle-a" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded text-sm font-mono" placeholder="e.g. 2026-05-10T08:00"></div>' +
-            '  <div><label class="text-xs text-zinc-500 block mb-1">Cycle B</label>' +
-            '  <input id="cycle-b" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded text-sm font-mono" placeholder="e.g. 2026-05-11T08:00"></div>' +
+            '  <div><label class="text-xs text-text-secondary block mb-1">Cycle A</label>' +
+            '  <input id="cycle-a" type="text" class="w-full px-3 py-2 border border-border rounded text-sm font-mono bg-surface text-text-primary" placeholder="e.g. 2026-05-10T08:00"></div>' +
+            '  <div><label class="text-xs text-text-secondary block mb-1">Cycle B</label>' +
+            '  <input id="cycle-b" type="text" class="w-full px-3 py-2 border border-border rounded text-sm font-mono bg-surface text-text-primary" placeholder="e.g. 2026-05-11T08:00"></div>' +
             '</div>' +
             '<div id="compare-result" class="hidden mb-4 max-h-80 overflow-auto"></div>' +
             '<div class="flex justify-end gap-2">' +
-            '  <button onclick="document.getElementById(\'cycle-compare-modal\').classList.add(\'hidden\')" class="px-4 py-2 text-sm border border-zinc-200 rounded hover:bg-zinc-50">Cancel</button>' +
-            '  <button onclick="fetchCycleComparison()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Compare</button>' +
+            '  <button onclick="document.getElementById(\'cycle-compare-modal\').classList.add(\'hidden\')" class="px-4 py-2 text-sm border border-border rounded hover:bg-surface-sunken text-text-primary">Cancel</button>' +
+            '  <button onclick="fetchCycleComparison()" class="px-4 py-2 text-sm bg-accent text-white rounded hover:bg-accent/90">Compare</button>' +
             '</div></div>';
         document.body.appendChild(modal);
         // Click outside to close
@@ -540,7 +786,7 @@ function fetchCycleComparison() {
     resultDiv.classList.remove("hidden");
     resultDiv.textContent = "";
     var loading = document.createElement("p");
-    loading.className = "text-sm text-zinc-600";
+    loading.className = "text-sm text-text-secondary";
     loading.textContent = "Comparing " + a + " vs " + b + "...";
     resultDiv.appendChild(loading);
     fetch("/api/cycle/compare?cycle_a=" + encodeURIComponent(a) + "&cycle_b=" + encodeURIComponent(b))
@@ -550,7 +796,7 @@ function fetchCycleComparison() {
         }).then(function(data) {
             resultDiv.textContent = "";
             var pre = document.createElement("pre");
-            pre.className = "text-xs font-mono bg-zinc-50 p-3 rounded overflow-auto";
+            pre.className = "text-xs font-mono bg-surface-sunken text-text-primary p-3 rounded overflow-auto";
             pre.textContent = JSON.stringify(data, null, 2);
             resultDiv.appendChild(pre);
         }).catch(function(err) {
@@ -670,9 +916,9 @@ document.addEventListener("keydown", function (e) {
         }
         closeCmdK();
         closeTotpModal();
-        document.getElementById("shortcut-overlay").classList.add("hidden");
-        var blockingModal = document.getElementById("blocking-modal");
-        // Don't close blocking modals with Esc (they require explicit acknowledgment)
+        var _shortcutOverlay = document.getElementById("shortcut-overlay");
+        if (_shortcutOverlay) _shortcutOverlay.classList.add("hidden");
+        // blocking-modal: Don't close with Esc (requires explicit acknowledgment)
         return;
     }
 
@@ -689,14 +935,16 @@ document.addEventListener("keydown", function (e) {
     // ?: contextual help
     if (e.key === "?" && !isInput && !activeModal) {
         e.preventDefault();
-        document.getElementById("shortcut-overlay").classList.toggle("hidden");
+        var _shortcutOverlay2 = document.getElementById("shortcut-overlay");
+        if (_shortcutOverlay2) _shortcutOverlay2.classList.toggle("hidden");
         return;
     }
 
     // Cmd-K palette: arrow keys + enter
-    if (!document.getElementById("cmd-k").classList.contains("hidden")) {
+    var _cmdK = document.getElementById("cmd-k");
+    if (_cmdK && !_cmdK.classList.contains("hidden")) {
         var results = document.getElementById("cmd-k-results");
-        var items = results.querySelectorAll("li");
+        var items = results ? results.querySelectorAll("li") : [];
 
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -747,7 +995,7 @@ function handleKillSwitch() {
                 label: "Engage",
                 primary: true,
                 action: function () {
-                    fetch("/api/kill-switch/engage", {
+                    fetch("/api/cortex/kill-switch/engage", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" }
                     }).then(function (resp) {
@@ -757,7 +1005,7 @@ function handleKillSwitch() {
                         var btn = document.getElementById("kill-switch-btn");
                         if (btn) {
                             btn.classList.add("bg-red-600");
-                            btn.classList.remove("bg-zinc-700");
+                            btn.classList.remove("bg-surface-sunken");
                         }
                         showToast("Kill switch ENGAGED. To disengage: Cortex page.", "error", 0);
                     }).catch(function (err) {
@@ -785,6 +1033,8 @@ var totpModalState = {
     callbackUrl: "",
     confirmText: "",
     pendingAction: null,  // optional function to call on success
+    extra: {},            // action-specific data (e.g. ticker, tickers)
+    verifiedCode: "",     // TOTP code after verification
 };
 
 /**
@@ -796,6 +1046,7 @@ var totpModalState = {
  * @param {string} [opts.confirmText]    — text operator must type (e.g. "KILL")
  * @param {string} [opts.callbackUrl]    — URL to POST after TOTP verified
  * @param {Function} [opts.onSuccess]    — function to call on verification success
+ * @param {Object} [opts.extra]          — action-specific data to pass through
  */
 function open_totp_modal(opts) {
     var modal = document.getElementById("totp-modal");
@@ -806,6 +1057,8 @@ function open_totp_modal(opts) {
     totpModalState.callbackUrl = opts.callbackUrl || "";
     totpModalState.confirmText = opts.confirmText || "";
     totpModalState.pendingAction = opts.onSuccess || null;
+    totpModalState.extra = opts.extra || {};
+    totpModalState.verifiedCode = "";
 
     // Set data attributes
     modal.setAttribute("data-action-id", totpModalState.actionId);
@@ -922,23 +1175,22 @@ function submitTotp() {
         }),
     })
     .then(function (resp) {
-        if (resp.ok) {
-            return resp.json();
-        }
-        return resp.json().then(function (data) {
-            throw new Error(data.detail || "Verification failed");
-        });
+        return resp.json();
     })
     .then(function (data) {
+        if (!data.verified) {
+            throw new Error(data.error || "Verification failed");
+        }
         // TOTP verified — close modal
+        totpModalState.verifiedCode = code;
         closeTotpModal();
         showToast("Action confirmed", "success");
 
         // Execute gated action
         if (totpModalState.callbackUrl) {
-            executeGatedAction(totpModalState.callbackUrl, totpModalState.actionId);
+            executeGatedAction(totpModalState.callbackUrl, totpModalState.actionId, code);
         } else if (totpModalState.pendingAction) {
-            totpModalState.pendingAction(data);
+            totpModalState.pendingAction({verified: true, code: code, extra: totpModalState.extra});
         }
     })
     .catch(function (err) {
@@ -956,12 +1208,17 @@ function submitTotp() {
 
 /**
  * Execute a gated action by POSTing to the callback URL.
+ * Includes TOTP code and any extra data from the modal state.
  */
-function executeGatedAction(callbackUrl, actionId) {
+function executeGatedAction(callbackUrl, actionId, totpCode) {
+    var body = Object.assign(
+        { action_id: actionId, totp_code: totpCode || "" },
+        totpModalState.extra || {}
+    );
     fetch(callbackUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action_id: actionId }),
+        body: JSON.stringify(body),
     })
     .then(function (resp) {
         if (resp.ok) {
@@ -990,23 +1247,53 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var digits = modal.querySelectorAll(".totp-digit");
     digits.forEach(function (digit, index) {
-        digit.addEventListener("input", function (e) {
-            e.target.value = e.target.value.replace(/[^0-9]/g, "");
-            if (e.target.value && index < digits.length - 1) {
-                digits[index + 1].focus();
+        // Handle digit keys via keydown for reliable auto-advance
+        digit.addEventListener("keydown", function (e) {
+            // Digit keys (0-9)
+            if (e.key >= "0" && e.key <= "9" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                e.preventDefault();
+                e.target.value = e.key;
+                updateTotpConfirmButton();
+                if (index < digits.length - 1) {
+                    digits[index + 1].focus();
+                }
+                // Auto-submit on last digit
+                if (index === digits.length - 1) {
+                    var confirmRequired = totpModalState.confirmText || "";
+                    if (!confirmRequired || document.getElementById("totp-confirm-input").value === confirmRequired) {
+                        submitTotp();
+                    }
+                }
+                return;
             }
+            // Backspace: clear current or go back
+            if (e.key === "Backspace") {
+                if (!e.target.value && index > 0) {
+                    e.preventDefault();
+                    digits[index - 1].focus();
+                } else {
+                    e.target.value = "";
+                    updateTotpConfirmButton();
+                }
+                return;
+            }
+        });
+
+        // Handle paste: distribute digits across all fields
+        digit.addEventListener("paste", function (e) {
+            e.preventDefault();
+            var text = (e.clipboardData || window.clipboardData).getData("text").replace(/[^0-9]/g, "");
+            for (var j = 0; j < Math.min(text.length, digits.length); j++) {
+                digits[j].value = text[j];
+            }
+            var focusIndex = Math.min(text.length, digits.length) - 1;
+            if (focusIndex >= 0) digits[focusIndex].focus();
             updateTotpConfirmButton();
-            // Auto-submit on 6th digit (only if confirm text not required or already matched)
-            if (index === digits.length - 1 && e.target.value) {
+            if (text.length >= 6) {
                 var confirmRequired = totpModalState.confirmText || "";
                 if (!confirmRequired || document.getElementById("totp-confirm-input").value === confirmRequired) {
                     submitTotp();
                 }
-            }
-        });
-        digit.addEventListener("keydown", function (e) {
-            if (e.key === "Backspace" && !e.target.value && index > 0) {
-                digits[index - 1].focus();
             }
         });
     });
@@ -1187,67 +1474,202 @@ function copyDebugEvent(btn) {
 
 // ─── SSE Event Handler Registration ─────────────────────────────────────────
 
-// Notification-policy-driven events
-onSSE("notification", function (data) {
+// System events — dispatch notifications, errors, and kill switch alerts
+onSSE("system", function (data) {
+    if (data.event_type) {
+        handleNotification(data.event_type, data);
+    }
+    // Kill switch engagement
+    if (data.event_type === "system.kill_switch_engaged" || data.engaged) {
+        handleNotification("kill_switch_engaged", data);
+    }
+    // Kill switch disengaged
+    if (data.event_type === "system.kill_switch_disengaged") {
+        handleNotification("kill_switch_disengaged", data);
+    }
+    // System heartbeat
+    if (data.event_type === "system.heartbeat") {
+        var indicator = document.getElementById("system-status");
+        if (indicator) { indicator.textContent = "Connected"; }
+    }
+    // Error events from system stream
+    if (data.event === "error" || data.level === "ERROR") {
+        showToast("Error: " + (data.message || "Unknown"), "error");
+    }
+});
+
+// Cycle events
+function _setCycleIndicator(html) {
+    var indicator = document.getElementById("cycle-indicator");
+    if (!indicator) return;
+    indicator.innerHTML = '<span class="inline-flex items-center gap-2"><span class="live-dot"></span>' + html + '</span>';
+}
+
+onSSE("cycle", function (data) {
+    if (data.event_type === "cycle.opened" || data.event === "cycle_start") {
+        _setCycleIndicator("Running: " + (data.tickers ? data.tickers.length : 0) + " tickers — ETA " + escapeHtml(data.eta || "calculating..."));
+        var bar = document.getElementById("cycle-progress-bar");
+        if (bar) { bar.classList.remove("hidden"); bar.style.width = "0%"; }
+    }
+    if (data.event_type === "cycle.closed" || data.event === "cycle_complete") {
+        var timeLabel = data.completed_at ? timeAgo(data.completed_at) : "just now";
+        _setCycleIndicator('Idle. Last cycle: <span id="cycle-indicator-time"' +
+            (data.completed_at ? ' data-time-ago="' + escapeHtml(data.completed_at) + '"' : '') +
+            '>' + timeLabel + '</span>');
+        var bar = document.getElementById("cycle-progress-bar");
+        if (bar) bar.classList.add("hidden");
+        showToast("Cycle complete: " + (data.tickers_processed || 0) + " tickers processed", "info");
+        // Re-enable run cycle button
+        var _btn = document.getElementById("run-cycle-btn");
+        var _spinner = document.getElementById("run-cycle-spinner");
+        var _label = document.getElementById("run-cycle-label");
+        if (_btn) { _btn.disabled = false; _btn.classList.remove("opacity-60", "cursor-not-allowed"); }
+        if (_spinner) _spinner.classList.add("hidden");
+        if (_label) _label.textContent = "Run cycle";
+        // Update last-cycle-time element with relative time
+        var lctEl = document.getElementById("last-cycle-time");
+        if (lctEl && data.completed_at) {
+            lctEl.setAttribute("data-time-ago", data.completed_at);
+            lctEl.textContent = timeLabel;
+        }
+        // Partial refresh via HTMX — debounced to prevent stacking if event fires twice
+        if (typeof htmx !== "undefined") {
+            if (window._cycleRefreshTimer) clearTimeout(window._cycleRefreshTimer);
+            window._cycleRefreshTimer = setTimeout(function() {
+                window._cycleRefreshTimer = null;
+                htmx.ajax("GET", window.location.pathname, {
+                    target: "#main-content",
+                    select: "#main-content",
+                    swap: "outerHTML"
+                });
+            }, 800);
+        }
+    }
+    if (data.event_type === "ticker_progress" || data.event === "ticker_progress") {
+        var progress = data.progress || "";
+        var match = progress.match(/(\d+)\/(\d+)/);
+        var pctStr = match ? " (" + Math.round((parseInt(match[1]) / parseInt(match[2])) * 100) + "%)" : (progress ? " (" + progress + ")" : "");
+        _setCycleIndicator("Processing: " + (data.ticker || "") + pctStr);
+        if (match) {
+            var pct = Math.round((parseInt(match[1]) / parseInt(match[2])) * 100);
+            var bar = document.getElementById("cycle-progress-bar");
+            if (bar) bar.style.width = pct + "%";
+        }
+    }
+    // Notification-policy-driven cycle events
     if (data.event_type) {
         handleNotification(data.event_type, data);
     }
 });
 
-// Cycle events
-onSSE("cycle", function (data) {
-    if (data.event === "cycle_start") {
-        var indicator = document.getElementById("cycle-indicator");
-        if (indicator) {
-            indicator.textContent = "Running: " + (data.ticker || "") + " — ETA " + (data.eta || "calculating...");
-        }
-    }
-    if (data.event === "cycle_complete") {
-        var indicator = document.getElementById("cycle-indicator");
-        if (indicator) {
-            indicator.textContent = "Idle. Last cycle: " + (data.completed_at || "just now");
-        }
-        showToast("Cycle complete: " + (data.tickers_processed || 0) + " tickers processed", "info");
-    }
-    if (data.event === "ticker_progress") {
-        var indicator = document.getElementById("cycle-indicator");
-        if (indicator) {
-            indicator.textContent = "Processing: " + (data.ticker || "") + " (" + (data.progress || "") + ")";
-        }
-    }
-});
-
-// Error events
-onSSE("error", function (data) {
-    showToast("Error: " + (data.message || "Unknown"), "error");
-});
-
-// Kill switch events
-onSSE("kill_switch", function (data) {
-    if (data.engaged) {
-        handleNotification("kill_switch_engaged", data);
-    }
-});
-
 // Trade events
 onSSE("trade", function (data) {
-    if (data.event === "filled") {
+    if (data.event_type === "trade.filled" || data.event === "filled") {
         handleNotification(data.mode === "LIVE" ? "trade_filled_live" : "trade_filled_paper", data);
+    }
+    if (data.event_type === "trade.signed") {
+        showToast("Trade signed: " + (data.ticker || ""), "info");
+    }
+    if (data.event_type === "trade.submitted") {
+        showToast("Order submitted: " + (data.ticker || ""), "info");
+    }
+    if (data.event_type === "trade.rejected") {
+        showToast("Trade rejected: " + (data.ticker || "") + " — " + (data.reason || ""), "error");
+    }
+    if (data.event_type) {
+        handleNotification(data.event_type, data);
     }
 });
 
-// Sparkline update events — refresh individual metric sparklines during cycle
-onSSE("sparkline_update", function (data) {
-    if (!data || !data.metric) return;
-    var metric = data.metric;
+// Decision events
+onSSE("decision", function (data) {
+    if (data.event_type === "decision.arbitrated") {
+        var verdictEl = document.getElementById("latest-verdict");
+        if (verdictEl) {
+            verdictEl.textContent = (data.ticker || "") + ": " + (data.decision || "") +
+                " (p\u2191" + (data.p_up || "\u2014") + " p\u2193" + (data.p_down || "\u2014") + ")";
+        }
+    }
+    if (data.event_type === "decision.final") {
+        // Only show toast for actionable decisions — SKIP is expected and noisy
+        if (data.verdict && data.verdict !== "SKIP" && data.verdict !== "ERROR") {
+            var cPct = ((data.conviction || 0) * 100).toFixed(0);
+            showToast((data.ticker || "") + ": " + data.verdict + " (" + cPct + "% conviction)", "info");
+        }
+        // Always update the verdict display element
+        var verdictEl2 = document.getElementById("latest-verdict");
+        if (verdictEl2) {
+            verdictEl2.textContent = (data.ticker || "") + ": " + (data.verdict || "—");
+        }
+    }
+    if (data.event_type) {
+        handleNotification(data.event_type, data);
+    }
+});
+
+// Agent events
+onSSE("agent", function (data) {
+    // agents.html has its own richer handler with design-system classes.
+    // Skip card DOM updates on /agents to avoid class conflicts.
+    if (window.location.pathname !== "/agents") {
+        var card = document.querySelector('[data-persona="' + (data.persona || "").toLowerCase() + '"]');
+        if (card) {
+            var badge = card.querySelector("[data-status-badge]");
+            var progressBar = card.querySelector("[data-progress-bar]");
+            var statusText = card.querySelector("[data-status-text]");
+
+            if (data.event_type === "agent.queued") {
+                if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
+                if (statusText) { statusText.textContent = "Queued for " + (data.ticker || ""); }
+            }
+            if (data.event_type === "agent.running") {
+                if (badge) { badge.textContent = "running"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-accent-soft text-accent"; }
+                if (progressBar) { progressBar.style.width = "30%"; progressBar.className = "persona-progress-fill status-running"; }
+                if (statusText) { statusText.textContent = "Analyzing " + (data.ticker || "") + "..."; }
+            }
+            if (data.event_type === "agent.complete") {
+                if (badge) { badge.textContent = "complete"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive"; }
+                if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-complete"; }
+                if (statusText) { statusText.textContent = "Complete"; }
+            }
+            if (data.event_type === "agent.failed") {
+                if (badge) { badge.textContent = "error"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-negative-soft text-negative"; }
+                if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-error"; }
+                if (statusText) { statusText.textContent = "Failed: " + (data.reason || "unknown"); }
+            }
+        }
+    }
+    if (data.event_type) {
+        handleNotification(data.event_type, data);
+    }
+});
+
+// Mutation events
+onSSE("mutation", function (data) {
+    if (data.event === "candidate_ready" || data.event_type === "mutation.candidate_ready") {
+        handleNotification("mutation_candidate_ready", data);
+    }
+    if (data.event === "mutation_approved" || data.event_type === "mutation.promoted") {
+        handleNotification("mutation_approved", data);
+    }
+    if (data.event_type) {
+        handleNotification(data.event_type, data);
+    }
+});
+
+// Sparkline update events — triggered by cycle stream (event: "sparkline_update")
+// Also registered on "cycle" stream for cycle_complete refresh
+onSSE("cycle", function (data) {
+    if (data.event === "sparkline_update" && data.metric) {
+        refreshSparkline(data.metric);
+    }
+});
+
+function refreshSparkline(metric) {
     var container = document.querySelector('[data-sparkline-metric="' + metric + '"]');
     if (!container) return;
-
-    // Determine current active window from button state
     var activeBtn = document.querySelector(".sparkline-window-btn.bg-blue-50");
     var windowParam = activeBtn ? (activeBtn.getAttribute("data-window") || "1W") : "1W";
-
-    // Fetch fresh sparkline data and swap SVG content
     fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(windowParam))
         .then(function (resp) {
             if (!resp.ok) return null;
@@ -1255,32 +1677,49 @@ onSSE("sparkline_update", function (data) {
         })
         .then(function (points) {
             if (!points || points.length < 2) {
-                container.innerHTML = '<div class="w-full h-6 flex items-center justify-center">' +
-                    '<span class="text-xs text-zinc-400">No data yet</span></div>';
+                container.innerHTML = '<div class="w-full h-10 flex items-center justify-center">' +
+                    '<span class="text-xs text-text-muted">No data yet</span></div>';
                 return;
             }
-            var values = points.map(function (p) { return p.v; });
-            var vmin = Math.min.apply(null, values);
-            var vmax = Math.max.apply(null, values);
-            var vrange = Math.max(vmax - vmin, 0.001);
-            var n = points.length;
-            var pts = [];
-            for (var i = 0; i < n; i++) {
-                var x = (i / (n - 1) * 100).toFixed(1);
-                var y = (24 - (points[i].v - vmin) / vrange * 20).toFixed(1);
-                pts.push(x + "," + y);
-            }
-            var lastY = (24 - (values[n - 1] - vmin) / vrange * 20).toFixed(0);
-            container.innerHTML =
-                '<svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">' +
-                '<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="' + pts.join(" ") + '"/>' +
-                '</svg>' +
-                '<div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:' + lastY + 'px"></div>';
+            container.innerHTML = renderSparklineSVG(points);
         })
         .catch(function () {
             // Graceful degradation — leave existing sparkline unchanged
         });
-});
+}
+
+function renderSparklineSVG(points) {
+    var values = points.map(function (p) { return p.v; });
+    var vmin = Math.min.apply(null, values);
+    var vmax = Math.max.apply(null, values);
+    var vrange = Math.max(vmax - vmin, 0.001);
+    var n = points.length;
+    var H = 36; // drawable height in viewBox
+    var VB_H = 40; // viewBox total height
+    var pad = 2; // top/bottom padding
+    var pts = [];
+    for (var i = 0; i < n; i++) {
+        var x = (i / (n - 1) * 100).toFixed(1);
+        var y = (pad + (1 - (points[i].v - vmin) / vrange) * H).toFixed(1);
+        pts.push(x + "," + y);
+    }
+    var lastY = (pad + (1 - (values[n - 1] - vmin) / vrange) * H).toFixed(0);
+    var firstY = (pad + (1 - (values[0] - vmin) / vrange) * H).toFixed(1);
+    // Detect trend
+    var trend = values[n - 1] >= values[0] ? 'positive' : 'negative';
+    var trendClass = 'sparkline-' + trend;
+    // Area fill polygon: line points + bottom corners
+    var areaPoints = pts.join(" ") + " 100," + VB_H + " 0," + VB_H;
+    return '<div class="sparkline-container ' + trendClass + '">' +
+        '<svg viewBox="0 0 100 ' + VB_H + '" preserveAspectRatio="none" class="w-full" style="height:40px">' +
+        '<polygon class="sparkline-area" points="' + areaPoints + '"/>' +
+        '<polyline class="sparkline-line" points="' + pts.join(" ") + '"/>' +
+        '</svg>' +
+        '<div class="sparkline-point absolute w-1.5 h-1.5 rounded-full' +
+        (trend === 'positive' ? ' bg-green-600' : ' bg-red-500') +
+        '" style="left:100%;top:' + lastY + 'px;transform:translate(-50%,-50%)"></div>' +
+        '</div>';
+}
 
 // ─── Viewport Guard (Source.md §13.7: minimum 1024px) ──────────────────────
 
@@ -1296,11 +1735,11 @@ function refreshAllSparklines(window, clickedBtn) {
     if (container) {
         container.querySelectorAll(".sparkline-window-btn").forEach(function (btn) {
             btn.classList.remove("bg-blue-50", "text-blue-600");
-            btn.classList.add("text-zinc-500");
+            btn.classList.add("text-text-muted");
         });
     }
     if (clickedBtn) {
-        clickedBtn.classList.remove("text-zinc-500");
+        clickedBtn.classList.remove("text-text-muted");
         clickedBtn.classList.add("bg-blue-50", "text-blue-600");
     }
 
@@ -1315,27 +1754,11 @@ function refreshAllSparklines(window, clickedBtn) {
             })
             .then(function (points) {
                 if (!points || points.length < 2) {
-                    el.innerHTML = '<div class="w-full h-6 flex items-center justify-center">' +
-                        '<span class="text-xs text-zinc-400">No data yet</span></div>';
+                    el.innerHTML = '<div class="w-full h-10 flex items-center justify-center">' +
+                        '<span class="text-xs text-text-muted">No data yet</span></div>';
                     return;
                 }
-                var values = points.map(function (p) { return p.v; });
-                var vmin = Math.min.apply(null, values);
-                var vmax = Math.max.apply(null, values);
-                var vrange = Math.max(vmax - vmin, 0.001);
-                var n = points.length;
-                var pts = [];
-                for (var i = 0; i < n; i++) {
-                    var x = (i / (n - 1) * 100).toFixed(1);
-                    var y = (24 - (points[i].v - vmin) / vrange * 20).toFixed(1);
-                    pts.push(x + "," + y);
-                }
-                var lastY = (24 - (values[n - 1] - vmin) / vrange * 20).toFixed(0);
-                el.innerHTML =
-                    '<svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">' +
-                    '<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="' + pts.join(" ") + '"/>' +
-                    '</svg>' +
-                    '<div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2" style="left:50%;top:' + lastY + 'px"></div>';
+                el.innerHTML = renderSparklineSVG(points);
             })
             .catch(function () {
                 // Leave existing sparkline unchanged on fetch failure
@@ -1346,17 +1769,34 @@ function refreshAllSparklines(window, clickedBtn) {
 // ─── Viewport Guard End ────────────────────────────────────────────────────
 
 function checkViewportWidth() {
-    var guard = document.getElementById("viewport-guard");
-    if (!guard) return;
-    if (window.innerWidth < 1024) {
-        guard.classList.remove("hidden");
-    } else {
-        guard.classList.add("hidden");
-    }
+    // No hard block for mobile — responsive layout handles it
 }
 
 window.addEventListener("resize", checkViewportWidth);
 document.addEventListener("DOMContentLoaded", checkViewportWidth);
+
+// ─── Mobile Sidebar Toggle ─────────────────────────────────────────────────
+
+function toggleMobileSidebar() {
+    var sidebar = document.getElementById("sidebar");
+    var overlay = document.getElementById("mobile-sidebar-overlay");
+    if (!sidebar) return;
+    var isOpen = sidebar.classList.contains("mobile-open");
+    if (isOpen) {
+        sidebar.classList.remove("mobile-open");
+        if (overlay) overlay.classList.add("hidden");
+    } else {
+        sidebar.classList.add("mobile-open");
+        if (overlay) overlay.classList.remove("hidden");
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+    var overlay = document.getElementById("mobile-sidebar-overlay");
+    if (overlay) {
+        overlay.addEventListener("click", toggleMobileSidebar);
+    }
+});
 
 // ─── Sidebar State Restoration ─────────────────────────────────────────────
 
@@ -1483,6 +1923,43 @@ closeCmdK = function () {
     _origCloseCmdK();
 };
 
+// TOTP modal focus trap wiring
+var _origOpenTotpModal = open_totp_modal;
+open_totp_modal = function (opts) {
+    _origOpenTotpModal(opts);
+    var modal = document.getElementById("totp-modal");
+    if (modal) trapFocus(modal);
+};
+
+var _origCloseTotpModal = closeTotpModal;
+closeTotpModal = function () {
+    releaseFocus();
+    _origCloseTotpModal();
+};
+
+// Blocking modal focus trap wiring
+// The blocking modal's buttons close by adding .hidden directly,
+// so we observe attribute changes to release focus on close.
+var _origShowBlockingModal = showBlockingModal;
+showBlockingModal = function (title, message, buttons) {
+    _origShowBlockingModal(title, message, buttons);
+    var modal = document.getElementById("blocking-modal");
+    if (modal) {
+        trapFocus(modal);
+        // Observe hidden class to release focus when modal is dismissed
+        if (!modal._blockObserver) {
+            modal._blockObserver = new MutationObserver(function (mutations) {
+                mutations.forEach(function (m) {
+                    if (m.attributeName === "class" && modal.classList.contains("hidden")) {
+                        releaseFocus();
+                    }
+                });
+            });
+            modal._blockObserver.observe(modal, { attributes: true, attributeFilter: ["class"] });
+        }
+    }
+};
+
 // ─── HTMX afterSwap — reinitialize page-specific JS after navigation ─────────
 
 document.addEventListener("htmx:afterSwap", function (event) {
@@ -1538,9 +2015,9 @@ document.addEventListener("htmx:afterRequest", function (event) {
         var buttons = container.querySelectorAll(".sparkline-window-btn");
         buttons.forEach(function (btn) {
             btn.classList.remove("bg-blue-50", "text-blue-600");
-            btn.classList.add("text-zinc-500");
+            btn.classList.add("text-text-muted");
         });
-        elt.classList.remove("text-zinc-500");
+        elt.classList.remove("text-text-muted");
         elt.classList.add("bg-blue-50", "text-blue-600");
     }
 });

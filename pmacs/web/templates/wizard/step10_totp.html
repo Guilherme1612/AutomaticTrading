@@ -1,7 +1,9 @@
 {# Wizard Step 10 — TOTP enrollment (Source.md §12.1 Step 9)
    QR code display, authenticator scan, verify one TOTP code.
+   Auto-triggers QR generation on first load.
    Expects: current_step, totp_result with {qr_data_uri, _secret}, verify_result
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">TOTP Enrollment</h1>
     <p class="text-text-secondary text-sm mb-8">Set up two-factor authentication for sensitive operations.</p>
@@ -26,7 +28,8 @@
         </div>
 
         <div class="border-t border-border pt-4">
-            <form id="totp-verify-form" hx-post="/wizard/step/10" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms">
+            {# FIX: Verify form POSTs to step 9 (TOTP handler), NOT step 11 #}
+            <form id="totp-verify-form" hx-post="/wizard/step/9" hx-target="#wizard-content" hx-swap="innerHTML transition:200ms" hx-indicator="#wizard-loader">
                 <input type="hidden" name="totp_secret" value="{{ totp_result.get('_secret', '') }}">
                 <label class="text-sm font-medium text-text-primary block mb-2">Verify TOTP Code</label>
                 <p class="text-xs text-text-muted mb-3">Enter the 6-digit code from your authenticator app.</p>
@@ -54,8 +57,20 @@
         {% endif %}
 
         {% else %}
-        <div class="text-center py-8">
-            <p class="text-text-muted">Generating TOTP secret...</p>
+        {# No QR yet — auto-trigger generation via HTMX load event #}
+        <div hx-post="/wizard/step/9"
+             hx-trigger="load"
+             hx-target="#wizard-content"
+             hx-swap="innerHTML transition:200ms"
+             hx-indicator="#wizard-loader"
+             class="text-center py-8">
+            <div class="flex items-center justify-center gap-2 text-text-muted">
+                <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span>Generating TOTP secret...</span>
+            </div>
         </div>
         {% endif %}
     </div>
@@ -75,9 +90,26 @@
         <button hx-post="/wizard/step/10"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Next
         </button>
     </div>
     {% endif %}
 </div>
+
+{# Auto-focus and auto-advance TOTP digit inputs #}
+<script>
+document.querySelectorAll('.totp-digit').forEach(function(input, idx, inputs) {
+    input.addEventListener('input', function() {
+        if (this.value.length === 1 && idx < inputs.length - 1) {
+            inputs[idx + 1].focus();
+        }
+    });
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Backspace' && !this.value && idx > 0) {
+            inputs[idx - 1].focus();
+        }
+    });
+});
+</script>

@@ -28,13 +28,14 @@ def run(wizard: Wizard, base_path: Path | None = None) -> dict:
 
     Args:
         wizard: The wizard instance.
-        base_path: Base directory for PMACS data. Defaults to /var/db/pmacs.
+        base_path: Base directory for PMACS data. Defaults to data_dir() resolution.
 
     Returns:
         Dict with created directories and any errors.
     """
     if base_path is None:
-        base_path = Path("/var/db/pmacs")
+        from pmacs.config import data_dir
+        base_path = data_dir()
 
     created: list[str] = []
     errors: list[str] = []

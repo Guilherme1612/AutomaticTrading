@@ -12,17 +12,20 @@
 {% include "components/error_state.html" %}
 {% else %}
 <!-- Top filter bar -->
-<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
-    <div class="flex items-center justify-between">
+<div class="card card-elevated mb-8 reveal" data-stagger>
+    <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-4">
-            <h3 class="text-sm font-semibold text-zinc-900">Pipeline</h3>
-            <span class="text-xs text-zinc-400 font-mono">Queue: {{ queue_size }} | Cycles today: {{ cycles_today }}</span>
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-accent"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Pipeline</h3>
+            </div>
+            <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2.5 py-1 rounded-lg">Queue: {{ queue_size }} | Cycles today: {{ cycles_today }}</span>
         </div>
         <div class="flex gap-2">
             <input type="text" placeholder="Filter tickers..."
                    data-page-search
-                   class="px-3 py-1.5 text-sm border border-zinc-200 rounded focus:border-blue-500 outline-none">
-            <select class="px-3 py-1.5 text-sm border border-zinc-200 rounded bg-white">
+                   class="px-3 py-1.5 text-sm border border-border rounded-xl focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none w-32 sm:w-auto transition-colors">
+            <select id="verdict-filter-select" class="px-3 py-1.5 text-sm border border-border rounded-xl bg-surface-elevated focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
                 <option>All Verdicts</option>
                 <option>STRONG_BUY</option>
                 <option>BUY</option>
@@ -33,309 +36,316 @@
     </div>
 </div>
 
-<!-- Two-column layout: Kanban + Priority Queue Rail -->
-<div class="flex gap-6">
-    <!-- Left: Kanban verdict columns (wider) -->
-    <div class="flex-1 min-w-0">
-        <div class="grid grid-cols-4 gap-4">
+<!-- Queue — single unified list -->
+<div class="card card-elevated mb-6 reveal" data-stagger>
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+            <span class="w-2 h-2 rounded-full bg-accent"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Queue</h3>
+            <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2.5 py-1 rounded-lg">{{ priority_bands | sum(attribute='count') }} tickers</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <button type="button" onclick="promoteAllP1()"
+                    class="px-3 py-1.5 text-xs bg-accent text-white hover:bg-accent/90 rounded-xl transition-colors font-medium"
+                    title="Run next ticker in queue">
+                Run next
+            </button>
+        </div>
+    </div>
+
+    <!-- Single queue — all tickers, order = priority -->
+    <div class="flex flex-wrap gap-2" id="unified-queue">
+        {% for band in priority_bands %}
+        {% for item in band.tickers %}
+        <div class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs group
+                    {{ 'bg-negative-soft border border-negative/30 hover:border-negative/50' if item.is_active_holding else 'bg-surface-sunken border border-border hover:border-accent/40 hover:bg-surface-elevated' }}
+                    queue-chip transition-all duration-200"
+             data-ticker="{{ item.ticker }}"
+             draggable="true"
+             ondragstart="onChipDragStartUnified(event)"
+             ondragover="onChipDragOverUnified(event)"
+             ondrop="onChipDropUnified(event)">
+            <span class="font-mono font-semibold {{ 'text-negative' if item.is_active_holding else 'text-text-primary' }}">{{ item.ticker }}</span>
+            {% if item.is_active_holding %}
+            <span class="text-[10px] px-1.5 py-0.5 rounded-lg bg-negative text-white font-medium">ACTIVE</span>
+            {% endif %}
+            <span class="font-mono text-[10px] text-text-muted">{{ item.priority_score }}</span>
+            <button type="button" onclick="event.stopPropagation(); queueTickerNow('{{ item.ticker }}')"
+                    class="shrink-0 w-4 h-4 flex items-center justify-center text-text-muted hover:text-accent transition-colors"
+                    title="Run {{ item.ticker }} now">
+                <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
+                    <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                    <path d="M6.271 5.055a.5.5 0 0 1 .52.038l3.5 2.5a.5.5 0 0 1 0 .814l-3.5 2.5A.5.5 0 0 1 6 10.5v-5a.5.5 0 0 1 .271-.445z"/>
+                </svg>
+            </button>
+            <button type="button" onclick="event.stopPropagation(); removeFromQueue('{{ item.ticker }}')"
+                    class="shrink-0 w-4 h-4 flex items-center justify-center text-text-muted hover:text-negative transition-colors"
+                    title="Remove {{ item.ticker }}">
+                <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
+                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                </svg>
+            </button>
+        </div>
+        {% endfor %}
+        {% endfor %}
+        {% if priority_bands | sum(attribute='count') == 0 %}
+        <p class="text-xs text-text-muted py-2">Queue is empty — add tickers from Universe</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Kanban verdict columns -->
+<div class="overflow-x-auto -mx-2 px-2">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 min-w-0 reveal" data-stagger>
+            {% set col_tints = {
+                'STRONG_BUY': 'bg-positive-soft',
+                'BUY': 'bg-accent-soft',
+                'HOLD': 'bg-crucible-soft',
+                'SKIP': 'bg-negative-soft',
+            } %}
+            {% set col_colors = {
+                'STRONG_BUY': 'positive',
+                'BUY': 'accent',
+                'HOLD': 'crucible',
+                'SKIP': 'negative',
+            } %}
             {% for col in columns %}
-            <div class="min-h-[500px] kanban-column"
+            <div class="min-h-[500px] min-w-0 overflow-hidden kanban-column rounded-2xl {{ col_tints.get(col.verdict, '') }} p-3 reveal"
+                 data-stagger
                  ondragover="onDragOver(event)"
                  ondragleave="onDragLeave(event)"
                  ondrop="onDrop(event, '{{ col.verdict }}')">
-                <div class="flex items-center justify-between mb-3">
-                    <h4 class="text-sm font-semibold
-                               {{ 'text-green-600' if col.verdict == 'STRONG_BUY' else '' }}
-                               {{ 'text-blue-600' if col.verdict == 'BUY' else '' }}
-                               {{ 'text-amber-600' if col.verdict == 'HOLD' else '' }}
-                               {{ 'text-red-600' if col.verdict == 'SKIP' else '' }}">
-                        {{ col.verdict }}
-                    </h4>
-                    <span class="text-xs text-zinc-400">{{ col.cards | length }}</span>
+                <div class="flex items-center justify-between mb-3 px-1">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-{{ col_colors.get(col.verdict, 'text-primary') }}"></span>
+                        <h4 class="text-xs font-semibold uppercase tracking-widest text-{{ col_colors.get(col.verdict, 'text-primary') }}">
+                            {{ col.verdict }}
+                        </h4>
+                    </div>
+                    <span class="text-xs text-text-muted bg-surface-elevated px-2 py-0.5 rounded-lg font-mono">{{ col.cards | length }}</span>
                 </div>
-                <div class="space-y-3">
+                <div class="space-y-2">
                     {% for item in col.cards %}
-                    <div class="bg-white border border-zinc-200 rounded-lg p-4 kanban-card"
+                    <div class="card card-interactive card-accent-{{ col_colors.get(col.verdict, 'blue')|replace('accent', 'blue')|replace('positive', 'green')|replace('negative', 'red')|replace('crucible', 'purple') }} bg-surface-elevated rounded-xl"
                          draggable="true"
                          ondragstart="onDragStart(event)"
                          ondragend="onDragEnd(event)"
                          data-ticker="{{ item.ticker }}"
                          data-verdict="{{ col.verdict }}">
+                        <!-- Header row: ticker + verdict + conviction bar -->
                         <div class="flex items-center justify-between mb-2">
-                            <span class="font-mono font-semibold text-sm">{{ item.ticker }}</span>
-                            <span class="text-xs font-mono text-zinc-400">{{ item.conviction }}</span>
+                            <a href="/memo/{{ item.ticker }}" class="font-mono font-semibold text-sm text-accent hover:opacity-80 transition-opacity">{{ item.ticker }}</a>
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-mono font-bold {{ 'text-positive' if (item.conviction or 0) >= 0.6 else 'text-accent' if (item.conviction or 0) >= 0.3 else 'text-amber-400' if (item.conviction or 0) >= 0.1 else 'text-text-muted' }}">{{ "%.0f"|format([item.conviction * 100, 0]|max) }}%</span>
+                            </div>
                         </div>
-                        <p class="text-xs text-zinc-500">{{ item.thesis | truncate(80) }}</p>
-                        <div class="mt-2 text-xs text-zinc-400 font-mono">{{ item.timestamp }}</div>
-                        <div class="flex items-center gap-1 mt-2">
-                            <span class="text-xs px-1.5 py-0.5 rounded
-                                         {{ 'bg-red-50 text-red-600' if item.priority == 'HIGH' else '' }}
-                                         {{ 'bg-amber-50 text-amber-600' if item.priority == 'MEDIUM' else '' }}
-                                         {{ 'bg-zinc-100 text-zinc-500' if item.priority == 'LOW' or not item.priority else '' }}">
-                                {{ item.priority | default('LOW') }}
-                            </span>
+                        <!-- Conviction progress bar -->
+                        <div class="h-1.5 bg-surface-sunken rounded-full overflow-hidden mb-2">
+                            {% set conv_pct = [item.conviction * 100, 0]|max %}
+                            {% set conv_clamped = [conv_pct, 100]|min %}
+                            <div class="h-full rounded-full transition-all duration-500 {{ 'bg-positive' if conv_pct >= 60 else 'bg-accent' if conv_pct >= 30 else 'bg-amber-400' if conv_pct >= 10 else 'bg-text-muted' }}" style="width: {{ conv_clamped }}%"></div>
                         </div>
-                        {% if col.verdict == 'SKIP' %}
-                        <button onclick="queueTickerNow('{{ item.ticker }}')"
-                                class="mt-2 px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                            Run again now
-                        </button>
+                        <!-- Thesis -->
+                        {% if item.thesis %}
+                        <p class="text-xs text-text-secondary overflow-hidden leading-snug mb-1.5" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical" title="{{ item.thesis }}">{{ item.thesis | truncate(140, killwords=True, end='…') }}</p>
                         {% endif %}
-                    </div>
-                    {% else %}
-                    <div class="border-2 border-dashed border-zinc-200 rounded-lg p-8 text-center">
-                        <p class="text-sm text-zinc-400">No items</p>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-
-    <!-- Right Rail: P1-P4 Priority Queue -->
-    <div class="w-72 shrink-0">
-        <div class="bg-white border border-zinc-200 rounded-lg p-4 sticky top-20">
-            <div class="flex items-center justify-between mb-4">
-                <h3 class="text-sm font-semibold text-zinc-900">Priority Queue</h3>
-                <button onclick="promoteAllP1()"
-                        class="px-2 py-1 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded transition-colors font-medium"
-                        title="Pin all P1 items for next cycle">
-                    Promote all P1
-                </button>
-            </div>
-
-            <!-- Saved schemes -->
-            <div class="mb-4 border-b border-zinc-100 pb-3">
-                <div class="flex gap-2">
-                    <input id="scheme-name-input" type="text" placeholder="Scheme name..."
-                           class="flex-1 px-2 py-1 text-xs border border-zinc-200 rounded focus:border-blue-500 outline-none">
-                    <button onclick="saveCurrentScheme()"
-                            class="px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                        Save
-                    </button>
-                    <button onclick="loadSchemeSelector()"
-                            class="px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 rounded transition-colors">
-                        Load
-                    </button>
-                </div>
-                <div id="scheme-list" class="hidden mt-2 space-y-1"></div>
-            </div>
-
-            <!-- P1-P4 Bands -->
-            {% for band in priority_bands %}
-            <div class="mb-3 priority-band"
-                 data-band="{{ band.band }}"
-                 ondragover="onBandDragOver(event, '{{ band.band }}')"
-                 ondragleave="onBandDragLeave(event)"
-                 ondrop="onBandDrop(event, '{{ band.band }}')">
-                <div class="flex items-center justify-between mb-2">
-                    <h4 class="text-xs font-semibold
-                               {{ 'text-red-600' if band.band == 'P1' else '' }}
-                               {{ 'text-amber-600' if band.band == 'P2' else '' }}
-                               {{ 'text-blue-600' if band.band == 'P3' else '' }}
-                               {{ 'text-zinc-500' if band.band == 'P4' else '' }}">
-                        {{ band.label }}
-                    </h4>
-                    <span class="text-xs text-zinc-400">{{ band.count }}</span>
-                </div>
-                <div class="space-y-1.5 min-h-[40px] {% if band.count == 0 %}border border-dashed border-zinc-200 rounded p-2{% endif %}"
-                     id="band-{{ band.band }}">
-                    {% for item in band.tickers %}
-                    <div class="flex items-center gap-1.5 px-2 py-1.5 rounded text-xs
-                                {{ 'bg-red-50 border border-red-200' if band.band == 'P1' else '' }}
-                                {{ 'bg-amber-50 border border-amber-200' if band.band == 'P2' else '' }}
-                                {{ 'bg-blue-50 border border-blue-200' if band.band == 'P3' else '' }}
-                                {{ 'bg-zinc-50 border border-zinc-200' if band.band == 'P4' else '' }}
-                                queue-chip"
-                         draggable="true"
-                         ondragstart="onChipDragStart(event, '{{ item.ticker }}', '{{ band.band }}')"
-                         data-ticker="{{ item.ticker }}"
-                         data-band="{{ band.band }}"
-                         data-score="{{ item.priority_score }}"
-                         data-active="{{ item.is_active_holding | default(false) }}">
-                        <!-- Pin indicator -->
-                        <button onclick="togglePin('{{ item.ticker }}', {{ not item.pinned }})"
-                                class="shrink-0 w-4 h-4 flex items-center justify-center
-                                       {{ 'text-blue-600' if item.pinned else 'text-zinc-300 hover:text-zinc-500' }}"
-                                title="{{ 'Unpin' if item.pinned else 'Pin' }} {{ item.ticker }}">
-                            <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
-                                {% if item.pinned %}
-                                <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.354.854H13.5l-2.5 2.5v3.828a.5.5 0 0 1-.813.39l-2.687-2.188-3.5 3.5H2.828l4-4L3.5 7.313a.5.5 0 0 1 .39-.813H7.72l2.5-2.5V1.08a.5.5 0 0 1 .608-.357z"/>
-                                {% else %}
-                                <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.354.854H13.5l-2.5 2.5v3.828a.5.5 0 0 1-.813.39l-2.687-2.188-3.5 3.5H2.828l4-4L3.5 7.313a.5.5 0 0 1 .39-.813H7.72l2.5-2.5V1.08a.5.5 0 0 1 .608-.357z" opacity="0.3"/>
-                                {% endif %}
-                            </svg>
-                        </button>
-                        <!-- Ticker label -->
-                        <span class="font-mono font-semibold
-                                     {{ 'text-red-700' if item.is_active_holding else '' }}">
-                            {{ item.ticker }}
-                        </span>
-                        {% if item.is_active_holding %}
-                        <span class="text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-600 font-medium">ACTIVE</span>
-                        {% endif %}
-                        <!-- Score -->
-                        <span class="ml-auto font-mono text-zinc-400" title="Priority score">{{ item.priority_score }}</span>
-                        <!-- Actions dropdown -->
-                        <div class="relative">
-                            <button onclick="toggleChipMenu(event, '{{ item.ticker }}')"
-                                    class="w-4 h-4 flex items-center justify-center text-zinc-400 hover:text-zinc-600">
-                                <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
-                                    <circle cx="8" cy="3" r="1.5"/>
-                                    <circle cx="8" cy="8" r="1.5"/>
-                                    <circle cx="8" cy="13" r="1.5"/>
-                                </svg>
-                            </button>
-                            <div id="chip-menu-{{ item.ticker }}" class="hidden absolute right-0 top-5 bg-white border border-zinc-200 rounded shadow-lg z-10 py-1 w-36">
-                                <button onclick="queueTickerNow('{{ item.ticker }}'); closeChipMenus()"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100">
-                                    Run again now
-                                </button>
-                                <button onclick="promoteToP1('{{ item.ticker }}'); closeChipMenus()"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100">
-                                    Promote to priority
-                                </button>
-                                <button onclick="togglePin('{{ item.ticker }}', {{ not item.pinned }}); closeChipMenus()"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100">
-                                    {{ 'Unpin' if item.pinned else 'Pin' }}
-                                </button>
-                                {% if item.is_active_holding %}
-                                <button onclick="forceExit('{{ item.ticker }}'); closeChipMenus()"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50">
-                                    Force exit (TOTP)
+                        <!-- Footer: timestamp + priority + actions -->
+                        <div class="flex items-center justify-between mt-2 pt-2 border-t border-border-subtle">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[10px] text-text-muted font-mono" {% if item.timestamp %}data-time-ago="{{ item.timestamp }}"{% endif %}>{{ item.timestamp }}</span>
+                                <span class="text-[10px] px-1.5 py-0.5 rounded-lg font-medium
+                                             {{ 'bg-negative-soft text-negative' if item.priority == 'HIGH' else '' }}
+                                             {{ 'bg-crucible-soft text-crucible' if item.priority == 'MEDIUM' else '' }}
+                                             {{ 'bg-surface-sunken text-text-muted' if item.priority == 'LOW' or not item.priority else '' }}">
+                                    {{ item.priority | default('LOW') }}
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                {% if col.verdict == 'SKIP' %}
+                                <button type="button" onclick="queueTickerNow('{{ item.ticker }}')"
+                                        class="text-[10px] text-accent hover:bg-accent-soft px-2 py-1 rounded-lg transition-colors font-medium">
+                                    Re-run
                                 </button>
                                 {% endif %}
+                                <a href="/memo/{{ item.ticker }}" class="text-[10px] text-accent hover:opacity-80 transition-opacity font-medium">Memo &rarr;</a>
                             </div>
                         </div>
                     </div>
-                    {% endfor %}
-                    {% if band.count == 0 %}
-                    <p class="text-xs text-zinc-300 text-center">Empty</p>
+                    {% else %}
+                    {% if col.verdict == 'STRONG_BUY' %}
+                    <div class="flex flex-col items-center justify-center py-8 text-center gap-1">
+                        <p class="text-xs font-semibold text-positive/50">No STRONG_BUY signals</p>
+                        <p class="text-[10px] text-text-muted/60">Conviction ≥ 0.6 required</p>
+                    </div>
+                    {% elif col.verdict == 'BUY' %}
+                    <div class="flex flex-col items-center justify-center py-8 text-center gap-1">
+                        <p class="text-xs font-semibold text-accent/50">No BUY signals</p>
+                        <p class="text-[10px] text-text-muted/60">Conviction ≥ 0.3 required</p>
+                    </div>
+                    {% else %}
+                    <div class="border-2 border-dashed border-border rounded-xl p-8 text-center">
+                        <p class="text-sm text-text-muted">No items</p>
+                    </div>
                     {% endif %}
+                    {% endfor %}
                 </div>
             </div>
             {% endfor %}
         </div>
     </div>
-</div>
 
 <script>
-// --- Drag and drop for kanban columns (verdict) ---
+var _draggedKanbanCard = null;
+var _dragPlaceholder = null;
+
 function onDragStart(e) {
+    _draggedKanbanCard = e.target;
     e.target.classList.add('dragging');
     e.dataTransfer.setData('text/plain', e.target.getAttribute('data-ticker'));
+    e.dataTransfer.effectAllowed = 'move';
+    _dragPlaceholder = document.createElement('div');
+    _dragPlaceholder.className = 'border-2 border-dashed border-accent/30 rounded-xl p-4 bg-accent-soft opacity-60';
+    _dragPlaceholder.textContent = 'Drop here';
 }
+
 function onDragEnd(e) {
     e.target.classList.remove('dragging');
+    if (_dragPlaceholder && _dragPlaceholder.parentNode) {
+        _dragPlaceholder.parentNode.removeChild(_dragPlaceholder);
+    }
+    _dragPlaceholder = null;
+    _draggedKanbanCard = null;
+    document.querySelectorAll('.kanban-column').forEach(function(col) {
+        col.classList.remove('drag-over');
+        col.style.boxShadow = '';
+    });
 }
+
 function onDragOver(e) {
     e.preventDefault();
-    e.currentTarget.classList.add('drag-over');
+    e.dataTransfer.dropEffect = 'move';
+    var col = e.currentTarget;
+    if (!col.classList.contains('drag-over')) {
+        col.classList.add('drag-over');
+        col.style.boxShadow = '0 0 0 2px var(--accent), 0 0 12px var(--accent-ring)';
+    }
+    if (_dragPlaceholder && _draggedKanbanCard) {
+        var container = col.querySelector('.space-y-2');
+        if (container && !_dragPlaceholder.parentNode) {
+            var cards = Array.from(container.querySelectorAll('.kanban-card, .card-interactive'));
+            var insertBefore = null;
+            for (var i = 0; i < cards.length; i++) {
+                var rect = cards[i].getBoundingClientRect();
+                if (e.clientY < rect.top + rect.height / 2) {
+                    insertBefore = cards[i];
+                    break;
+                }
+            }
+            if (insertBefore) {
+                container.insertBefore(_dragPlaceholder, insertBefore);
+            } else {
+                container.appendChild(_dragPlaceholder);
+            }
+        }
+    }
 }
+
 function onDragLeave(e) {
-    e.currentTarget.classList.remove('drag-over');
+    var related = e.relatedTarget;
+    if (!e.currentTarget.contains(related)) {
+        e.currentTarget.classList.remove('drag-over');
+        e.currentTarget.style.boxShadow = '';
+        if (_dragPlaceholder && _dragPlaceholder.parentNode) {
+            _dragPlaceholder.parentNode.removeChild(_dragPlaceholder);
+        }
+    }
 }
+
 function onDrop(e, verdict) {
     e.preventDefault();
     e.currentTarget.classList.remove('drag-over');
+    e.currentTarget.style.boxShadow = '';
     var ticker = e.dataTransfer.getData('text/plain');
-    e.currentTarget.classList.remove('drag-over');
+    if (!ticker || !_draggedKanbanCard) return;
+    var targetContainer = e.currentTarget.querySelector('.space-y-2');
+    if (targetContainer && _dragPlaceholder && _dragPlaceholder.parentNode === targetContainer) {
+        _draggedKanbanCard.classList.add('kanban-card-smooth');
+        targetContainer.insertBefore(_draggedKanbanCard, _dragPlaceholder);
+        targetContainer.removeChild(_dragPlaceholder);
+        _draggedKanbanCard.classList.remove('dragging');
+        _draggedKanbanCard.setAttribute('data-verdict', verdict);
+        fetch('/pipeline/queue/reorder', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ticker: ticker, from_band: '', to_band: '', verdict: verdict})
+        }).then(function(r) { return r.json(); })
+        .then(function(data) {
+            showToast(ticker + ' moved to ' + verdict, 'success', 1500);
+        });
+    }
+    if (_dragPlaceholder && _dragPlaceholder.parentNode) {
+        _dragPlaceholder.parentNode.removeChild(_dragPlaceholder);
+    }
+    _dragPlaceholder = null;
+    _draggedKanbanCard = null;
 }
 
-// --- Drag and drop for priority bands (P1-P4) ---
-function onChipDragStart(e, ticker, band) {
-    e.dataTransfer.setData('text/x-pmacs-ticker', ticker);
-    e.dataTransfer.setData('text/x-pmacs-band', band);
-    e.target.style.opacity = '0.5';
-    setTimeout(function() { e.target.style.opacity = '1'; }, 0);
-}
-function onBandDragOver(e, band) {
-    e.preventDefault();
-    e.currentTarget.style.outline = '2px dashed #2563eb';
-    e.currentTarget.style.outlineOffset = '-2px';
-}
-function onBandDragLeave(e) {
-    e.currentTarget.style.outline = '';
-    e.currentTarget.style.outlineOffset = '';
-}
-function onBandDrop(e, toBand) {
-    e.preventDefault();
-    e.currentTarget.style.outline = '';
-    e.currentTarget.style.outlineOffset = '';
-    var ticker = e.dataTransfer.getData('text/x-pmacs-ticker');
-    var fromBand = e.dataTransfer.getData('text/x-pmacs-band');
-    if (!ticker || !fromBand || fromBand === toBand) return;
-    fetch('/pipeline/queue/reorder', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ticker: ticker, from_band: fromBand, to_band: toBand})
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
-        if (data.ok) {
-            showToast('Moved ' + ticker + ' to ' + toBand, 'success');
-            setTimeout(function() { window.location.reload(); }, 500);
-        } else {
-            showToast('Failed to move: ' + (data.error || 'Unknown'), 'error');
-        }
-    });
+function onChipDragStartUnified(e) {
+    e.dataTransfer.setData('text/plain', e.currentTarget.getAttribute('data-ticker'));
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.style.opacity = '0.5';
 }
 
-// --- Queue actions ---
-function togglePin(ticker, pinned) {
-    fetch('/pipeline/queue/pin', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ticker: ticker, pinned: pinned})
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
-        if (data.ok) {
-            showToast(ticker + (pinned ? ' pinned' : ' unpinned'), 'success');
-            setTimeout(function() { window.location.reload(); }, 500);
-        }
-    });
+function onChipDragOverUnified(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.style.borderColor = 'var(--accent)';
+}
+
+function onChipDropUnified(e) {
+    e.preventDefault();
+    e.currentTarget.style.borderColor = '';
+    var draggedTicker = e.dataTransfer.getData('text/plain');
+    var targetTicker = e.currentTarget.getAttribute('data-ticker');
+    if (!draggedTicker || !targetTicker || draggedTicker === targetTicker) {
+        // Reset opacity
+        document.querySelectorAll('.queue-chip').forEach(function(c) { c.style.opacity = ''; });
+        return;
+    }
+    // Swap positions in DOM
+    var queue = document.getElementById('unified-queue');
+    var chips = Array.from(queue.querySelectorAll('.queue-chip'));
+    var draggedEl = chips.find(function(c) { return c.getAttribute('data-ticker') === draggedTicker; });
+    var targetEl = chips.find(function(c) { return c.getAttribute('data-ticker') === targetTicker; });
+    if (draggedEl && targetEl) {
+        queue.insertBefore(draggedEl, targetEl);
+        draggedEl.style.opacity = '';
+        var newOrder = Array.from(queue.querySelectorAll('.queue-chip')).map(function(c) { return c.getAttribute('data-ticker'); });
+        fetch('/pipeline/queue/reorder', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({order: newOrder})
+        }).then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) showToast('Queue reordered', 'success', 1500);
+        });
+    }
 }
 
 function promoteAllP1() {
     fetch('/pipeline/queue/promote', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'}
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
+    }).then(function(resp) { return resp.json(); })
+    .then(function(data) {
         if (data.ok) {
-            showToast('Promoted ' + data.promoted_count + ' P1 items', 'success');
-            setTimeout(function() { window.location.reload(); }, 500);
-        }
-    });
-}
-
-function promoteToP1(ticker) {
-    // Find current band from chip data
-    var chip = document.querySelector('[data-ticker="' + ticker + '"].queue-chip');
-    var fromBand = chip ? chip.getAttribute('data-band') : 'P4';
-    if (fromBand === 'P1') {
-        showToast(ticker + ' already in P1', 'info');
-        return;
-    }
-    fetch('/pipeline/queue/reorder', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ticker: ticker, from_band: fromBand, to_band: 'P1'})
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
-        if (data.ok) {
-            showToast(ticker + ' promoted to P1', 'success');
+            showToast('Running next queued ticker', 'success');
             setTimeout(function() { window.location.reload(); }, 500);
         }
     });
 }
 
 function queueTickerNow(ticker) {
-    // Promote to P1 and pin
     fetch('/pipeline/queue/reorder', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -346,87 +356,84 @@ function queueTickerNow(ticker) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ticker: ticker, pinned: true})
         });
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
+    }).then(function(resp) { return resp.json(); })
+    .then(function(data) {
         if (data.ok) {
             showToast('Queuing ' + ticker + ' for next cycle (P1 priority)', 'info');
         }
     });
 }
 
+function removeFromQueue(ticker) {
+    fetch('/pipeline/queue/remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker: ticker})
+    }).then(function(resp) { return resp.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            var chip = document.querySelector('[data-ticker="' + ticker + '"].queue-chip');
+            if (chip) {
+                chip.style.transition = 'opacity 0.2s, transform 0.2s';
+                chip.style.opacity = '0';
+                chip.style.transform = 'scale(0.8)';
+                setTimeout(function() { chip.remove(); }, 200);
+            }
+            showToast(ticker + ' removed from queue', 'info');
+        } else {
+            showToast('Failed: ' + (data.error || 'Not in queue'), 'error');
+        }
+    });
+}
+
 function forceExit(ticker) {
-    // TOTP-gated for active holdings
     open_totp_modal({
         actionId: 'pipeline.force_exit.' + ticker,
         description: 'Force exit position: ' + ticker,
         consequences: 'Position will be immediately closed at market. This is irreversible.',
-        callbackUrl: '/api/pipeline/force-exit',
-        onSuccess: function() {
-            showToast('Force exit requested for ' + ticker, 'success');
-            setTimeout(function() { window.location.reload(); }, 1000);
+        confirmText: 'EXIT',
+        onSuccess: function(result) {
+            fetch('/api/pipeline/force-exit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ticker: ticker, totp_code: result.code})
+            }).then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    showToast('Force exit requested for ' + ticker, 'success');
+                    setTimeout(function() { window.location.reload(); }, 1000);
+                } else {
+                    showToast('Failed: ' + (data.error || 'Unknown'), 'error');
+                }
+            });
         }
     });
 }
 
-// --- Chip context menus ---
-function toggleChipMenu(e, ticker) {
-    e.stopPropagation();
-    closeChipMenus();
-    var menu = document.getElementById('chip-menu-' + ticker);
-    if (menu) menu.classList.toggle('hidden');
-}
-function closeChipMenus() {
-    document.querySelectorAll('[id^="chip-menu-"]').forEach(function(m) {
-        m.classList.add('hidden');
-    });
-}
-document.addEventListener('click', closeChipMenus);
-
-// --- Priority scheme management ---
-function saveCurrentScheme() {
-    var name = document.getElementById('scheme-name-input').value.trim();
-    if (!name) {
-        showToast('Enter a scheme name', 'warning');
-        return;
+document.addEventListener('DOMContentLoaded', function() {
+    if (typeof PMACS_ANIM !== "undefined") {
+        PMACS_ANIM.initScrollReveal();
     }
-    var config = {};
-    document.querySelectorAll('.queue-chip').forEach(function(chip) {
-        config[chip.getAttribute('data-ticker')] = chip.getAttribute('data-band');
-    });
-    fetch('/pipeline/queue/scheme/save', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name: name, config: config})
-    }).then(function(resp) {
-        return resp.json();
-    }).then(function(data) {
-        if (data.ok) {
-            showToast('Scheme "' + name + '" saved', 'success');
-        } else {
-            showToast('Failed to save scheme', 'error');
-        }
-    });
-}
+    var searchInput = document.querySelector('[data-page-search]');
+    var verdictSelect = document.getElementById('verdict-filter-select');
+    if (searchInput) { searchInput.addEventListener('input', function() { filterPipelineCards(); }); }
+    if (verdictSelect) { verdictSelect.addEventListener('change', function() { filterPipelineCards(); }); }
+});
 
-function loadSchemeSelector() {
-    var list = document.getElementById('scheme-list');
-    list.classList.toggle('hidden');
-    // In production this would load scheme names from the server
-    list.innerHTML = '<p class="text-xs text-zinc-400">No saved schemes yet</p>';
-}
-
-function loadScheme(name) {
-    fetch('/pipeline/queue/scheme/' + encodeURIComponent(name))
-        .then(function(resp) { return resp.json(); })
-        .then(function(data) {
-            if (data.ok) {
-                showToast('Loaded scheme "' + name + '"', 'success');
-                setTimeout(function() { window.location.reload(); }, 500);
-            } else {
-                showToast('Scheme not found', 'warning');
-            }
-        });
+function filterPipelineCards() {
+    var searchInput = document.querySelector('[data-page-search]');
+    var verdictSelect = document.getElementById('verdict-filter-select');
+    var query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    var selectedVerdict = verdictSelect ? verdictSelect.value : 'All Verdicts';
+    document.querySelectorAll('.kanban-card, .card-interactive[data-ticker][data-verdict]').forEach(function(card) {
+        var ticker = (card.getAttribute('data-ticker') || '').toLowerCase();
+        var verdict = card.getAttribute('data-verdict') || '';
+        var thesisEl = card.querySelector('.text-text-secondary');
+        var thesis = thesisEl ? thesisEl.textContent.toLowerCase() : '';
+        var matchesSearch = !query || ticker.indexOf(query) >= 0 || thesis.indexOf(query) >= 0;
+        var matchesVerdict = selectedVerdict === 'All Verdicts' || verdict === selectedVerdict;
+        card.style.display = (matchesSearch && matchesVerdict) ? '' : 'none';
+    });
 }
 </script>
 {% endif %}

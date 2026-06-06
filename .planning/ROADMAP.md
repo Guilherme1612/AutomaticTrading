@@ -21,32 +21,33 @@
 | [Phase 11](phases/phase-11/PLAN.md) | Polish + Operator Experience | Dynamic sparklines, a11y audit, perf profiling, workflow validation — **LIVE-READY** | — |
 | [Phase 12](phases/phase-12/PLAN.md) | Spec Gap Closure | Evidence pipeline, real prices, storage activation, engine completion, flywheel closure — **SPEC-COMPLIANT** | — |
 | [Phase 13](phases/phase-13/PLAN.md) | UI Polish | Cmd-K palette, toast system, sparklines, a11y audit, operator runbook — **PRODUCTION-READY** | — |
+| [Phase 16](phases/phase-16/PLAN.md) | Token-Cost Accounting | Cost layer, budget enforcement, reconciliation, cost UI — **COST-AWARE** | — |
 
 ## Dependencies (linear chain)
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12 → Phase 13
-                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C    ↑ SPEC-COMPLIANT              ↑ PRODUCTION-READY
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12 → Phase 13 → Phase 16
+                     ↑ Checkpoint A    ↑ Checkpoint B              ↑ Checkpoint C    ↑ SPEC-COMPLIANT              ↑ PRODUCTION-READY   ↑ COST-AWARE
 ```
 
-Phases 1-12 complete. System is SPEC-COMPLIANT. Wave 5.3 UI polish deferred.
+Phases 1-13 complete. System is PRODUCTION-READY.
 
 ## Phase 9 Plans
 
-- [ ] Wave 1: Core Skeleton -- flock lock, checkpoint resume, kill switch, close
-- [ ] Wave 2: Pre-Cycle Data + Queue -- FX, universe, gatekeeper, queue composition
-- [ ] Wave 3: Per-Symbol Pipeline -- personas, arbitration, crucible, sizing, mock execution
-- [ ] Wave 4: Post-Cycle Flywheel -- calibration, lessons, FDE, reconciliation
-- [ ] Wave 5: Hardening -- timeouts, graceful shutdown, kill switch mid-cycle
-- [ ] Wave 6: Performance Validation -- timing instrumentation, edge cases, exit test
+- [x] Wave 1: Core Skeleton -- flock lock, checkpoint resume, kill switch, close
+- [x] Wave 2: Pre-Cycle Data + Queue -- FX, universe, gatekeeper, queue composition
+- [x] Wave 3: Per-Symbol Pipeline -- personas, arbitration, crucible, sizing, mock execution
+- [x] Wave 4: Post-Cycle Flywheel -- calibration, lessons, FDE, reconciliation
+- [x] Wave 5: Hardening -- timeouts, graceful shutdown, kill switch mid-cycle
+- [x] Wave 6: Performance Validation -- timing instrumentation, edge cases, exit test
 
 ## Phase 10 Plans
 
-- [ ] Wave 1: BrokerAdapter ABC + AlpacaPaperAdapter
-- [ ] Wave 2: Catastrophe Net Wiring
-- [ ] Wave 3: Wizard UI (11-step templates + backend steps)
-- [ ] Wave 4: Operational Gaps (Ollama schemas, dead-letter, SSE resume)
-- [ ] Wave 5: Integration + Exit Test
+- [x] Wave 1: BrokerAdapter ABC + AlpacaPaperAdapter
+- [x] Wave 2: Catastrophe Net Wiring
+- [x] Wave 3: Wizard UI (11-step templates + backend steps)
+- [x] Wave 4: Operational Gaps (Ollama schemas, dead-letter, SSE resume)
+- [x] Wave 5: Integration + Exit Test
 
 ## Phase 11 Plans
 
@@ -66,14 +67,14 @@ Phases 1-12 complete. System is SPEC-COMPLIANT. Wave 5.3 UI polish deferred.
 
 ## Phase 13 Plans (Wave 5.3 Polish)
 
-- [ ] Cmd-K command palette
-- [ ] Toast notification system
-- [ ] Agents page animations (persona progress bars)
-- [ ] Accessibility audit (axe-core)
-- [ ] Performance profiling (cycle timing)
-- [ ] Operator runbook documentation
-- [ ] "Copy for Claude Code" button on debug events
-- [ ] Notification policy full implementation
+- [x] Cmd-K command palette
+- [x] Toast notification system
+- [x] Agents page animations (persona progress bars)
+- [x] Accessibility audit (axe-core)
+- [x] Performance profiling (cycle timing)
+- [x] Operator runbook documentation
+- [x] "Copy for Claude Code" button on debug events
+- [x] Notification policy full implementation
 
 ## Operator Milestones
 

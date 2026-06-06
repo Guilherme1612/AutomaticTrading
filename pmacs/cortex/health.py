@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 
-HEARTBEAT_DIR = Path("/var/db/pmacs/heartbeat")
+from pmacs.config import data_dir as _data_dir
+
+HEARTBEAT_DIR = _data_dir() / "heartbeats"
 STALE_THRESHOLD_S = 30.0
 
 

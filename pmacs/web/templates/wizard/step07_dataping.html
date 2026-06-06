@@ -2,6 +2,7 @@
    Green/red matrix per source. CRITICAL blocking, IMPORTANT/NICE_TO_HAVE warn.
    Expects: current_step, data_result with {results: {source: {ok, message}}, all_ok}
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">Data Source Connectivity</h1>
     <p class="text-text-secondary text-sm mb-8">Verifying API connectivity for each data source.</p>
@@ -29,9 +30,9 @@
                 <div>
                     <span class="text-sm text-text-primary">{{ name }}</span>
                     <span class="ml-2 text-xs px-1.5 py-0.5 rounded
-                        {% if criticality == "CRITICAL" %}bg-red-900/30 text-red-400
-                        {% elif criticality == "IMPORTANT" %}bg-amber-900/30 text-amber-400
-                        {% else %}bg-zinc-700 text-zinc-400{% endif %}">
+                        {% if criticality == "CRITICAL" %}bg-negative-soft text-negative
+                        {% elif criticality == "IMPORTANT" %}bg-crucible-soft text-crucible
+                        {% else %}bg-surface-sunken text-text-muted{% endif %}">
                         {{ criticality }}
                     </span>
                 </div>
@@ -69,18 +70,39 @@
     {% endif %}
 
     <div class="flex justify-between">
+        {% if data_result and not data_result.get("all_ok") and data_result.get("results") %}
+        <button hx-post="/wizard/step/6"
+                hx-vals='{"skip_ping": "true"}'
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-4 py-2 text-text-secondary text-sm hover:text-text-primary transition-colors">
+            Continue Anyway
+        </button>
+        {% else %}
         <span></span>
+        {% endif %}
         {% if data_result and data_result.get("all_ok") %}
         <button hx-post="/wizard/step/7"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Next
+        </button>
+        {% elif data_result and data_result.get("results") %}
+        <button hx-post="/wizard/step/7"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Retry Ping
         </button>
         {% else %}
         <button hx-post="/wizard/step/7"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Ping All Sources
         </button>

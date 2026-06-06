@@ -8,6 +8,7 @@ from __future__ import annotations
 # -- Position limits (Architecture.md §9.3, Source.md §1) --
 MAX_SINGLE_POSITION_PCT: float = 0.20
 MAX_CONCURRENT_POSITIONS: int = 5
+MAX_POSITION_USD: float = 1_000.0  # 20% of $5K paper capital
 PAPER_CAPITAL_USD: float = 5_000.0
 CATASTROPHE_NET_PCT: float = 0.15
 
@@ -48,6 +49,13 @@ MUTATION_MAX_CONCURRENT_AB: int = 3
 # -- Mode promotion gates (Phases.md §3) --
 PROMOTION_THRESHOLDS: dict[str, dict[str, float | int]] = {
     "SHADOW_PAPER_to_PAPER_VALIDATED": {
+        "min_cycles": 90,
+        "min_trades": 200,
+        "max_brier": 0.30,
+        "min_sharpe": 0.0,
+        "max_drawdown_pct": 15.0,
+    },
+    "PAPER_to_PAPER_VALIDATED": {
         "min_cycles": 90,
         "min_trades": 200,
         "max_brier": 0.30,

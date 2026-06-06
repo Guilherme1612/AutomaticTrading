@@ -108,6 +108,16 @@ def classify(holding: HoldingContext, **kwargs) -> ClassifyResult:  # noqa: ANN0
     if holding.actual_outcome == "down" or holding.state in (HoldingState.RESOLVED_DOWN, HoldingState.RESOLVED_MIXED):
         return _classify_persona_failure(holding, holding_id=holding_id, cycle_id=cycle_id)
 
+    # --- RESOLVED_UP (success — still classify for flywheel learning) ------
+    if holding.state == HoldingState.RESOLVED_UP:
+        return ClassifyResult(
+            primary=FailureTaxonomy.UNCLASSIFIED,
+            severity=0.0,
+            summary=f"Successful resolution: {holding.actual_outcome}",
+            holding_id=holding_id,
+            cycle_id=cycle_id,
+        )
+
     # --- RESOLUTION_TIMEOUT ------------------------------------------------
     if holding.state == HoldingState.RESOLUTION_TIMEOUT:
         return ClassifyResult(

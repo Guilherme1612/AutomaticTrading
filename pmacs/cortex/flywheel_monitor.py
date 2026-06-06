@@ -40,7 +40,11 @@ class FlywheelMonitor:
 
     def get_health(self) -> FlywheelHealthSnapshot:
         """Get the current flywheel health snapshot with real metrics."""
-        duckdb = self._duckdb_path or Path("/var/db/pmacs/pmacs_analytics.duckdb")
+        if self._duckdb_path is not None:
+            duckdb = self._duckdb_path
+        else:
+            from pmacs.config import data_dir
+            duckdb = data_dir() / "pmacs_analytics.duckdb"
 
         rolling_brier = get_rolling_brier(window=30, duckdb_path=duckdb)
         rolling_sharpe = get_rolling_sharpe(window=20, duckdb_path=duckdb)
@@ -134,6 +138,7 @@ class FlywheelMonitor:
                     "dd_ok": dd_ok,
                 },
                 level="WARN",
+                error_code="FLYWHEEL_HEALTH_CHECK",
                 msg=f"Flywheel unhealthy: brier={health.rolling_brier}, sharpe={health.rolling_sharpe}, dd={health.max_drawdown_pct}",
             )
 

@@ -4,7 +4,7 @@ Verifies ALL Pydantic models compile, instantiate, and cross-field validators wo
 """
 
 import pytest
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 
 class TestContracts:
@@ -107,7 +107,7 @@ class TestData:
         from pmacs.schemas.data import Evidence, DataSource, EvidenceType
         e = Evidence(
             id="e1", source=DataSource.POLYGON, type=EvidenceType.MARKET_DATA,
-            ticker="AAPL", fetched_at=datetime.utcnow(), content_hash="abc",
+            ticker="AAPL", fetched_at=datetime.now(timezone.utc), content_hash="abc",
         )
         assert e.ticker == "AAPL"
 
@@ -140,13 +140,13 @@ class TestFreshness:
 class TestCurrency:
     def test_fx_rate_creates(self):
         from pmacs.schemas.currency import FxRate
-        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.utcnow())
+        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.now(timezone.utc))
         assert fx.usd_per_eur == 1.08
         assert abs(fx.eur_per_usd - 1 / 1.08) < 1e-6
 
     def test_round_trip(self):
         from pmacs.schemas.currency import FxRate, usd_to_eur, eur_to_usd
-        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.utcnow())
+        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.now(timezone.utc))
         original = 100.0
         converted = eur_to_usd(usd_to_eur(original, fx), fx)
         assert abs(converted - original) < 1e-6
@@ -162,7 +162,7 @@ class TestCurrency:
         from pmacs.schemas.currency import FxRate
 
         # Verify the property works (derived, not stored)
-        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.utcnow())
+        fx = FxRate(usd_per_eur=1.08, business_date=date(2024, 1, 15), fetched_at=datetime.now(timezone.utc))
         assert "eur_per_usd" not in fx.model_dump()
         assert "eur_per_usd" not in fx.__class__.model_fields
 

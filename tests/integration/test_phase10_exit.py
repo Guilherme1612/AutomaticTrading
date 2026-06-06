@@ -241,7 +241,7 @@ class TestExit04WizardAllStepsRender:
         """Step out of range returns 400."""
         resp = web_client.post("/wizard/step/0")
         assert resp.status_code == 400
-        resp = web_client.post("/wizard/step/12")
+        resp = web_client.post("/wizard/step/13")
         assert resp.status_code == 400
 
 

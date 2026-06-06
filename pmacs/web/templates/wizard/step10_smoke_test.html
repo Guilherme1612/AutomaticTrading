@@ -1,0 +1,92 @@
+{# Wizard Step 10 — Smoke-test cycle (Source.md §12.1 Step 10)
+   Running a synthetic pipeline to verify the system works before PAPER promotion.
+   Expects: current_step, smoke_result
+#}
+{% include "wizard/_progress.html" %}
+<div class="w-full max-w-xl px-8">
+    <h1 class="text-2xl font-bold text-text-primary mb-2">Smoke-Test Cycle</h1>
+    <p class="text-text-secondary text-sm mb-8">
+        Running a synthetic pipeline to verify the system works before entering operational mode.
+    </p>
+
+    {% if smoke_result %}
+    <div class="space-y-3 mb-8">
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.db_write %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+            <span class="text-lg">{% if smoke_result.checks.db_write %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
+            <div>
+                <p class="text-sm font-medium text-text-primary">Database Read/Write</p>
+                {% if smoke_result.checks.db_error %}
+                <p class="text-xs text-negative">{{ smoke_result.checks.db_error }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.inference %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+            <span class="text-lg">{% if smoke_result.checks.inference %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
+            <div>
+                <p class="text-sm font-medium text-text-primary">{% if is_cloud %}Cloud API Key{% else %}Inference Backend{% endif %}</p>
+                {% if smoke_result.checks.inference_error %}
+                <p class="text-xs text-negative">{{ smoke_result.checks.inference_error }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.audit %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+            <span class="text-lg">{% if smoke_result.checks.audit %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
+            <div>
+                <p class="text-sm font-medium text-text-primary">Audit Chain</p>
+                {% if smoke_result.checks.audit_error %}
+                <p class="text-xs text-negative">{{ smoke_result.checks.audit_error }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.embedding %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+            <span class="text-lg">{% if smoke_result.checks.embedding %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
+            <div>
+                <p class="text-sm font-medium text-text-primary">Embedding Model (768-dim)</p>
+                {% if smoke_result.checks.embedding_error %}
+                <p class="text-xs text-negative">{{ smoke_result.checks.embedding_error }}</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if smoke_result.all_ok %}
+    <p class="text-sm text-positive mb-4">{{ smoke_result.checks_passed }}/{{ smoke_result.checks_total }} checks passed. System is ready.</p>
+    {% else %}
+    <p class="text-sm text-negative mb-4">{{ smoke_result.checks_passed }}/{{ smoke_result.checks_total }} checks passed. Fix issues before continuing.</p>
+    {% endif %}
+
+    <div class="flex justify-end">
+        {% if smoke_result.all_ok %}
+        <button hx-post="/wizard/step/11"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Promote to SHADOW + PAPER
+        </button>
+        {% else %}
+        <button hx-post="/wizard/step/10"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Retry Smoke Test
+        </button>
+        {% endif %}
+    </div>
+
+    {% else %}
+    <div class="flex justify-end">
+        <button hx-post="/wizard/step/10"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Run Smoke Test
+        </button>
+    </div>
+    {% endif %}
+</div>

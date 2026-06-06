@@ -14,9 +14,9 @@ from typing import Any
 
 from pmacs.logsys import log_debug
 
-# Lazy imports — set by _ensure_connection
+# Lazy imports — import availability is global, connection is per-instance
 _kuzu: Any = None
-_kuzu_available: bool | None = None
+_kuzu_import_available: bool | None = None
 
 
 class KuzuDBAdapter:
@@ -32,6 +32,7 @@ class KuzuDBAdapter:
         self._db: Any = None
         self._conn: Any = None
         self._schema_initialized = False
+        self._connection_failed: bool = False  # per-instance failure tracking
         self._ensure_connection()
 
     # ------------------------------------------------------------------
@@ -40,9 +41,11 @@ class KuzuDBAdapter:
 
     def _ensure_connection(self) -> bool:
         """Try to establish KuzuDB connection. Returns True if connected."""
-        global _kuzu, _kuzu_available
+        global _kuzu, _kuzu_import_available
 
-        if _kuzu_available is False:
+        if _kuzu_import_available is False:
+            return False
+        if self._connection_failed:
             return False
         if self._conn is not None:
             return True
@@ -51,9 +54,9 @@ class KuzuDBAdapter:
             if _kuzu is None:
                 import kuzu as _k  # type: ignore[import-untyped]
                 _kuzu = _k
-            _kuzu_available = True
+            _kuzu_import_available = True
         except ImportError:
-            _kuzu_available = False
+            _kuzu_import_available = False
             log_debug(
                 "KUZU_UNAVAILABLE",
                 payload={"reason": "kuzu package not installed"},
@@ -81,6 +84,7 @@ class KuzuDBAdapter:
                 msg=f"KuzuDB connection failed: {exc}",
             )
             self._conn = None
+            self._connection_failed = True  # per-instance, not global
             return False
 
     def _init_schema(self) -> None:
@@ -248,7 +252,7 @@ class KuzuDBAdapter:
                 )
             except Exception:
                 # Holding node may not exist yet — that's ok, node is still created
-                pass
+                pass  # noqa: silently skip edge — node is still created independently
         except Exception as exc:
             log_debug(
                 "KUZU_FAILED_ASSUMPTION_WRITE_FAILED",
@@ -475,7 +479,7 @@ class KuzuDBAdapter:
                     {"hid": holding_id, "rid": resolution_id},
                 )
             except Exception:
-                pass  # Holding may not exist yet
+                pass  # Holding may not exist yet — edge skipped, resolution node still created
         except Exception as exc:
             log_debug(
                 "KUZU_ADD_RESOLUTION_FAILED",
@@ -511,7 +515,7 @@ class KuzuDBAdapter:
                         {"rid": resolution_id, "lid": lesson_id},
                     )
                 except Exception:
-                    pass  # Resolution may not exist yet
+                    pass  # Resolution may not exist yet — edge skipped, lesson node still created
         except Exception as exc:
             log_debug(
                 "KUZU_ADD_LESSON_FAILED",
@@ -548,7 +552,7 @@ class KuzuDBAdapter:
                         {"hid": holding_id, "tid": thesis_id},
                     )
                 except Exception:
-                    pass
+                    pass  # Holding may not exist yet — thesis node still created independently
             if evidence_id:
                 try:
                     self._conn.execute(
@@ -557,7 +561,7 @@ class KuzuDBAdapter:
                         {"tid": thesis_id, "eid": evidence_id},
                     )
                 except Exception:
-                    pass
+                    pass  # Evidence may not exist yet — thesis node still created independently
         except Exception as exc:
             log_debug(
                 "KUZU_ADD_THESIS_FAILED",

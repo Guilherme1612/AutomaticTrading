@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from pmacs.constants import DEMOTION_THRESHOLDS, PROMOTION_THRESHOLDS
+from pmacs.constants import DEMOTION_THRESHOLDS, DEMOTE_COOLDOWN_CYCLES, PROMOTION_THRESHOLDS
 from pmacs.logsys import log_debug
 from pmacs.schemas.flywheel import (
     DemotionGateResult,
@@ -73,7 +73,38 @@ def count_trades_in_mode(mode: str, db_path: Path) -> int:
         return row[0] if row else 0
 
 
-def get_rolling_brier(window: int, duckdb_path: Path) -> float:
+def cycles_since_last_demotion(sqlite_db_path: Path) -> int:
+    """Count cycles completed since the last demotion event (SQLite).
+
+    A demotion is any mode_history transition from a higher tier to a lower tier.
+    Returns 0 if no demotion found (first promotion allowed).
+
+    Args:
+        sqlite_db_path: Path to the SQLite database (NOT DuckDB).
+    """
+    if not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            # Find the most recent demotion (transition from higher to lower mode)
+            row = conn.execute(
+                "SELECT MAX(changed_at) FROM mode_history "
+                "WHERE from_mode IN ('LIVE_EXPANDED','LIVE_STANDARD','LIVE_EARLY','PAPER_VALIDATED') "
+                "AND from_mode != to_mode"
+            ).fetchone()
+            demotion_ts = row[0] if row else None
+            if demotion_ts is None:
+                return 0
+            count_row = conn.execute(
+                "SELECT COUNT(*) FROM cycles WHERE state = 'CLOSED' AND closed_at > ?",
+                (demotion_ts,),
+            ).fetchone()
+            return count_row[0] if count_row else 0
+    except Exception:
+        return 0
+
+
+def get_rolling_brier(window: int, duckdb_path: Path, cycle_id: str = "") -> float:
     """Get rolling average Brier score over the last N cycles (DuckDB)."""
     if not duckdb_path.exists():
         return 0.0
@@ -82,16 +113,22 @@ def get_rolling_brier(window: int, duckdb_path: Path) -> float:
 
         with duckdb.connect(str(duckdb_path), read_only=True) as conn:
             row = conn.execute(
-                "SELECT AVG(brier_score) FROM calibration "
-                "ORDER BY cycle_closed_at DESC LIMIT ?",
+                "SELECT AVG(brier) FROM ("
+                "SELECT brier FROM persona_performance "
+                "ORDER BY computed_at DESC LIMIT ?"
+                ") AS recent",
                 (window,),
             ).fetchone()
             return float(row[0]) if row and row[0] is not None else 0.0
-    except Exception:
+    except Exception as exc:
+        log_debug("FLYWHEEL_QUERY_FAILED", payload={"fn": "get_rolling_brier", "error": str(exc)},
+                  level="WARN", error_code="FLYWHEEL_QUERY_FAILED",
+                  cycle_id=cycle_id or None,
+                  msg=f"Rolling Brier query failed: {exc}")
         return 0.0
 
 
-def get_rolling_sharpe(window: int, duckdb_path: Path) -> float:
+def get_rolling_sharpe(window: int, duckdb_path: Path, cycle_id: str = "") -> float:
     """Get rolling Sharpe ratio over the last N cycles (DuckDB)."""
     if not duckdb_path.exists():
         return 0.0
@@ -100,16 +137,23 @@ def get_rolling_sharpe(window: int, duckdb_path: Path) -> float:
 
         with duckdb.connect(str(duckdb_path), read_only=True) as conn:
             row = conn.execute(
-                "SELECT AVG(sharpe) FROM performance "
-                "ORDER BY cycle_closed_at DESC LIMIT ?",
+                "SELECT AVG(metric_value) FROM ("
+                "SELECT metric_value FROM rolling_metrics "
+                "WHERE metric_name = 'sharpe' "
+                "ORDER BY computed_at DESC LIMIT ?"
+                ") AS recent",
                 (window,),
             ).fetchone()
             return float(row[0]) if row and row[0] is not None else 0.0
-    except Exception:
+    except Exception as exc:
+        log_debug("FLYWHEEL_QUERY_FAILED", payload={"fn": "get_rolling_sharpe", "error": str(exc)},
+                  level="WARN", error_code="FLYWHEEL_QUERY_FAILED",
+                  cycle_id=cycle_id or None,
+                  msg=f"Rolling Sharpe query failed: {exc}")
         return 0.0
 
 
-def get_max_drawdown(window: int, duckdb_path: Path) -> float:
+def get_max_drawdown(window: int, duckdb_path: Path, cycle_id: str = "") -> float:
     """Get max drawdown percentage over the last N cycles (DuckDB)."""
     if not duckdb_path.exists():
         return 0.0
@@ -118,12 +162,19 @@ def get_max_drawdown(window: int, duckdb_path: Path) -> float:
 
         with duckdb.connect(str(duckdb_path), read_only=True) as conn:
             row = conn.execute(
-                "SELECT MAX(drawdown_pct) FROM performance "
-                "ORDER BY cycle_closed_at DESC LIMIT ?",
+                "SELECT MAX(metric_value) FROM ("
+                "SELECT metric_value FROM rolling_metrics "
+                "WHERE metric_name = 'drawdown' "
+                "ORDER BY computed_at DESC LIMIT ?"
+                ") AS recent",
                 (window,),
             ).fetchone()
             return float(row[0]) if row and row[0] is not None else 0.0
-    except Exception:
+    except Exception as exc:
+        log_debug("FLYWHEEL_QUERY_FAILED", payload={"fn": "get_max_drawdown", "error": str(exc)},
+                  level="WARN", error_code="FLYWHEEL_QUERY_FAILED",
+                  cycle_id=cycle_id or None,
+                  msg=f"Max drawdown query failed: {exc}")
         return 0.0
 
 
@@ -144,6 +195,11 @@ def check_promotion_gates(
     Returns which gates pass and which fail. UI displays this in the mode badge.
     """
     key = f"{current_mode}_to_{target_mode}"
+    # Try both SHADOW_PAPER and PAPER keys (Phases.md §3.7 concurrent mode)
+    if key not in PROMOTION_THRESHOLDS:
+        alt_key = f"PAPER_to_{target_mode}"
+        if alt_key in PROMOTION_THRESHOLDS:
+            key = alt_key
     thresholds = PROMOTION_THRESHOLDS[key]
 
     current_cycles = count_cycles_in_mode(target_mode, db_path)
@@ -151,6 +207,7 @@ def check_promotion_gates(
     rolling_brier = get_rolling_brier(window=30, duckdb_path=duckdb_path)
     rolling_sharpe = get_rolling_sharpe(window=20, duckdb_path=duckdb_path)
     rolling_drawdown = get_max_drawdown(window=90, duckdb_path=duckdb_path)
+    cooldown_cycles = cycles_since_last_demotion(db_path)
 
     current_values: dict[str, float | int] = {
         "cycles": current_cycles,
@@ -161,6 +218,13 @@ def check_promotion_gates(
     }
 
     gates: list[GateStatus] = [
+        GateStatus(
+            gate_name="demotion_cooldown",
+            passed=cooldown_cycles >= DEMOTE_COOLDOWN_CYCLES,
+            current_value=cooldown_cycles,
+            threshold=DEMOTE_COOLDOWN_CYCLES,
+            comparison=">=",
+        ),
         GateStatus(
             gate_name="min_cycles",
             passed=current_cycles >= thresholds["min_cycles"],

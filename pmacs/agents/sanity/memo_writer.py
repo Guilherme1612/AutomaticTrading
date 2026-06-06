@@ -2,6 +2,7 @@
 
 Checks:
 - verdict_line starts with STRONG_BUY / BUY / HOLD / SKIP
+- thesis field is non-empty (field is "thesis", not "thesis_summary")
 - key_evidence items are non-empty strings
 """
 
@@ -32,6 +33,14 @@ class MemoWriterSanity(BaseSanityValidator):
                     f"verdict_line must start with one of {VALID_VERDICT_PREFIXES}, "
                     f"got: '{verdict_line[:50]}'"
                 ),
+            )
+
+        # thesis must be present and non-empty (field is "thesis", not "thesis_summary")
+        thesis = output.get("thesis", "")
+        if not thesis or not str(thesis).strip():
+            return SanityResult(
+                passed=False,
+                reason="thesis field is missing or empty",
             )
 
         # key_evidence items must be non-empty

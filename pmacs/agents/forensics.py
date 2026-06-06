@@ -29,14 +29,16 @@ class ForensicsRunner(PersonaRunner):
         self,
         cycle_id: str = "",
         audit_writer: Any | None = None,
+        simulation_mode: bool = False,
     ) -> None:
         super().__init__(
             persona_name="forensics",
             grammar_name="forensics",
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=3072,
             cycle_id=cycle_id,
             audit_writer=audit_writer,
+            simulation_mode=simulation_mode,
         )
 
     def get_pydantic_model(self):
@@ -55,17 +57,18 @@ class ForensicsRunner(PersonaRunner):
         template_path = Path(__file__).parent / "prompts" / "forensics.md"
         template = template_path.read_text(encoding="utf-8")
 
-        evidence_text = ""
-        for packet in evidence:
-            evidence_text += f"\n--- Evidence ({packet.ticker}) ---\n"
-            for ev in getattr(packet, "evidence", []):
-                evidence_text += f"[{getattr(ev, 'id', 'unknown')}] {getattr(ev, 'content', str(ev))}\n"
+        evidence_text = self.format_evidence_for_prompt(evidence)
 
         context_block = ""
         if episodic_context:
             context_block = f"\n## Episodic Context\n{episodic_context}"
 
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
         return template.replace(
+            "{today_date}", today
+        ).replace(
             "{evidence}", evidence_text
         ).replace(
             "{episodic_context}", context_block

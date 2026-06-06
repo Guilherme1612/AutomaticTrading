@@ -100,6 +100,14 @@ def apply_candidate_to_registry(
     """
     now = datetime.now(timezone.utc).isoformat()
 
+    # Level 1 safety: mutation process must NOT have write access to production
+    # config (Agents.md §17.4).  The file should be read-only for this process.
+    if registry_path.exists() and os.access(str(registry_path), os.W_OK):
+        raise PermissionError(
+            f"Mutation process has write access to {registry_path}. "
+            f"Level 1 safety requires read-only permissions (Agents.md §17.4)."
+        )
+
     # 1. Read current registry
     if registry_path.exists():
         with open(registry_path) as f:

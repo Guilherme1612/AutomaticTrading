@@ -97,11 +97,24 @@ class StopEventPoller:
 
         # Step 2: Execute exit (cancel catastrophe-net, submit SELL, audit)
         if holding is not None:
-            asyncio.run(execute_exit(
-                holding=holding,
-                exit_reason=stop_type,
-                cycle_id=trig_cycle_id,
-            ))
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                # Running inside an existing loop — schedule and wait
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    pool.submit(
+                        asyncio.run,
+                        execute_exit(holding=holding, exit_reason=stop_type, cycle_id=trig_cycle_id),
+                    ).result()
+            else:
+                asyncio.run(execute_exit(
+                    holding=holding,
+                    exit_reason=stop_type,
+                    cycle_id=trig_cycle_id,
+                ))
 
         # Step 3: Update status to FILLED
         self._update_status(trigger_id, StopEventStatus.FILLED)

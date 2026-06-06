@@ -602,13 +602,13 @@ def check_promotion_gates(current_mode: str, target_mode: str) -> PromotionGateR
     Returns which gates pass and which fail. UI displays this in the mode badge.
     """
     thresholds = PROMOTION_THRESHOLDS[f"{current_mode}_to_{target_mode}"]
-    
+
     current_cycles = count_cycles_in_mode(current_mode)
     current_trades = count_trades_in_mode(current_mode)
     rolling_brier = get_rolling_brier(window=30)
     rolling_sharpe = get_rolling_sharpe(window=20)
     rolling_drawdown = get_max_drawdown(window=90)
-    
+
     gates = {
         "min_cycles": current_cycles >= thresholds.min_cycles,
         "min_trades": current_trades >= thresholds.min_trades,
@@ -616,9 +616,9 @@ def check_promotion_gates(current_mode: str, target_mode: str) -> PromotionGateR
         "sharpe": rolling_sharpe >= thresholds.min_sharpe,
         "drawdown": rolling_drawdown <= thresholds.max_drawdown,
     }
-    
+
     all_pass = all(gates.values())
-    
+
     return PromotionGateResult(
         current_mode=current_mode,
         target_mode=target_mode,
@@ -645,7 +645,7 @@ PAPER → PAPER_VALIDATED
   ☑ Brier: 0.28 / ≤ 0.30        ✓
   ☑ Sharpe: 0.71 / ≥ 0.0         ✓
   ☑ Drawdown: 8.2% / ≤ 15%      ✓
-  
+
   All gates pass. [Promote → TOTP]
 ```
 
@@ -657,7 +657,7 @@ PAPER → PAPER_VALIDATED
   ☑ Brier: 0.28 / ≤ 0.30        ✓
   ☑ Sharpe: 0.71 / ≥ 0.0         ✓
   ☑ Drawdown: 8.2% / ≤ 15%      ✓
-  
+
   1 gate failing. Promote button disabled.
 ```
 

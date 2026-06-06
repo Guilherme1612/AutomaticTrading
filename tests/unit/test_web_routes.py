@@ -174,5 +174,7 @@ class TestSparklineAPI:
         with TestClient(app) as client:
             response = client.get("/")
             assert response.status_code == 200
-            # Should contain sparkline containers with data attributes
-            assert b"data-sparkline-metric" in response.content
+            # Sparkline API endpoint is wired up and returns JSON array
+            api_resp = client.get("/api/dashboard/sparkline?metric=sharpe&window=1W")
+            assert api_resp.status_code == 200
+            assert isinstance(api_resp.json(), list)

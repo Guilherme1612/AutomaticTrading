@@ -11,15 +11,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, Request, Response
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from pmacs.cortex.health import write_heartbeat
 from pmacs.cortex.totp import verify_totp
+from pmacs.config import data_dir as _data_dir
 from pmacs.nervous.auth import SessionManager
 from pmacs.nervous.rate_limit import BUCKETS
-from pmacs.nervous.sse_publisher import SSEPublisher
+from pmacs.nervous.sse_publisher import SSEPublisher, set_global_publisher, publish_system_event
 
 # ---------------------------------------------------------------------------
 # Application factory
@@ -30,8 +31,12 @@ VALID_STREAMS = frozenset({
 })
 
 _publisher: SSEPublisher = SSEPublisher()
+set_global_publisher(_publisher)
 _session_mgr: SessionManager = SessionManager()
-_heartbeat_dir: Path = Path("/var/db/pmacs/heartbeat")
+_heartbeat_dir: Path = _data_dir() / "heartbeats"
+
+# Router for embedding in combined app (web/app.py)
+router = APIRouter()
 
 app = FastAPI(title="pmacs-nervous", version="0.1.0")
 
@@ -48,6 +53,7 @@ def configure(
     global _publisher, _session_mgr, _heartbeat_dir
     if publisher is not None:
         _publisher = publisher
+        set_global_publisher(publisher)
     if session_manager is not None:
         _session_mgr = session_manager
     if heartbeat_dir is not None:
@@ -69,6 +75,7 @@ async def heartbeat_middleware(request: Request, call_next):
 # Health
 # ---------------------------------------------------------------------------
 
+@router.get("/health")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -104,6 +111,7 @@ class TOTPVerifyResponse(BaseModel):
     error: str = ""
 
 
+@router.post("/api/totp/verify", response_model=TOTPVerifyResponse)
 @app.post("/api/totp/verify", response_model=TOTPVerifyResponse)
 async def totp_verify(body: TOTPVerifyRequest, request: Request) -> TOTPVerifyResponse:
     """Verify a TOTP code for a given action.
@@ -186,8 +194,12 @@ async def events(
         if not streams:
             streams = None
 
-    # Last-Event-ID for reconnection
-    last_id_str = request.headers.get("Last-Event-ID")
+    # Last-Event-ID for reconnection — check both header (EventSource native) and
+    # query param (app.js passes ?last_event_id= on reconnect via custom URL)
+    last_id_str = (
+        request.headers.get("Last-Event-ID")
+        or request.query_params.get("last_event_id")
+    )
     last_id = int(last_id_str) if last_id_str else 0
 
     # Replay missed events from ring buffer before subscribing to live stream
@@ -211,7 +223,10 @@ async def events(
                 if streams is not None and event.get("stream") not in streams:
                     continue
                 evt_id = event.get("id", "0")
-                data_str = json.dumps(event.get("data", {}), separators=(",", ":"))
+                # Merge stream + event_type into data for SSEClient dispatching
+                inner = event.get("data", {})
+                merged = {**inner, "stream": event.get("stream", ""), "event_type": event.get("type", "")}
+                data_str = json.dumps(merged, separators=(",", ":"))
                 lines = [
                     f"id: {evt_id}",
                     f"event: {event.get('type', 'message')}",
@@ -224,7 +239,10 @@ async def events(
                 try:
                     frame = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    # Send keepalive comment
+                    # Send keepalive + system heartbeat
+                    publish_system_event("system.heartbeat", {
+                        "publisher_clients": _publisher.client_count,
+                    })
                     yield ": keepalive\n\n"
                     continue
 
@@ -247,8 +265,10 @@ async def events(
                 except (ValueError, TypeError):
                     pass
 
-                # Build SSE frame
-                data_str = json.dumps(event.get("data", {}), separators=(",", ":"))
+                # Build SSE frame — merge stream + event_type into data for SSEClient dispatching
+                inner = event.get("data", {})
+                merged = {**inner, "stream": event.get("stream", ""), "event_type": event.get("type", "")}
+                data_str = json.dumps(merged, separators=(",", ":"))
                 lines = [
                     f"id: {evt_id}",
                     f"event: {event.get('type', 'message')}",

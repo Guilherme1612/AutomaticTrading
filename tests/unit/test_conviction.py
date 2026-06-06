@@ -35,8 +35,8 @@ class TestComputeConviction:
         # direction=0.5, maturity=1.0, crucible=1.0, ev=1.0
         assert result == pytest.approx(0.5)
 
-    def test_bootstrap_floor(self):
-        """Bootstrap mode: maturity_factor >= 0.50 even with 0 matured sources."""
+    def test_bootstrap_full_maturity(self):
+        """Bootstrap mode: maturity_factor=1.0 regardless of matured_sources_used."""
         arb = _make_arb(p_up=0.7, p_down=0.1, matured=0)
         result = compute_conviction(
             arb,
@@ -44,11 +44,11 @@ class TestComputeConviction:
             ev_multiple=1.5,
             is_bootstrap=True,
         )
-        # direction=0.6, maturity=floor(0/4, 0.50)=0.50, crucible=1.0, ev=1.0
-        assert result == pytest.approx(0.3)
+        # direction=0.6, maturity=1.0 (bootstrap bypasses dampening), crucible=1.0, ev=1.0
+        assert result == pytest.approx(0.6)
 
-    def test_bootstrap_no_floor_above_050(self):
-        """Bootstrap with 2 matured sources: 2/4=0.50, exactly at floor."""
+    def test_bootstrap_matured_sources_ignored(self):
+        """Bootstrap with 2 matured sources: maturity_factor still 1.0 in bootstrap."""
         arb = _make_arb(p_up=0.7, p_down=0.1, matured=2)
         result = compute_conviction(
             arb,
@@ -56,8 +56,8 @@ class TestComputeConviction:
             ev_multiple=1.5,
             is_bootstrap=True,
         )
-        # direction=0.6, maturity=0.50, crucible=1.0, ev=1.0
-        assert result == pytest.approx(0.3)
+        # direction=0.6, maturity=1.0 (bootstrap ignores matured_sources), crucible=1.0, ev=1.0
+        assert result == pytest.approx(0.6)
 
     def test_non_bootstrap_zero_maturity(self):
         """Non-bootstrap: 0 matured -> maturity_factor floored at 0.25."""
@@ -113,6 +113,28 @@ class TestComputeConviction:
         )
         # direction=0.5, maturity=1.0, crucible=1.0, ev=0.75/1.5=0.5
         assert result == pytest.approx(0.25)
+
+    def test_negative_ev_multiple_suppresses_to_zero(self):
+        """Negative ev_multiple suppresses conviction to 0, does NOT invert it."""
+        arb = _make_arb(p_up=0.7, p_down=0.1, matured=4)
+        result = compute_conviction(
+            arb,
+            crucible_severity=0.0,
+            ev_multiple=-1.0,
+        )
+        # ev_factor = max(0.0, -1.0/1.5) = 0.0 -> conviction = 0.0
+        assert result == pytest.approx(0.0)
+
+    def test_bearish_negative_ev_does_not_double_negate(self):
+        """Bearish direction + negative EV must not produce a positive conviction."""
+        arb = _make_arb(p_up=0.1, p_down=0.6, matured=4)
+        result = compute_conviction(
+            arb,
+            crucible_severity=0.0,
+            ev_multiple=-1.0,
+        )
+        # Old bug: negative * negative = positive (false BUY). Fixed: ev_factor=0 -> 0.
+        assert result == pytest.approx(0.0)
 
 
 class TestVerdictTier:

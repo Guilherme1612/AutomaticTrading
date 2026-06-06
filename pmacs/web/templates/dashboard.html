@@ -12,84 +12,158 @@
 {% include "components/error_state.html" %}
 {% elif pre_first_cycle %}
 <div class="flex flex-col items-center justify-center py-24 text-center">
-    <h2 class="text-2xl font-semibold text-zinc-900 mb-3">Welcome to PMACS</h2>
-    <p class="text-zinc-500 max-w-md mb-6">Your first cycle will populate this dashboard with portfolio data, risk metrics, and active positions.</p>
-    <button onclick="runCycleNow()" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Run smoke-test cycle</button>
+    <div class="card card-elevated max-w-md p-10" data-stagger>
+        <div class="w-20 h-20 mx-auto mb-8 rounded-2xl bg-accent-soft flex items-center justify-center">
+            <svg class="w-10 h-10 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+        </div>
+        <h2 class="text-2xl font-semibold text-text-primary mb-3">Welcome to PMACS</h2>
+        <p class="text-text-secondary mb-8 leading-relaxed">Your first cycle will populate this dashboard with portfolio data, risk metrics, and active positions.</p>
+        <button type="button" onclick="location.href='/agents'" class="w-full px-6 py-3.5 bg-accent text-white rounded-xl hover:opacity-90 text-sm font-medium transition-all duration-200">
+            Go to Agents to run a cycle
+        </button>
+    </div>
 </div>
 {% else %}
 
-<!-- Portfolio summary card -->
-<div class="bg-white border border-zinc-200 rounded-lg p-6 mb-6">
-    <div class="flex items-center justify-between">
+<!-- Portfolio hero -->
+<div class="card card-elevated card-accent-blue mb-8" data-stagger>
+    <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-4 sm:gap-6">
         <div>
-            <p class="text-sm text-zinc-500">Portfolio Value</p>
-            <p class="text-3xl font-mono font-semibold text-zinc-900">${{ "{:,.2f}".format(portfolio_value) }}</p>
-            <p class="text-xs text-zinc-400 font-mono mt-1">~{{ "%.2f"|format(portfolio_value * 0.92) }} EUR</p>
+            <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Portfolio Value</p>
+            <p class="text-2xl sm:text-display font-mono font-bold text-text-primary hero-value"
+               id="portfolio-value-display"
+               data-anim-target="{{ portfolio_value }}"
+               data-anim-prefix="$"
+               data-anim-decimals="2">$0.00</p>
+            <p class="text-xs text-text-muted font-mono mt-2 opacity-60">≈{{ "%.2f"|format(portfolio_value * 0.92) }} EUR <span class="opacity-60">(fixed rate)</span></p>
         </div>
-        <div class="text-right">
-            <p class="text-sm text-zinc-500">Day Change</p>
-            <p class="text-xl font-mono font-semibold {{ 'text-green-600' if day_change_pct >= 0 else 'text-red-500' }}">
+        <div class="sm:text-right">
+            <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Day Change</p>
+            <p class="text-head font-mono font-bold {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}"
+               id="day-change-display">
                 {{ "+" if day_change_pct >= 0 else "" }}{{ "%.2f"|format(day_change_pct) }}%
             </p>
-            <p class="text-xs text-zinc-400 font-mono mt-1">Last cycle: <span id="cycle-timing">--</span></p>
+            <div class="flex items-center justify-end gap-1.5 mt-2">
+                <svg class="w-3.5 h-3.5 {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {% if day_change_pct >= 0 %}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/>
+                    {% else %}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                    {% endif %}
+                </svg>
+                <span class="text-xs text-text-muted font-mono" id="cycle-timing" {% if last_cycle and last_cycle != '--' %}data-time-ago="{{ last_cycle }}"{% endif %}>{{ last_cycle }}</span>
+            </div>
         </div>
+    </div>
+
+    <!-- Portfolio sparkline -->
+    <div class="mt-6" id="portfolio-sparkline-container">
+        {% if sparkline_data.get("portfolio") and sparkline_data["portfolio"]|length > 1 %}
+        {% set points = sparkline_data["portfolio"] %}
+        {% set values = points|map(attribute=1)|list %}
+        {% set vmin = values|min %}
+        {% set vmax = values|max %}
+        {% set vrange = [vmax - vmin, 0.001]|max %}
+        {% set trend = "positive" if values[-1] >= values[0] else "negative" %}
+        <div class="sparkline-container sparkline-{{ trend }}">
+            <svg viewBox="0 0 100 40" preserveAspectRatio="none" class="w-full" style="height:48px">
+                <defs>
+                    <linearGradient id="spark-grad" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0.15"/>
+                        <stop offset="100%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <polygon fill="url(#spark-grad)" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}100,40 0,40"/>
+                <polyline class="sparkline-line" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}"/>
+            </svg>
+        </div>
+        {% else %}
+        <div class="flex flex-col items-center justify-center h-32 gap-2">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
+                <span class="text-xs font-semibold text-text-primary">Bootstrap Phase Active</span>
+            </div>
+            <p class="text-[11px] text-text-muted text-center max-w-xs mx-auto">
+                Running paper cycles to build confidence. Chart populates after first resolved position.
+            </p>
+            <div class="flex items-center gap-4 mt-1">
+                <div class="text-center">
+                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Cycles Run</p>
+                    <p class="text-sm font-mono font-bold text-text-primary">{{ cycle_count | default(0) }}</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Target</p>
+                    <p class="text-sm font-mono text-text-muted">50 cycles</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Progress</p>
+                    <p class="text-sm font-mono text-accent">{{ ((cycle_count | default(0)) / 50 * 100) | int }}%</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Cost widget -->
+    <div class="border-t border-border-subtle mt-5 pt-5">
+        {% set cost_daily = cost_state.today_cost %}
+        {% set cost_monthly = cost_state.month_cost %}
+        {% set daily_cap = cost_state.daily_cap %}
+        {% set monthly_cap = cost_state.monthly_cap %}
+        {% set last_cycle_cost = cost_state.last_cycle_cost %}
+        {% set avg_cycle_cost = cost_state.avg_cycle_cost %}
+        {% include "cost_widget.html" %}
     </div>
 </div>
 
 <!-- Time-window selector -->
-<div class="flex items-center gap-2 mb-4">
-    <span class="text-xs text-zinc-400">Period:</span>
-    <div class="flex gap-1" id="sparkline-window-btns">
-        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                onclick="refreshAllSparklines('1D', this)"
-                data-window="1D">1D</button>
-        <button class="sparkline-window-btn px-2 py-1 text-xs rounded bg-blue-50 text-blue-600"
-                onclick="refreshAllSparklines('1W', this)"
-                data-window="1W">1W</button>
-        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                onclick="refreshAllSparklines('1M', this)"
-                data-window="1M">1M</button>
-        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                onclick="refreshAllSparklines('3M', this)"
-                data-window="3M">3M</button>
-        <button class="sparkline-window-btn px-2 py-1 text-xs rounded text-zinc-500 hover:bg-zinc-100"
-                onclick="refreshAllSparklines('ALL', this)"
-                data-window="ALL">ALL</button>
+<div class="flex flex-wrap items-center gap-3 mb-6" data-stagger>
+    <span class="text-xs text-text-muted uppercase tracking-widest font-medium">Period</span>
+    <div class="flex flex-wrap gap-1 bg-surface-sunken/50 rounded-xl p-1" id="sparkline-window-btns">
+        {% for window in ['1D', '1W', '1M', '3M', 'YTD', 'ALL'] %}
+        <button type="button" class="sparkline-window-btn px-3 py-1.5 text-xs rounded-lg font-medium transition-all duration-200
+                       {{ 'bg-surface-elevated text-accent shadow-sm' if window == '1W' else 'text-text-muted hover:text-text-secondary' }}"
+                onclick="refreshAllSparklines('{{ window }}', this)"
+                data-window="{{ window }}">{{ window }}</button>
+        {% endfor %}
     </div>
 </div>
 
-<!-- Risk metrics row (5 StatBlocks) -->
+<!-- Risk metrics -->
 {% set metric_cards = [
-    ("max_drawdown_pct", "Max Drawdown", "%.1f", "%", "max_drawdown_pct"),
-    ("sharpe", "Sharpe", "%.2f", "", "sharpe"),
-    ("win_rate_pct", "Win Rate", "%.1f", "%", "win_rate_pct"),
-    ("open_positions", "Open Positions", "%d", "", "open_positions"),
-    ("capital_used_pct", "Capital Used", "%.1f", "%", "capital_used_pct"),
+    ("max_drawdown_pct", "Max Drawdown", "%.1f", "%", "max_drawdown_pct", "red"),
+    ("sharpe", "Sharpe", "%.2f", "", "sharpe", "blue"),
+    ("sortino", "Sortino", "%.2f", "", "sortino", "blue"),
+    ("win_rate_pct", "Win Rate", "%.1f", "%", "win_rate_pct", "green"),
+    ("avg_risk_reward", "Avg R/R", "%.1f", "x", "avg_risk_reward", "blue"),
 ] %}
-<div class="grid grid-cols-5 gap-4 mb-6" id="sparkline-metrics">
-{% for metric_key, label, fmt, suffix, spark_key in metric_cards %}
-    <div class="bg-white border border-zinc-200 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-xs font-medium text-zinc-500 uppercase tracking-wide">{{ label }}</span>
-        <span class="mt-1 text-2xl font-mono font-semibold text-zinc-900">{{ fmt|format(risk_metrics[metric_key]) }}{{ suffix }}</span>
-        <div class="sparkline-container w-full mt-2 relative"
-             data-sparkline-metric="{{ spark_key }}">
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-8" id="sparkline-metrics">
+{% for metric_key, label, fmt, suffix, spark_key, accent in metric_cards %}
+    <div class="card card-stat card-accent-{{ accent }}" data-stagger>
+        <span class="text-[10px] font-medium text-text-muted uppercase tracking-widest">{{ label }}</span>
+        <span class="mt-1.5 text-2xl font-mono font-bold text-text-primary block"
+              data-anim-target="{{ risk_metrics[metric_key] }}"
+              data-anim-suffix="{{ suffix }}"
+              data-anim-decimals="{{ '2' if 'f' in fmt and fmt[-1] == 'f' else '1' }}">{{ fmt|format(risk_metrics[metric_key]) }}{{ suffix }}</span>
+        <div class="w-full mt-3 relative" data-sparkline-metric="{{ spark_key }}">
         {% set points = sparkline_data.get(spark_key, []) %}
         {% if points and points|length > 1 %}
             {% set values = points|map(attribute=1)|list %}
             {% set vmin = values|min %}
             {% set vmax = values|max %}
             {% set vrange = [vmax - vmin, 0.001]|max %}
-            <svg viewBox="0 0 100 24" preserveAspectRatio="none" class="w-full h-6">
-                <polyline fill="none" stroke="#2563eb" stroke-width="1.5"
-                          points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(24 - (points[i][1] - vmin) / vrange * 20) }} {% endfor %}"/>
-            </svg>
-            <div class="sparkline-point absolute w-1.5 h-1.5 bg-blue-600 rounded-full -translate-x-1/2 -translate-y-1/2"
-                 style="left:50%;top:{{ "%.0f"|format(24 - (points[-1][1] - vmin) / vrange * 20) }}px"></div>
-            <div class="sparkline-tooltip absolute hidden text-xs font-mono text-zinc-600 bg-white border border-zinc-200 rounded px-1.5 py-0.5 shadow-sm -translate-x-1/2 -translate-y-full"
-                 style="left:50%;top:{{ "%.0f"|format(24 - (points[-1][1] - vmin) / vrange * 20) }}px">{{ fmt|format(points[-1][1]) }}{{ suffix }}</div>
+            {% set trend = "positive" if values[-1] >= values[0] else "negative" %}
+            <div class="sparkline-container sparkline-{{ trend }}">
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none" class="w-full" style="height:40px">
+                    <polygon class="sparkline-area" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}100,40 0,40"/>
+                    <polyline class="sparkline-line" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}"/>
+                </svg>
+            </div>
         {% else %}
-            <div class="w-full h-6 flex items-center justify-center">
-                <span class="text-xs text-zinc-400">No data yet</span>
+            <div class="w-full h-10 flex items-center justify-center">
+                <span class="text-[10px] text-text-muted/60 italic">Awaiting trades</span>
             </div>
         {% endif %}
         </div>
@@ -97,127 +171,272 @@
 {% endfor %}
 </div>
 
-<div class="grid grid-cols-3 gap-6">
+<!-- Mode/Cycle Status -->
+<div class="card card-elevated card-accent-{{ 'green' if mode == 'SHADOW + PAPER' else 'blue' }} mb-8" data-stagger>
+    <div class="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+        <div class="flex flex-wrap items-center gap-3 sm:gap-4">
+            <span class="mode-badge px-3 py-1.5 text-sm font-semibold rounded-xl
+                         {{ 'bg-accent-soft text-accent' if mode == 'SHADOW + PAPER' else 'bg-positive-soft text-positive' }}">
+                {{ mode }}
+            </span>
+            <dl class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+                <div class="flex items-center gap-1.5">
+                    <dt class="text-text-muted">Last cycle:</dt>
+                    <dd class="font-mono text-text-primary" id="last-cycle-time"
+                        {% if system_health.last_cycle and system_health.last_cycle != '--' %}data-time-ago="{{ system_health.last_cycle }}"{% endif %}>{{ system_health.last_cycle }}</dd>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <dt class="text-text-muted">Next:</dt>
+                    <dd class="font-mono text-text-secondary" id="next-cycle-status">Manual trigger only</dd>
+                </div>
+            </dl>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="cycle-running-indicator" class="hidden flex items-center gap-2">
+                <span class="live-dot"></span>
+                <span class="text-xs text-accent font-medium">Running</span>
+            </div>
+            <a href="/agents" class="px-5 py-2.5 bg-accent text-white rounded-xl hover:opacity-90 text-sm font-medium transition-all duration-200 inline-flex items-center gap-1.5">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                Run cycle
+            </a>
+        </div>
+    </div>
+    <div class="mt-4 w-full bg-surface-sunken rounded-full h-1.5 overflow-hidden">
+        <div id="cycle-progress-bar" class="h-full rounded-full progress-bar-gradient transition-all duration-500 hidden" style="width:0%"></div>
+    </div>
+</div>
+
+<div class="dashboard-layout">
     <!-- Active positions table -->
-    <div class="col-span-2 bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Active Positions</h3>
+    <div class="dashboard-main-col card card-elevated overflow-hidden" data-stagger>
+        <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
+            Active Positions
+        </h3>
         {% if positions %}
+        <div class="overflow-x-auto -mx-6 px-6">
         <table class="w-full text-sm">
             <thead>
-                <tr class="text-left text-zinc-500 border-b border-zinc-100">
-                    <th class="pb-2 font-medium">Ticker</th>
-                    <th class="pb-2 font-medium">Verdict</th>
-                    <th class="pb-2 font-medium">Conviction</th>
-                    <th class="pb-2 font-medium">Entry</th>
-                    <th class="pb-2 font-medium">Current</th>
-                    <th class="pb-2 font-medium">P&L</th>
+                <tr class="text-left text-text-muted border-b border-border-subtle">
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Ticker</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Verdict</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Conviction</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Entry</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Current</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Stop</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Size</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">P&L</th>
                 </tr>
             </thead>
             <tbody>
             {% for pos in positions %}
-                <tr class="border-b border-zinc-50">
-                    <td class="py-2 font-mono font-medium">{{ pos.ticker }}</td>
-                    <td class="py-2">{{ pos.verdict }}</td>
-                    <td class="py-2 font-mono">{{ pos.conviction }}</td>
-                    <td class="py-2 font-mono">${{ pos.entry }}</td>
-                    <td class="py-2 font-mono">${{ pos.current }}</td>
-                    <td class="py-2 font-mono {{ 'text-green-600' if pos.pnl >= 0 else 'text-red-500' }}">
-                        {{ "+" if pos.pnl >= 0 else "" }}${{ pos.pnl }}
+                <tr class="border-b border-border-subtle group transition-colors">
+                    <td class="py-3.5 font-mono font-medium">
+                        <a href="/memo/{{ pos.ticker }}" class="text-accent hover:opacity-80 transition-opacity">{{ pos.ticker }}</a>
+                    </td>
+                    <td class="py-3.5">
+                        <span class="px-2 py-0.5 text-xs rounded-lg font-medium
+                                     {{ 'bg-positive-soft text-positive' if pos.verdict == 'STRONG_BUY' else '' }}
+                                     {{ 'bg-accent-soft text-accent' if pos.verdict == 'BUY' else '' }}">
+                            {{ pos.verdict }}
+                        </span>
+                    </td>
+                    <td class="py-3.5">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono text-text-primary">{{ "%.0f"|format(pos.conviction * 100) }}%</span>
+                            <div class="confidence-bar w-12">
+                                <div class="confidence-fill {{ 'bg-positive' if pos.conviction >= 0.7 else 'bg-accent' }}"
+                                     style="width: {{ "%.0f"|format(pos.conviction * 100) }}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-3.5 font-mono text-text-secondary">${{ "%.2f"|format(pos.entry) }}</td>
+                    <td class="py-3.5 font-mono text-text-primary">${{ "%.2f"|format(pos.current) }}</td>
+                    <td class="py-3.5 font-mono {{ 'text-negative' if pos.stop_price > 0 and pos.current <= pos.stop_price * 1.05 else 'text-text-muted' }}">
+                        {% if pos.stop_price > 0 %}${{ "%.2f"|format(pos.stop_price) }}{% else %}—{% endif %}
+                    </td>
+                    <td class="py-3.5 font-mono text-text-secondary">${{ "%.2f"|format(pos.size_usd) }}</td>
+                    <td class="py-3.5">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono font-medium {{ 'text-positive' if pos.pnl >= 0 else 'text-negative' }}">
+                                {{ "+" if pos.pnl >= 0 else "" }}${{ "%.2f"|format(pos.pnl) }}
+                            </span>
+                            <div class="pnl-bar {{ 'pnl-bar-positive' if pos.pnl >= 0 else 'pnl-bar-negative' }}"
+                                 style="width: {{ [([pos.pnl / pos.entry * 100, 0]|max * 3)|round|int, 100]|min }}%; max-width:60px"></div>
+                        </div>
                     </td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
+        </div>
         {% else %}
         {% set empty_title = "No active holdings" %}
-        {% set empty_message = "Cycles are running but no STRONG_BUY signals have cleared all gates yet. This is normal during bootstrap. See Pipeline \u2192 Recent SKIPs for verdict reasoning." %}
+        {% set empty_message = "Cycles are running but no STRONG_BUY signals have cleared all gates yet. This is normal during bootstrap. See Pipeline for verdict reasoning." %}
         {% include "components/empty_state.html" %}
+        <div class="text-center -mt-4 mb-4">
+          <a href="/pipeline" class="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-white transition-colors font-medium">
+            View Pipeline →
+          </a>
+        </div>
         {% endif %}
     </div>
 
     <!-- Right rail -->
-    <div class="space-y-6">
+    <div class="dashboard-right-rail space-y-6">
         <!-- Recent decisions feed -->
-        <div class="bg-white border border-zinc-200 rounded-lg p-6">
-            <h3 class="text-sm font-semibold text-zinc-900 mb-4">Recent Decisions</h3>
+        <div class="card card-elevated" data-stagger>
+            <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-viz-violet"></span>
+                Recent Decisions
+            </h3>
             {% if recent_decisions %}
-            <ul class="space-y-3">
+            <ul class="space-y-2" id="decisions-feed">
                 {% for d in recent_decisions %}
-                <li class="flex items-center gap-2 text-sm">
-                    <span class="font-mono font-medium">{{ d.ticker }}</span>
-                    <span class="px-1.5 py-0.5 text-xs rounded
-                                 {{ 'bg-green-100 text-green-700' if d.verdict == 'STRONG_BUY' else '' }}
-                                 {{ 'bg-blue-100 text-blue-700' if d.verdict == 'BUY' else '' }}
-                                 {{ 'bg-amber-100 text-amber-700' if d.verdict == 'HOLD' else '' }}
-                                 {{ 'bg-red-100 text-red-700' if d.verdict == 'SKIP' else '' }}">
-                        {{ d.verdict }}
-                    </span>
+                <li class="anim-slide-in-right" style="animation-delay: {{ loop.index * 50 }}ms">
+                    <a href="/memo/{{ d.ticker }}"
+                       class="flex items-center gap-2 text-sm p-2.5 rounded-xl hover:bg-surface-sunken transition-all duration-200 group">
+                        <span class="font-mono font-semibold text-text-primary">{{ d.ticker }}</span>
+                        <span class="px-1.5 py-0.5 text-xs rounded-lg font-medium
+                                     {{ 'bg-positive-soft text-positive' if d.verdict == 'STRONG_BUY' else '' }}
+                                     {{ 'bg-accent-soft text-accent' if d.verdict == 'BUY' else '' }}
+                                     {{ 'bg-crucible-soft text-crucible' if d.verdict == 'HOLD' else '' }}
+                                     {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
+                            {{ d.verdict }}
+                        </span>
+                        <span class="text-xs text-text-muted font-mono">{{ "%.0f"|format([(d.conviction or 0) * 100, 0]|max) }}%</span>
+                        <span class="ml-auto text-[11px] text-accent opacity-0 group-hover:opacity-100 transition-opacity">memo →</span>
+                    </a>
                 </li>
                 {% endfor %}
             </ul>
             {% else %}
-            <p class="text-sm text-zinc-400 text-center py-4">No recent decisions</p>
+            <p class="text-sm text-text-muted text-center py-6">No recent decisions</p>
             {% endif %}
         </div>
 
         <!-- System health card -->
-        <div class="bg-white border border-zinc-200 rounded-lg p-6">
-            <h3 class="text-sm font-semibold text-zinc-900 mb-4">System Health</h3>
-            <dl class="space-y-2 text-sm">
-                <div class="flex justify-between">
-                    <dt class="text-zinc-500">Audit Chain</dt>
-                    <dd class="font-mono {{ 'text-green-600' if system_health.audit_chain == 'verified' else 'text-red-500' }}">
+        <div class="card card-elevated" data-stagger>
+            <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-positive anim-breathe"></span>
+                System Health
+            </h3>
+            <div class="space-y-4">
+                <!-- Audit Chain -->
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-8 h-8" viewBox="0 0 36 36">
+                            <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                            <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.audit_chain == 'OK' else 'gauge-fill-negative' }}"
+                                    cx="18" cy="18" r="14" stroke-dasharray="88"
+                                    stroke-dashoffset="{{ '0' if system_health.audit_chain == 'OK' else '44' }}"
+                                    transform="rotate(-90 18 18)"/>
+                        </svg>
+                        <span class="text-sm text-text-secondary">Audit Chain</span>
+                    </div>
+                    <span class="font-mono text-sm font-medium {{ 'text-positive' if system_health.audit_chain == 'OK' else 'text-negative' }}">
                         {{ system_health.audit_chain }}
-                    </dd>
+                    </span>
                 </div>
-                <div class="flex justify-between">
-                    <dt class="text-zinc-500">Disk Free</dt>
-                    <dd class="font-mono">{{ system_health.disk_free_gb }} GB</dd>
+                <!-- Disk Free -->
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-8 h-8" viewBox="0 0 36 36">
+                            <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                            <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.disk_free_gb > 20 else 'gauge-fill-warning' if system_health.disk_free_gb > 5 else 'gauge-fill-negative' }}"
+                                    cx="18" cy="18" r="14" stroke-dasharray="88"
+                                    stroke-dashoffset="{{ "%.0f"|format(88 - (88 * [system_health.disk_free_gb / 100, 1]|min)) }}"
+                                    transform="rotate(-90 18 18)"/>
+                        </svg>
+                        <span class="text-sm text-text-secondary">Disk Free</span>
+                    </div>
+                    <span class="font-mono text-sm font-medium text-text-primary">{{ system_health.disk_free_gb }} GB</span>
                 </div>
-                <div class="flex justify-between">
-                    <dt class="text-zinc-500">Inference</dt>
-                    <dd class="font-mono {{ 'text-green-600' if system_health.inference_ok else 'text-red-500' }}">
-                        {{ "OK" if system_health.inference_ok else "DOWN" }}
-                    </dd>
+                <!-- Inference -->
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <svg class="w-8 h-8" viewBox="0 0 36 36">
+                            <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                            <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.inference_ok or system_health.inference_backend == 'cloud' else 'gauge-fill-warning' }}"
+                                    cx="18" cy="18" r="14" stroke-dasharray="88"
+                                    stroke-dashoffset="{{ '0' if system_health.inference_ok or system_health.inference_backend == 'cloud' else '44' }}"
+                                    transform="rotate(-90 18 18)"/>
+                        </svg>
+                        <span class="text-sm text-text-secondary">Inference</span>
+                    </div>
+                    {% if system_health.inference_backend == 'cloud' %}
+                    <span class="font-mono text-sm font-medium text-warning whitespace-nowrap">Sim (cloud)</span>
+                    {% elif system_health.inference_ok %}
+                    <span class="font-mono text-sm font-medium text-positive">OK</span>
+                    {% else %}
+                    <span class="font-mono text-sm font-medium text-warning">Local (offline)</span>
+                    {% endif %}
                 </div>
-            </dl>
+            </div>
         </div>
 
-        <!-- Mutation summary card -->
-        <div class="bg-white border border-zinc-200 rounded-lg p-6">
-            <h3 class="text-sm font-semibold text-zinc-900 mb-4">Mutation Engine</h3>
-            <dl class="space-y-2 text-sm">
+        <!-- Mutation summary -->
+        <div class="card card-elevated {{ 'card-accent-purple' if mutation_summary.active else '' }}" data-stagger>
+            <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full {{ 'bg-crucible anim-breathe' if mutation_summary.active else 'bg-text-muted' }}"></span>
+                Mutation Engine
+            </h3>
+            <div class="space-y-3 text-sm">
                 <div class="flex justify-between">
-                    <dt class="text-zinc-500">Status</dt>
-                    <dd class="font-mono {{ 'text-green-600' if mutation_summary.active else 'text-zinc-400' }}">
+                    <span class="text-text-secondary">Status</span>
+                    <span class="font-mono {{ 'text-positive' if mutation_summary.active else 'text-text-muted' }}">
                         {{ "Active" if mutation_summary.active else "Dormant" }}
-                    </dd>
+                    </span>
                 </div>
                 {% if not mutation_summary.active %}
-                <div class="mt-2 px-3 py-2 bg-zinc-50 rounded text-xs text-zinc-500">
+                <div class="mt-2 px-3 py-2.5 bg-surface-sunken rounded-xl text-xs text-text-muted">
                     Activates after 50 PAPER cycles (current: {{ mutation_summary.cycles_since_activation }})
                 </div>
                 {% else %}
                 {% if mutation_summary.pending_review > 0 %}
                 <div class="mt-2 flex items-center gap-2">
-                    <span class="inline-flex items-center px-2 py-1 text-xs font-medium bg-amber-50 text-amber-700 rounded">
-                        {{ mutation_summary.pending_review }} pending operator review
+                    <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium bg-warning text-white rounded-lg">
+                        {{ mutation_summary.pending_review }} pending
                     </span>
-                    <a href="/settings" class="text-xs text-blue-600 hover:underline">Review in Settings</a>
+                    <a href="/settings" class="text-xs text-accent hover:opacity-80 transition-opacity">Review</a>
                 </div>
                 {% endif %}
                 {% endif %}
                 <div class="flex justify-between">
-                    <dt class="text-zinc-500">Candidates</dt>
-                    <dd class="font-mono">{{ mutation_summary.candidates }}</dd>
+                    <span class="text-text-secondary">Candidates</span>
+                    <span class="font-mono text-text-primary">{{ mutation_summary.candidates }}</span>
                 </div>
                 <div class="flex justify-between">
-                    <dt class="text-zinc-500">Cycles</dt>
-                    <dd class="font-mono">{{ mutation_summary.cycles_since_activation }}</dd>
+                    <span class="text-text-secondary">Cycles</span>
+                    <span class="font-mono text-text-primary">{{ mutation_summary.cycles_since_activation }}</span>
                 </div>
-            </dl>
+            </div>
         </div>
     </div>
 </div>
+
+<script>
+function _dashboardCycleSSE() {
+    onSSE("cycle", function(data) {
+        var indicator = document.getElementById("cycle-running-indicator");
+        if (data.event_type === "cycle.opened" || data.event === "cycle_start") {
+            if (indicator) indicator.classList.remove("hidden");
+        }
+        if (data.event_type === "cycle.closed" || data.event === "cycle_complete") {
+            if (indicator) indicator.classList.add("hidden");
+            if (typeof PMACS_ANIM !== "undefined") {
+                PMACS_ANIM.initAnimatedValues();
+            }
+        }
+    });
+}
+// Bind on initial load and on HTMX navigation back to this page
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _dashboardCycleSSE);
+} else {
+    _dashboardCycleSSE();
+}
+</script>
 {% endif %}
 {% endblock %}

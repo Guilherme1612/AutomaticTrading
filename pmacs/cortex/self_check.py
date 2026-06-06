@@ -14,9 +14,10 @@ import urllib.error
 from pathlib import Path
 
 from pmacs.logsys import log_debug
+from pmacs.config import data_dir as _data_dir
 
 _DEFAULT_HEALTH_URL = "http://127.0.0.1:8000/health"
-_DEFAULT_DB_PATH = Path("/var/db/pmacs/pmacs.db")
+_DEFAULT_DB_PATH = _data_dir() / "pmacs.db"
 _CHECK_INTERVAL_S = 60
 _STALE_THRESHOLD_S = 120
 _REQUEST_TIMEOUT_S = 5
@@ -198,7 +199,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
 
-    heartbeat_dir = Path("/var/db/pmacs/heartbeat")
+    heartbeat_dir = _data_dir() / "heartbeats"
 
     log_debug(
         "SELF_CHECK_STARTING",

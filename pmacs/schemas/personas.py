@@ -402,27 +402,70 @@ class MemoWriterOutput(BaseModel):
     """MemoWriter persona output — operator-facing investment memo.
 
     spec_ref: Agents.md §15
+
+    Field names match the JSON produced by _generate_full_memo() in pipeline.py
+    and stored in the memos.memo_json column.  The template (memo.html) reads
+    these field names directly after json.loads().
     """
 
     model_config = ConfigDict(frozen=True)
 
-    ticker: str
-    verdict_line: str = Field(max_length=150)
-    thesis_summary: str = Field(max_length=400)
-    key_evidence: list[str] = Field(min_length=1, max_length=5)
-    key_risks: list[str] = Field(max_length=3)
-    conviction: float
-    p_up: float
-    p_flat: float
-    p_down: float
+    ticker: str = ""
+    verdict_line: str = Field(default="", max_length=200)
+
+    # Core thesis — field is "thesis" (NOT "thesis_summary") to match DB/template
+    thesis: str = Field(default="", max_length=2000)
+
+    # Valuation
+    fair_value: float | None = None
+    valuation_range: dict = Field(default_factory=dict)          # {low, base, high}
+    valuation_methodology: str | None = None
+
+    # Business deep-dive (all optional — LLM may omit on error)
+    business_model: str | None = None
+    financial_snapshot: dict = Field(default_factory=dict)
+    growth_drivers: list[dict] = Field(default_factory=list)
+    competitive_position: dict = Field(default_factory=dict)
+    risk_factors: list[dict] = Field(default_factory=list)
+    catalyst_calendar: list[dict] = Field(default_factory=list)
+
+    # Evidence / risks
+    key_evidence: list[str] = Field(default_factory=list)
+    key_risks: list[str] = Field(default_factory=list)
+
+    # Crucible
+    bear_case_response: str | None = None
+    crucible_attacks: list[str | dict] = Field(default_factory=list)  # str (legacy) or dict {attack/severity/...}
+    crucible_severity: float | None = None
+    crucible_thesis_survives: bool | None = None
+    crucible_summary: str | None = None
+
+    # Agent signals & sizing
+    agent_signals: list[dict] = Field(default_factory=list)
+    position_sizing_note: str | None = None
+
+    # Probabilities (populated by _generate_full_memo via arbitration)
+    p_up: float = 0.0
+    p_flat: float = 0.0
+    p_down: float = 0.0
+    conviction: float = 0.0
+
+    # Sizing & EV (populated by the pipeline after arbitration)
     ev_multiple: float | None = None
     sizing_usd: float | None = None
-    dissenting_personas: list[str]
-    dissent_summary: str | None = Field(default=None, max_length=200)
+
+    # Dissent tracking
+    dissenting_personas: list[str] = Field(default_factory=list)
+    dissent_summary: str | None = None
+
+    # Human-readable fallback written alongside JSON
+    raw_text: str | None = None
 
     @field_validator("verdict_line")
     @classmethod
     def _check_verdict_prefix(cls, v: str) -> str:
+        if not v:
+            return v  # empty is allowed during construction; sanity validator checks
         valid = ("STRONG_BUY", "BUY", "HOLD", "SKIP")
         if not any(v.startswith(prefix) for prefix in valid):
             raise ValueError(

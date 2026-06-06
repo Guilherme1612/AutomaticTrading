@@ -2,6 +2,7 @@
    Create KuzuDB/Qdrant/DuckDB/SQLite/audit.log, genesis audit entry.
    Expects: current_step, db_result
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">Database Initialization</h1>
     <p class="text-text-secondary text-sm mb-8">Creating storage backends and writing the genesis audit entry.</p>
@@ -53,6 +54,7 @@
         <button hx-post="/wizard/step/6"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Next
         </button>
@@ -60,6 +62,7 @@
         <button hx-post="/wizard/step/6"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Initialize Databases
         </button>

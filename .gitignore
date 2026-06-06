@@ -34,3 +34,12 @@ data/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Claude Code worktrees and memory (personal)
+.claude/
+
+# GSD planning worktrees
+.planning/worktrees/
+
+# Runtime data directory
+data/

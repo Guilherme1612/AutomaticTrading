@@ -4,8 +4,8 @@ cpu_cores = 10
 gpu = "apple_m1_max"
 
 [runtime]
-backend = "llama_server"
-gguf_path = "/usr/local/var/pmacs/models/Qwen3.6-35B-A3B-Q4_K_XL.gguf"
+backend = "openrouter"
+gguf_path = ""
 threads = 8
 parallel_slots = 3
 ctx_size = 32768

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_SQL = """
@@ -64,7 +65,10 @@ CREATE TABLE IF NOT EXISTS holdings (
     position_size_usd REAL,
     sector TEXT,
     verdict TEXT,
-    conviction_score REAL
+    conviction_score REAL,
+    thesis_summary TEXT,
+    current_price_usd REAL,
+    price_target_usd REAL
 );
 CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON holdings(ticker);
 CREATE INDEX IF NOT EXISTS idx_holdings_state ON holdings(state);
@@ -249,7 +253,98 @@ CREATE TABLE IF NOT EXISTS failure_classifications (
     cycle_id TEXT,
     classified_at TEXT
 );
+
+-- Pricing table (Phase 16: Token-Cost Accounting)
+CREATE TABLE IF NOT EXISTS pricing_table (
+    model_id TEXT PRIMARY KEY,
+    input_price_per_token REAL NOT NULL,
+    output_price_per_token REAL NOT NULL,
+    cached_input_price_per_token REAL,
+    per_request_fee REAL NOT NULL DEFAULT 0,
+    fetched_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'openrouter'
+);
+
+-- Budget state (Phase 16: current period tracking)
+CREATE TABLE IF NOT EXISTS budget_state (
+    period TEXT PRIMARY KEY,
+    period_start TEXT NOT NULL,
+    total_cost_usd REAL NOT NULL DEFAULT 0,
+    cap_usd REAL NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Budget history (Phase 16: archived period totals)
+CREATE TABLE IF NOT EXISTS budget_history (
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    total_cost_usd REAL NOT NULL DEFAULT 0,
+    cap_usd REAL NOT NULL,
+    breached INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (period_type, period_start)
+);
+
+-- Universe (operator-curated, Source.md §8, Architecture.md §6.2)
+CREATE TABLE IF NOT EXISTS universe (
+    ticker TEXT PRIMARY KEY,
+    sector TEXT,
+    subsector TEXT,
+    halted INTEGER NOT NULL DEFAULT 0,
+    delisted INTEGER NOT NULL DEFAULT 0,
+    catalyst_type TEXT,
+    pinned_priority INTEGER,
+    added_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Per-ticker cycle decisions
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL NOT NULL DEFAULT 0.0,
+    thesis_summary TEXT,
+    decided_at TEXT NOT NULL,
+    priority_band INTEGER,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(cycle_id)
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_cycle ON decisions(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_decisions_ticker ON decisions(ticker);
+
+-- Per-ticker investment memos (structured JSON, one per decision)
+CREATE TABLE IF NOT EXISTS memos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL NOT NULL DEFAULT 0.0,
+    memo_json TEXT NOT NULL,
+    raw_text TEXT,
+    decided_at TEXT NOT NULL,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(cycle_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memos_ticker ON memos(ticker);
+CREATE INDEX IF NOT EXISTS idx_memos_cycle ON memos(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_memos_decided ON memos(decided_at DESC);
+
+-- Wizard state (first-run setup progress)
+CREATE TABLE IF NOT EXISTS wizard_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
+
+
+def default_db_path() -> Path:
+    """Return the default SQLite database path.
+
+    Respects PMACS_DATA_DIR env var; falls back to <project_root>/data.
+    """
+    from pmacs.config import data_dir
+
+    return data_dir() / "pmacs.db"
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -289,6 +384,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE holdings ADD COLUMN stop_price_usd REAL")
     if not _column_exists(conn, "holdings", "cycle_id_closed"):
         conn.execute("ALTER TABLE holdings ADD COLUMN cycle_id_closed TEXT")
+    if not _column_exists(conn, "holdings", "thesis_review_due_date"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN thesis_review_due_date TEXT")
 
     # op_idempotency migrations
     if not _column_exists(conn, "op_idempotency", "result_hash"):
@@ -306,6 +403,45 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if _column_exists(conn, "dead_letter", "last_retry_at") and not _column_exists(conn, "dead_letter", "last_attempt_at"):
         conn.execute("ALTER TABLE dead_letter ADD COLUMN last_attempt_at TEXT")
         conn.execute("UPDATE dead_letter SET last_attempt_at = last_retry_at WHERE last_attempt_at IS NULL")
+
+    # Phase 16: Seed budget_state rows if empty, or refresh stale "today" row
+    row = conn.execute("SELECT COUNT(*) FROM budget_state").fetchone()
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    month_start = datetime.now(timezone.utc).replace(day=1).strftime("%Y-%m-%d")
+    if row[0] == 0:
+        conn.execute(
+            "INSERT INTO budget_state (period, period_start, total_cost_usd, cap_usd, updated_at) "
+            "VALUES ('today', ?, 0.0, 2.00, ?)",
+            [today, now],
+        )
+        conn.execute(
+            "INSERT INTO budget_state (period, period_start, total_cost_usd, cap_usd, updated_at) "
+            "VALUES ('this_month', ?, 0.0, 30.00, ?)",
+            [month_start, now],
+        )
+    else:
+        # Refresh "today" period_start if it's stale (from a previous day)
+        conn.execute(
+            "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
+            "WHERE period = 'today' AND period_start != ?",
+            [today, now, today],
+        )
+        # Refresh "this_month" period_start if stale
+        conn.execute(
+            "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
+            "WHERE period = 'this_month' AND period_start != ?",
+            [month_start, now, month_start],
+        )
+
+    # Wizard state table (wizard-first startup)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wizard_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
 
     conn.commit()
 

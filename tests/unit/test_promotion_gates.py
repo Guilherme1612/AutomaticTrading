@@ -27,13 +27,14 @@ def test_all_gates_pass(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.25),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=0.5),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=8.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "SHADOW_PAPER", "PAPER_VALIDATED",
             sqlite_path, duckdb_path, cycle_id="test-001",
         )
     assert result.all_pass is True
-    assert len(result.gates) == 5
+    assert len(result.gates) == 6
     assert all(g.passed for g in result.gates)
 
 
@@ -45,6 +46,7 @@ def test_brier_gate_fails(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.35),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=0.5),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=8.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "SHADOW_PAPER", "PAPER_VALIDATED",
@@ -63,6 +65,7 @@ def test_sharpe_gate_fails(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.25),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=-0.1),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=8.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "PAPER_VALIDATED", "LIVE_EARLY",
@@ -90,6 +93,7 @@ def test_min_cycles_not_met(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.25),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=0.5),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=8.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "SHADOW_PAPER", "PAPER_VALIDATED",
@@ -108,6 +112,7 @@ def test_drawdown_gate_fails(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.25),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=0.5),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=20.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "SHADOW_PAPER", "PAPER_VALIDATED",
@@ -126,6 +131,7 @@ def test_current_values_populated(tmp_db: tuple[Path, Path]) -> None:
         patch("pmacs.engines.flywheel_health.get_rolling_brier", return_value=0.29),
         patch("pmacs.engines.flywheel_health.get_rolling_sharpe", return_value=0.1),
         patch("pmacs.engines.flywheel_health.get_max_drawdown", return_value=12.0),
+        patch("pmacs.engines.flywheel_health.cycles_since_last_demotion", return_value=15),
     ):
         result = check_promotion_gates(
             "SHADOW_PAPER", "PAPER_VALIDATED",

@@ -33,3 +33,21 @@ level = "toast+sound"
 
 [persona_aborted]
 level = "toast"
+
+[mutation_approved]
+level = "toast"
+
+[disk_low]
+level = "toast"  # warning, persistent
+
+[reconciliation_mismatch]
+level = "toast"  # warning, persistent
+
+[source_degraded_important]
+level = "toast"  # 30s duration
+
+[source_degraded_nice_to_have]
+level = "none"  # silent, Cortex page only
+
+[source_recovered]
+level = "toast"

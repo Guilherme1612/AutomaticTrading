@@ -1,13 +1,68 @@
-{# Wizard Step 2 — Inference backend detection (Source.md §12.1)
-   Detects llama-server or Ollama. Shows install instructions if missing.
-   Expects: current_step, llm检测结果
+{# Wizard Step 2 — Inference backend choice + detection (Source.md §12.1)
+   First shows "Cloud API" vs "Local Inference" choice cards.
+   Local → runs llama-server detection (shutil.which + health check).
+   Cloud → sets registry to Anthropic and advances to step 4 (skips model download).
+   Expects: current_step, backend_choice_made (bool), llm_result (dict)
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">Inference Backend</h1>
-    <p class="text-text-secondary text-sm mb-8">Detecting local LLM inference server on port 8080...</p>
+    <p class="text-text-secondary text-sm mb-8">Choose how PMACS will run LLM inference for analysis.</p>
 
+    {% if not backend_choice_made %}
+    {# ---- CHOICE CARDS ---- #}
+    <div class="grid grid-cols-2 gap-4 mb-6">
+        {# Local Inference card #}
+        <button hx-post="/wizard/step/2"
+                hx-vals='{"backend_choice": "local"}'
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="group p-6 bg-surface-elevated border-2 border-border rounded-lg text-left hover:border-accent hover:bg-accent-soft transition-all cursor-pointer">
+            <div class="text-2xl mb-3 text-accent">&#9733;</div>
+            <h3 class="text-sm font-semibold text-text-primary mb-1">Local Inference</h3>
+            <p class="text-xs text-text-secondary leading-relaxed">Run llama-server locally. No API costs, full privacy, pf-blocked from internet.</p>
+            <p class="text-xs text-accent mt-3 font-medium">Recommended</p>
+        </button>
+
+        {# Cloud API card #}
+        <button hx-post="/wizard/step/2"
+                hx-vals='{"backend_choice": "cloud"}'
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="group p-6 bg-surface-elevated border-2 border-border rounded-lg text-left hover:border-blue-500 hover:bg-blue-900/10 transition-all cursor-pointer">
+            <div class="text-2xl mb-3 text-text-muted">&#9729;</div>
+            <h3 class="text-sm font-semibold text-text-primary mb-1">Cloud API</h3>
+            <p class="text-xs text-text-secondary leading-relaxed">Use Anthropic Claude API. Requires internet and API key. Faster setup.</p>
+            <p class="text-xs text-text-muted mt-3">For development and testing</p>
+        </button>
+    </div>
+
+    <div class="flex justify-between">
+        <button hx-post="/wizard/step/1"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-4 py-2 text-text-secondary text-sm hover:text-text-primary transition-colors">
+            &larr; Back
+        </button>
+        <span></span>
+    </div>
+
+    {% else %}
+    {# ---- LOCAL DETECTION RESULTS ---- #}
     <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
-        <h2 class="text-sm font-semibold text-text-primary mb-4 uppercase tracking-wider">Detection Results</h2>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-text-primary uppercase tracking-wider">Detection Results</h2>
+            <button hx-post="/wizard/step/2"
+                    hx-target="#wizard-content"
+                    hx-swap="innerHTML transition:200ms"
+                    hx-indicator="#wizard-loader"
+                    class="text-xs text-text-muted hover:text-text-primary transition-colors">
+                Change
+            </button>
+        </div>
 
         {% if llm_result and llm_result.get("ok") %}
         <div class="flex items-center gap-3 p-3 bg-green-900/20 border border-green-700/40 rounded mb-4">
@@ -22,20 +77,22 @@
             Model: {{ llm_result["model_path"] }}
         </div>
         {% endif %}
+
         {% else %}
         <div class="flex items-center gap-3 p-3 bg-red-900/20 border border-red-700/40 rounded mb-4">
             <span class="text-negative text-lg">&#10007;</span>
             <div>
-                <p class="text-sm font-medium text-negative">llama-server not detected</p>
-                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No inference server found on 127.0.0.1:8080") if llm_result else "Checking..." }}</p>
+                <p class="text-sm font-medium text-negative">{{ llm_result.get("title", "Detection failed") if llm_result else "Checking..." }}</p>
+                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No inference server found on 127.0.0.1:8080") if llm_result else "" }}</p>
             </div>
         </div>
 
+        {% if llm_result and llm_result.get("install_hint") %}
         <div class="mt-4 p-4 bg-surface border border-border rounded">
-            <h3 class="text-sm font-medium text-text-primary mb-2">Install llama.cpp</h3>
-            <pre class="text-xs text-text-muted font-mono whitespace-pre-wrap"><code>brew install llama.cpp</code></pre>
-            <p class="text-xs text-text-muted mt-2">Or build from source: <span class="font-mono">git clone https://github.com/ggerganov/llama.cpp</span></p>
+            <h3 class="text-sm font-medium text-text-primary mb-2">{{ llm_result.get("install_title", "Install llama-server") }}</h3>
+            <pre class="text-xs text-text-muted font-mono whitespace-pre-wrap"><code>{{ llm_result["install_hint"] }}</code></pre>
         </div>
+        {% endif %}
         {% endif %}
     </div>
 
@@ -47,18 +104,23 @@
         <span></span>
         {% if llm_result and llm_result.get("ok") %}
         <button hx-post="/wizard/step/2"
+                hx-vals='{"backend_choice": "local", "advance": "true"}'
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
                 class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
             Next
         </button>
         {% else %}
         <button hx-post="/wizard/step/2"
+                hx-vals='{"backend_choice": "local"}'
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
-                class="px-6 py-2.5 bg-zinc-600 text-white rounded-lg font-medium text-sm hover:bg-zinc-500 transition-colors">
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-surface-overlay text-white rounded-lg font-medium text-sm hover:opacity-90 transition-opacity">
             Retry Detection
         </button>
         {% endif %}
     </div>
+    {% endif %}
 </div>

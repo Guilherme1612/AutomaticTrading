@@ -12,6 +12,7 @@ This is the pmacs-stoploss process from Architecture.md Section 4.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -167,15 +168,8 @@ def _fetch_current_price(ticker: str, gateway=None) -> float | None:
 
 def _write_heartbeat(heartbeat_dir: Path, cycle_id: str) -> None:
     """Write process heartbeat file for cortex daemon health monitoring."""
-    heartbeat_path = heartbeat_dir / HEARTBEAT_FILENAME
-    heartbeat_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "process": "pmacs-stoploss",
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "cycle_id": cycle_id,
-        "status": "alive",
-    }
-    heartbeat_path.write_text(json.dumps(payload))
+    from pmacs.cortex.health import write_heartbeat
+    write_heartbeat("pmacs-stoploss", heartbeat_dir=heartbeat_dir)
 
 
 def run_stop_loss_loop(
@@ -197,7 +191,13 @@ def run_stop_loss_loop(
     """
     cycle_counter = 0
 
+    # Write initial heartbeat so pmacs status shows RUNNING immediately
+    _write_heartbeat(heartbeat_dir, "startup")
+
     while True:
+        # Write heartbeat each iteration regardless of RTH so pmacs status sees process as alive
+        _write_heartbeat(heartbeat_dir, "idle")
+
         if is_rth():
             cycle_counter += 1
             cycle_id = f"sl-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{cycle_counter}"
@@ -207,12 +207,13 @@ def run_stop_loss_loop(
                 conn = sqlite3.connect(str(db_path))
                 try:
                     rows = conn.execute(
-                        "SELECT id, ticker, state, stop_price_usd, trailing_stop_price_usd "
+                        "SELECT id, ticker, state, stop_price_usd "
                         "FROM holdings WHERE state = 'ACTIVE'"
                     ).fetchall()
 
                     for row in rows:
-                        holding_id, ticker, state, stop_price, trailing_price = row
+                        holding_id, ticker, state, stop_price = row
+                        trailing_price = None  # column not yet in schema
 
                         # Fetch current price
                         current_price = _fetch_current_price(ticker, gateway)
@@ -295,4 +296,20 @@ def run_stop_loss_loop(
                     cycle_id=cycle_id,
                     msg=f"Stop-loss daemon cycle error: {exc}",
                 )
-        time.sleep(check_interval)
+        # Sleep in 60s chunks, writing heartbeat each chunk so pmacs status stays green
+        remaining = check_interval
+        while remaining > 0:
+            _write_heartbeat(heartbeat_dir, "sleep")
+            time.sleep(min(60, remaining))
+            remaining -= 60
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    from pmacs.storage.sqlite import default_db_path
+
+    _db = default_db_path()
+    _hb_dir = _db.parent / "heartbeats"
+    _hb_dir.mkdir(parents=True, exist_ok=True)
+    run_stop_loss_loop(db_path=_db, heartbeat_dir=_hb_dir)

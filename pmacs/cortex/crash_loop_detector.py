@@ -13,6 +13,12 @@ from pathlib import Path
 from pmacs.logsys import log_debug
 
 
+def _resolve_db(db_path: Path | str | None) -> Path:
+    if db_path is None:
+        from pmacs.config import data_dir
+        return data_dir() / "pmacs.db"
+    return Path(db_path)
+
 _CRASH_LOOP_DDL = """
 CREATE TABLE IF NOT EXISTS process_restarts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +38,7 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
 
 def record_restart(
     proc: str,
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
 ) -> None:
     """Record a process restart event.
 
@@ -40,6 +46,7 @@ def record_restart(
         proc: Process name (e.g. 'pmacs-inference').
         db_path: Path to SQLite database.
     """
+    db_path = _resolve_db(db_path)
     p = Path(db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p))
@@ -75,7 +82,7 @@ def record_restart(
 
 def check_crash_loop(
     proc: str,
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     max_restarts: int = 5,
     window_s: int = 60,
 ) -> bool:
@@ -93,6 +100,7 @@ def check_crash_loop(
     Returns:
         True if crash loop detected.
     """
+    db_path = _resolve_db(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -135,7 +143,7 @@ def check_crash_loop(
 
 
 def check_any_crash_loop(
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
     max_restarts: int = 5,
     window_s: int = 60,
 ) -> str | None:
@@ -149,6 +157,7 @@ def check_any_crash_loop(
     Returns:
         Name of first process in crash loop, or None if all healthy.
     """
+    db_path = _resolve_db(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
         _ensure_table(conn)
@@ -175,7 +184,7 @@ def check_any_crash_loop(
 
 def clear_crash_loop_mark(
     proc: str,
-    db_path: str | Path = "/var/db/pmacs/pmacs.db",
+    db_path: str | Path | None = None,
 ) -> None:
     """Clear the BROKEN_CRASH_LOOP mark for a process after manual resolution.
 
@@ -183,6 +192,7 @@ def clear_crash_loop_mark(
         proc: Process name.
         db_path: Path to SQLite database.
     """
+    db_path = _resolve_db(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(

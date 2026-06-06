@@ -11,58 +11,151 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-<h2 class="text-lg font-semibold text-zinc-900 mb-6">System Health</h2>
+<div class="flex items-center gap-3 mb-8 reveal">
+    <span class="w-2.5 h-2.5 rounded-full bg-accent anim-breathing"></span>
+    <h2 class="text-head font-semibold text-text-primary">System Health</h2>
+</div>
 
-<!-- 2x3 grid -->
-<div class="grid grid-cols-3 gap-6">
-    <!-- (1,1) Audit chain panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Audit Chain</h3>
-        <dl class="space-y-3 text-sm">
+<!-- Health Summary Strip — 6 indicator dots, one per panel -->
+<div class="flex flex-wrap items-center gap-3 sm:gap-4 mb-8 reveal" data-stagger role="status" aria-label="System health summary">
+    {% set ns = namespace(all_healthy=true) %}
+    <!-- 1. Audit chain -->
+    {% if audit_chain.status != 'OK' %}{% set ns.all_healthy = false %}{% endif %}
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Audit Chain: {{ audit_chain.status }}">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-positive anim-breathing' if audit_chain.status == 'OK' else 'bg-negative' }}"></span>
+        <span class="text-xs text-text-muted font-medium">Chain</span>
+    </div>
+    <!-- 2. Cross-DB -->
+    {% for db_name, db_status in cross_db.items() %}
+    {% if db_status != 'ok' %}{% set ns.all_healthy = false %}{% endif %}
+    {% endfor %}
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Cross-DB: {{ 'OK' if ns.all_healthy else 'Degraded' }}">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-positive anim-breathing' if ns.all_healthy else 'bg-negative' }}"></span>
+        <span class="text-xs text-text-muted font-medium">DB</span>
+    </div>
+    <!-- 3. Processes -->
+    {% set proc_healthy = processes | selectattr('status', '==', 'running') | list | length == processes | length %}
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Processes: {{ processes | selectattr('status', '==', 'running') | list | length }}/{{ processes | length }} running">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-positive anim-breathing' if proc_healthy else 'bg-warning' }}"></span>
+        <span class="text-xs text-text-muted font-medium">Procs</span>
+    </div>
+    <!-- 4. Disk/Clock/Network -->
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Disk {{ disk_clock_network.disk_free_gb }}GB / Clock {{ disk_clock_network.clock_skew_ms }}ms / Network {{ 'OK' if disk_clock_network.network_ok else 'DOWN' }}">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-positive anim-breathing' if disk_clock_network.disk_free_gb > 10 and disk_clock_network.network_ok else 'bg-warning' }}"></span>
+        <span class="text-xs text-text-muted font-medium">Infra</span>
+    </div>
+    <!-- 5. Kill switch -->
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Kill Switch: {{ 'ENGAGED' if kill_switch.engaged else 'Disengaged' }}">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-negative anim-breathing' if kill_switch.engaged else 'bg-positive anim-breathing' }}"></span>
+        <span class="text-xs text-text-muted font-medium">Kill</span>
+    </div>
+    <!-- 6. Model integrity -->
+    <div class="flex items-center gap-1.5 px-3 py-2 bg-surface-sunken/50 rounded-xl" title="Model: {{ 'Verified' if model_integrity.hash_verified else ('Pending' if (model_integrity.model_path and model_integrity.model_path != '--') else 'No model') }}">
+        <span class="w-2.5 h-2.5 rounded-full {{ 'bg-positive anim-breathing' if model_integrity.hash_verified else 'bg-warning' }}"></span>
+        <span class="text-xs text-text-muted font-medium">Model</span>
+    </div>
+</div>
+
+<!-- 2x3 grid (responsive: 1 col mobile, 2 cols tablet, 3 cols desktop) -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+
+    <!-- (1,1) Audit Chain panel -->
+    <div class="card card-elevated {{ 'card-accent-green' if audit_chain.status == 'OK' else 'card-accent-red' }} reveal" data-stagger>
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if audit_chain.status == 'OK' else 'bg-negative' }}"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Audit Chain</h3>
+            </div>
+            {% if audit_chain.status == 'OK' %}
+            <span class="w-2.5 h-2.5 rounded-full bg-positive anim-breathing" aria-label="Verified"></span>
+            {% endif %}
+        </div>
+        <dl class="space-y-3 text-body">
             <div class="flex justify-between">
-                <dt class="text-zinc-500">Status</dt>
-                <dd class="font-mono {{ 'text-green-600' if audit_chain.status == 'verified' else 'text-red-500' }}">
+                <dt class="text-text-muted">Status</dt>
+                <dd class="font-mono {{ 'text-positive' if audit_chain.status == 'OK' else 'text-negative' }}">
                     {{ audit_chain.status }}
                 </dd>
             </div>
             <div class="flex justify-between">
-                <dt class="text-zinc-500">Entries</dt>
-                <dd class="font-mono">{{ audit_chain.entries }}</dd>
+                <dt class="text-text-muted">Entries</dt>
+                <dd class="font-mono text-text-primary">{{ audit_chain.entries }}</dd>
             </div>
             <div>
-                <dt class="text-zinc-500 mb-1">Last Hash</dt>
-                <dd class="font-mono text-xs text-zinc-400 break-all">{{ audit_chain.last_hash }}</dd>
+                <dt class="text-text-muted mb-1">Last Hash</dt>
+                <dd class="font-mono text-caption text-text-muted break-all">{{ audit_chain.last_hash }}</dd>
             </div>
         </dl>
+        {% if audit_chain.get('recent_hashes') %}
+        <div class="mt-4 pt-3 border-t border-border-subtle">
+            <h4 class="text-[10px] text-text-muted mb-2 uppercase tracking-widest">Recent Chain</h4>
+            <div class="flex items-center gap-1 overflow-x-auto">
+                {% for h in audit_chain.recent_hashes[:5] %}
+                <div class="flex items-center gap-1 shrink-0">
+                    <div class="px-2 py-1 bg-surface-sunken/50 rounded-lg text-[10px] font-mono text-text-muted border border-border-subtle"
+                         title="{{ h }}">{{ h[:8] }}</div>
+                    {% if not loop.last %}
+                    <svg class="w-3 h-3 text-text-muted shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 
-    <!-- (1,2) Cross-DB panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Cross-DB Integrity</h3>
-        <dl class="space-y-3 text-sm">
+    <!-- (1,2) Cross-DB Integrity panel -->
+    <div class="card card-elevated {{ 'card-accent-green' if ns.all_healthy else 'card-accent-amber' }} reveal" data-stagger>
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if ns.all_healthy else 'bg-amber-500' }}"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Cross-DB Integrity</h3>
+            </div>
+            {% if ns.all_healthy %}
+            <svg class="w-4 h-4 text-positive" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="All databases healthy">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            {% endif %}
+        </div>
+        <dl class="space-y-3 text-body">
             {% for db_name, db_status in cross_db.items() %}
-            <div class="flex justify-between">
-                <dt class="text-zinc-500">{{ db_name }}</dt>
-                <dd class="font-mono {{ 'text-green-600' if db_status == 'ok' else 'text-red-500' }}">{{ db_status }}</dd>
+            <div class="flex justify-between items-center">
+                <dt class="text-text-muted">{{ db_name }}</dt>
+                <dd class="flex items-center gap-1.5 font-mono {{ 'text-positive' if db_status == 'ok' else 'text-negative' }}">
+                    <span class="w-1.5 h-1.5 rounded-full {{ 'bg-positive' if db_status == 'ok' else 'bg-negative' }}"></span>
+                    {{ db_status }}
+                </dd>
             </div>
             {% endfor %}
         </dl>
     </div>
 
-    <!-- (1,3) Process status panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Process Status</h3>
-        <ul class="space-y-2 text-sm">
+    <!-- (1,3) Process Status panel -->
+    <div class="card card-elevated card-accent-blue reveal" data-stagger>
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Process Status</h3>
+            </div>
+            <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2 py-0.5 rounded-lg">{{ processes | selectattr('status', '==', 'running') | list | length }}/{{ processes | length }}</span>
+        </div>
+        {% set inference_proc = processes | selectattr('name', '==', 'pmacs-inference') | list | first %}
+        {% if inference_proc and inference_proc.status != 'running' %}
+        <p class="text-[10px] text-amber-500 mb-2">Simulation mode — no inference model loaded</p>
+        {% endif %}
+        <ul class="space-y-2.5 text-body">
             {% for proc in processes %}
             <li class="flex items-center justify-between">
-                <span class="font-mono text-xs">{{ proc.name }}</span>
+                <span class="font-mono text-caption text-text-secondary">{{ proc.name }}</span>
                 <span class="flex items-center gap-1.5">
-                    <span class="w-2 h-2 rounded-full {{ 'bg-green-500' if proc.status == 'running' else 'bg-zinc-300' }}"></span>
-                    <span class="text-xs {{ 'text-green-600' if proc.status == 'running' else 'text-zinc-400' }}">
+                    <span class="w-2 h-2 rounded-full {{ 'bg-positive anim-breathing' if proc.status == 'running' else 'bg-border-strong' }}"></span>
+                    <span class="text-caption {{ 'text-positive' if proc.status == 'running' else 'text-text-muted' }}">
                         {{ proc.status }}
                     </span>
                     {% if proc.port %}
-                    <span class="text-xs text-zinc-300">:{{ proc.port }}</span>
+                    <span class="text-caption text-text-muted">:{{ proc.port }}</span>
                     {% endif %}
                 </span>
             </li>
@@ -70,87 +163,216 @@
         </ul>
     </div>
 
-    <!-- (2,1) Disk/Clock/Network panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Disk / Clock / Network</h3>
-        <dl class="space-y-3 text-sm">
+    <!-- (2,1) Disk / Clock / Network panel with gauge arcs -->
+    <div class="card card-elevated card-accent-blue reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-4">
+            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Disk / Clock / Network</h3>
+        </div>
+
+        <!-- Gauge row -->
+        <div class="grid grid-cols-3 gap-3 mb-4">
+            <!-- Disk gauge -->
+            <div class="flex flex-col items-center">
+                <svg viewBox="0 0 48 48" class="w-12 h-12" aria-label="Disk: {{ disk_clock_network.disk_free_gb }} GB free">
+                    <circle cx="24" cy="24" r="20" class="gauge-bg gauge-ring"/>
+                    <circle cx="24" cy="24" r="20" class="gauge-ring {{ 'gauge-fill-positive' if disk_clock_network.disk_free_gb > 10 else 'gauge-fill-warning' }}"
+                            stroke-dasharray="125.66"
+                            stroke-dashoffset="{{ 125.66 - (125.66 * [disk_clock_network.disk_free_gb / 100, 1] | min) }}"
+                            transform="rotate(-90 24 24)"/>
+                    <text x="24" y="26" text-anchor="middle" class="text-[8px] font-mono fill-current text-text-primary">{{ disk_clock_network.disk_free_gb }}</text>
+                </svg>
+                <span class="text-[10px] text-text-muted mt-1">Disk GB</span>
+            </div>
+            <!-- Clock gauge -->
+            <div class="flex flex-col items-center">
+                {% set clock_ratio = [1 - (disk_clock_network.clock_skew_ms / 500), 0] | max %}
+                <svg viewBox="0 0 48 48" class="w-12 h-12" aria-label="Clock skew: {{ disk_clock_network.clock_skew_ms }} ms">
+                    <circle cx="24" cy="24" r="20" class="gauge-bg gauge-ring"/>
+                    <circle cx="24" cy="24" r="20" class="gauge-ring {{ 'gauge-fill-positive' if disk_clock_network.clock_skew_ms < 100 else 'gauge-fill-warning' }}"
+                            stroke-dasharray="125.66"
+                            stroke-dashoffset="{{ 125.66 - (125.66 * clock_ratio) }}"
+                            transform="rotate(-90 24 24)"/>
+                    <text x="24" y="26" text-anchor="middle" class="text-[8px] font-mono fill-current text-text-primary">{{ disk_clock_network.clock_skew_ms }}</text>
+                </svg>
+                <span class="text-[10px] text-text-muted mt-1">Skew ms</span>
+            </div>
+            <!-- Network gauge -->
+            <div class="flex flex-col items-center">
+                <svg viewBox="0 0 48 48" class="w-12 h-12" aria-label="Network: {{ 'OK' if disk_clock_network.network_ok else 'DOWN' }}">
+                    <circle cx="24" cy="24" r="20" class="gauge-bg gauge-ring"/>
+                    <circle cx="24" cy="24" r="20" class="gauge-ring {{ 'gauge-fill-positive' if disk_clock_network.network_ok else 'gauge-fill-negative' }}"
+                            stroke-dasharray="125.66"
+                            stroke-dashoffset="{{ '0' if disk_clock_network.network_ok else '62.83' }}"
+                            transform="rotate(-90 24 24)"/>
+                    <text x="24" y="26" text-anchor="middle" class="text-[8px] font-mono fill-current {{ 'text-positive' if disk_clock_network.network_ok else 'text-negative' }}">{{ "OK" if disk_clock_network.network_ok else "DN" }}</text>
+                </svg>
+                <span class="text-[10px] text-text-muted mt-1">Network</span>
+            </div>
+        </div>
+
+        <!-- Detail row -->
+        <dl class="space-y-2 text-body">
             <div class="flex justify-between">
-                <dt class="text-zinc-500">Disk Free</dt>
-                <dd class="font-mono {{ 'text-green-600' if disk_clock_network.disk_free_gb > 10 else 'text-amber-500' }}">
+                <dt class="text-text-muted">Disk Free</dt>
+                <dd class="font-mono {{ 'text-positive' if disk_clock_network.disk_free_gb > 10 else 'text-warning' }}">
                     {{ disk_clock_network.disk_free_gb }} GB
                 </dd>
             </div>
             <div class="flex justify-between">
-                <dt class="text-zinc-500">Clock Skew</dt>
-                <dd class="font-mono">{{ disk_clock_network.clock_skew_ms }} ms</dd>
+                <dt class="text-text-muted">Clock Skew</dt>
+                <dd class="font-mono text-text-primary">{{ disk_clock_network.clock_skew_ms }} ms</dd>
             </div>
             <div class="flex justify-between">
-                <dt class="text-zinc-500">Network</dt>
-                <dd class="font-mono {{ 'text-green-600' if disk_clock_network.network_ok else 'text-red-500' }}">
+                <dt class="text-text-muted">Network</dt>
+                <dd class="font-mono {{ 'text-positive' if disk_clock_network.network_ok else 'text-negative' }}">
                     {{ "OK" if disk_clock_network.network_ok else "DOWN" }}
                 </dd>
             </div>
         </dl>
     </div>
 
-    <!-- (2,2) Kill switch panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Kill Switch</h3>
-        <div class="flex flex-col items-center py-4">
-            <div class="w-16 h-16 rounded-full flex items-center justify-center mb-3
-                        {{ 'bg-red-100 border-2 border-red-500' if kill_switch.engaged else 'bg-green-100 border-2 border-green-500' }}">
-                <span class="text-2xl">{{ "ON" if kill_switch.engaged else "OK" }}</span>
+    <!-- (2,2) Kill Switch panel -->
+    <div class="card card-elevated {{ 'card-accent-red bg-negative-soft' if kill_switch.engaged else 'card-accent-green' }} reveal" data-stagger>
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {{ 'bg-negative' if kill_switch.engaged else 'bg-positive' }}"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Kill Switch</h3>
             </div>
-            <p class="text-sm {{ 'text-red-600' if kill_switch.engaged else 'text-green-600' }}">
+            <span class="px-2.5 py-0.5 text-xs font-medium rounded-xl {{ 'bg-negative-soft text-negative' if kill_switch.engaged else 'bg-positive-soft text-positive' }}">
+                {{ "ENGAGED" if kill_switch.engaged else "DISENGAGED" }}
+            </span>
+        </div>
+        <div class="flex flex-col items-center py-3">
+            <div class="w-16 h-16 rounded-full flex items-center justify-center mb-3 {{ 'anim-breathing border-2 border-negative' if kill_switch.engaged else 'border-2 border-positive' }}
+                        {{ 'bg-negative-soft' if kill_switch.engaged else 'bg-positive-soft' }}">
+                <span class="text-xl font-bold {{ 'text-negative' if kill_switch.engaged else 'text-positive' }}">{{ "ON" if kill_switch.engaged else "OK" }}</span>
+            </div>
+            <p class="text-body font-medium {{ 'text-negative' if kill_switch.engaged else 'text-positive' }}">
                 {{ "ENGAGED" if kill_switch.engaged else "Disengaged" }}
             </p>
-            <button class="mt-4 px-4 py-2 text-sm rounded
-                           {{ 'bg-green-600 text-white hover:bg-green-700' if kill_switch.engaged else 'bg-red-600 text-white hover:bg-red-700' }}
-                           transition-colors">
+            <button type="button" class="mt-4 px-5 py-2 text-body rounded-xl font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2
+                           {{ 'bg-positive text-white hover:bg-positive/90' if kill_switch.engaged else 'bg-negative text-white hover:bg-negative/90' }}"
+                    onclick="killSwitchAction()">
                 {{ "Lift Kill Switch" if kill_switch.engaged else "Engage Kill Switch" }}
             </button>
             {% if kill_switch.totp_required %}
-            <p class="text-xs text-zinc-400 mt-2">TOTP verification required</p>
+            <p class="text-caption text-text-muted mt-2">TOTP verification required</p>
             {% endif %}
         </div>
-        <!-- Trigger history (Source.md §18.6) -->
-        <div class="mt-4 border-t border-zinc-100 pt-3">
-            <h4 class="text-xs font-semibold text-zinc-500 mb-2">Recent Triggers</h4>
+        <!-- Trigger history -->
+        <div class="mt-4 pt-3 border-t border-border-subtle">
+            <h4 class="text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">Recent Triggers</h4>
             {% if kill_switch_history %}
             <ul class="space-y-1.5">
                 {% for evt in kill_switch_history %}
-                <li class="flex items-center justify-between text-xs">
-                    <span class="font-mono text-zinc-400">{{ evt.timestamp[:19] }}</span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium
-                                 {{ 'bg-red-100 text-red-700' if evt.trigger_type == 'manual' else 'bg-amber-100 text-amber-700' }}">
+                <li class="flex items-center justify-between text-caption">
+                    <span class="font-mono text-text-muted">{{ evt.timestamp[:19] }}</span>
+                    <span class="px-2 py-0.5 rounded-xl text-[10px] font-medium
+                                 {{ 'bg-negative-soft text-negative' if evt.trigger_type == 'manual' else 'bg-accent-soft text-accent' }}">
                         {{ 'MANUAL' if evt.trigger_type == 'manual' else 'AUTO-DEMOTION' }}
                     </span>
-                    <span class="text-zinc-600 truncate max-w-[120px]" title="{{ evt.reason }}">{{ evt.reason }}</span>
+                    <span class="text-text-secondary truncate max-w-[80px] sm:max-w-[120px]" title="{{ evt.reason }}">{{ evt.reason }}</span>
                 </li>
                 {% endfor %}
             </ul>
             {% else %}
-            <p class="text-xs text-zinc-400 italic">No triggers recorded</p>
+            <p class="text-caption text-text-muted italic">No triggers recorded</p>
             {% endif %}
         </div>
     </div>
 
-    <!-- (2,3) Model integrity panel -->
-    <div class="bg-white border border-zinc-200 rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-zinc-900 mb-4">Model Integrity</h3>
-        <dl class="space-y-3 text-sm">
-            <div class="flex justify-between">
-                <dt class="text-zinc-500">Hash Verified</dt>
-                <dd class="font-mono {{ 'text-green-600' if model_integrity.hash_verified else 'text-amber-500' }}">
-                    {{ "Yes" if model_integrity.hash_verified else "Pending" }}
+    <!-- (2,3) Model Integrity panel -->
+    <div class="card card-elevated {{ 'card-accent-green' if model_integrity.hash_verified else 'card-accent-amber' }} reveal" data-stagger>
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if model_integrity.hash_verified else 'bg-amber-500' }}"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Model Integrity</h3>
+            </div>
+            {% if model_integrity.hash_verified %}
+            <div class="flex items-center gap-1">
+                <svg class="w-4 h-4 text-positive" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="Hash verified">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-caption text-positive font-medium">Match</span>
+            </div>
+            {% endif %}
+        </div>
+        <dl class="space-y-3 text-body">
+            <div class="flex justify-between items-center">
+                <dt class="text-text-muted">Hash Verified</dt>
+                <dd class="flex items-center gap-1.5 font-mono {{ 'text-positive' if model_integrity.hash_verified else 'text-warning' }}">
+                    {% if model_integrity.hash_verified %}
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    {% else %}
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    {% endif %}
+                    {% if model_integrity.hash_verified %}Yes{% elif model_integrity.model_path and model_integrity.model_path != '--' %}Pending{% else %}No model{% endif %}
                 </dd>
             </div>
+            {% if model_integrity.get('expected_hash') and model_integrity.get('actual_hash') %}
             <div>
-                <dt class="text-zinc-500 mb-1">Model Path</dt>
-                <dd class="font-mono text-xs text-zinc-400 break-all">{{ model_integrity.model_path }}</dd>
+                <dt class="text-text-muted mb-1">Hash Comparison</dt>
+                <div class="bg-surface-sunken/50 rounded-xl p-2 border border-border-subtle">
+                    <div class="flex items-center gap-2 text-[10px] font-mono">
+                        <span class="text-text-muted">Expected</span>
+                        <span class="text-text-secondary break-all">{{ model_integrity.expected_hash[:16] }}...</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-[10px] font-mono mt-1">
+                        <span class="text-text-muted">Actual</span>
+                        <span class="{{ 'text-positive' if model_integrity.hash_verified else 'text-negative' }} break-all">{{ model_integrity.actual_hash[:16] }}...</span>
+                        {% if model_integrity.hash_verified %}
+                        <svg class="w-3 h-3 text-positive shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            <div>
+                <dt class="text-text-muted mb-1">Model Path</dt>
+                <dd class="font-mono text-caption text-text-muted break-all">{{ model_integrity.model_path }}</dd>
             </div>
         </dl>
     </div>
+
 </div>
+
+<!-- Stagger entrance initialization -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if (typeof PMACS_ANIM !== "undefined") {
+        PMACS_ANIM.initScrollReveal();
+        PMACS_ANIM.staggerEntrance('[data-stagger]', { delay: 60 });
+    }
+});
+document.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail && e.detail.target && e.detail.target.id === 'main-content') {
+        if (typeof PMACS_ANIM !== "undefined") {
+            PMACS_ANIM.initScrollReveal();
+            PMACS_ANIM.staggerEntrance('[data-stagger]', { delay: 60 });
+        }
+    }
+});
+
+function killSwitchAction() {
+    {% if kill_switch.engaged %}
+    open_totp_modal({
+        actionId: "cortex.kill_switch_disengage",
+        description: "Disengage kill switch",
+        consequences: "Trading will resume. Stop-loss monitoring continues.",
+        callbackUrl: "/api/cortex/kill-switch/disengage",
+        onSuccess: function() { window.location.reload(); }
+    });
+    {% else %}
+    handleKillSwitch();
+    {% endif %}
+}
+</script>
 {% endif %}
 {% endblock %}

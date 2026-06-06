@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 
-from pmacs.web.app import templates
+from pmacs.web.templating import templates
 from pmacs.web.config import get_config
 from pmacs.web import data as data_layer
 
@@ -47,6 +47,41 @@ async def debug_page(request: Request):
             for e in raw_events
         ]
 
+        # When no live debug events exist, pre-populate from audit log
+        recent_events: list[dict] = []
+        if not events:
+            raw_audit = data_layer.get_recent_audit_entries(cfg.audit_path, limit=50)
+            recent_events = []
+            for e in raw_audit:
+                event_type = e.get("event", "")
+                msg = e.get("msg", event_type)
+                payload = e.get("payload", "")
+                # Enrich DECISION events: parse payload to show ticker + verdict
+                if event_type == "DECISION" and payload:
+                    try:
+                        import json as _json
+                        p = _json.loads(payload) if isinstance(payload, str) else payload
+                        ticker = p.get("ticker", "")
+                        verdict = p.get("verdict", "")
+                        conviction = p.get("conviction")
+                        if ticker and verdict:
+                            pct = f" {round(conviction * 100):.0f}%" if conviction is not None else ""
+                            msg = f"{ticker} → {verdict}{pct}"
+                    except Exception:
+                        pass
+                recent_events.append({
+                    "level": e.get("level", "INFO"),
+                    "timestamp": e.get("ts", ""),
+                    "stream": event_type,
+                    "message": msg,
+                    "detail": payload,
+                    "error_code": "",
+                    "spec_ref": "",
+                    "cycle_id": e.get("cycle_id", ""),
+                    "event_id": e.get("ts", ""),
+                    "raw_payload": payload,
+                })
+
         return templates.TemplateResponse(
             request=request,
             name="debug.html",
@@ -54,6 +89,7 @@ async def debug_page(request: Request):
                 "page": "debug",
                 "mode": "SHADOW + PAPER",
                 "events": events,
+                "recent_events": recent_events,
                 "filter_chips": [
                     "ALL",
                     "CYCLE",

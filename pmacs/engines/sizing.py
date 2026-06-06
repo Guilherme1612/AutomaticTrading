@@ -11,6 +11,19 @@ BOOTSTRAP_HAIRCUT: dict[int, float] = {0: 0.50, 1: 0.65, 2: 0.80, 3: 0.90}
 LIMITED_HISTORY_HAIRCUT: float = 0.50
 
 
+def _load_max_position() -> float:
+    """Load max position from config, fallback to constant."""
+    try:
+        from pmacs.config import load_config
+        return load_config().risk.max_position_usd
+    except (FileNotFoundError, KeyError, TypeError, AttributeError):
+        from pmacs.constants import MAX_POSITION_USD
+        return MAX_POSITION_USD
+
+
+MAX_POSITION_USD: float = _load_max_position()  # Architecture.md §2: hard cap at $1,000
+
+
 @dataclass(frozen=True)
 class SizingInputs:
     p_up: float
@@ -56,15 +69,18 @@ def size_position(x: SizingInputs) -> SizingResult:
 
     safety_kelly = kelly_fraction * 0.5  # half-Kelly
 
-    # Correlation factor: reduce size if highly correlated with existing positions
+    # Correlation factor: reduce size if highly correlated with existing positions.
+    # Floor at 0.30 so a single high-correlation holding cannot block all new entries —
+    # valid, uncorrelated theses should still get meaningful allocation even when the
+    # portfolio happens to hold a related name.
     if x.portfolio_correlations:
-        correlation_factor = max(0.3, 1.0 - max(x.portfolio_correlations))
+        correlation_factor = max(0.30, 1.0 - max(x.portfolio_correlations))
     else:
         correlation_factor = 1.0
 
-    # Bootstrap haircut based on number of matured sources
+    # Bootstrap haircut based on number of matured sources (0-3 mature → haircut; 4+ → 1.0)
     n_mature = min(x.matured_sources_used, 4)
-    bootstrap_factor = BOOTSTRAP_HAIRCUT.get(n_mature, 1.0) if n_mature < 4 else 1.0
+    bootstrap_factor = BOOTSTRAP_HAIRCUT.get(n_mature, 1.0)
 
     # Limited history haircut
     limited_factor = LIMITED_HISTORY_HAIRCUT if x.is_limited_history else 1.0
@@ -73,6 +89,7 @@ def size_position(x: SizingInputs) -> SizingResult:
     target_pct = min(target_pct, x.max_position_pct)
 
     target_usd = target_pct * x.portfolio_value_usd
+    target_usd = min(target_usd, MAX_POSITION_USD)  # Architecture.md §9.3: $1000 hard cap
     target_shares = target_usd / x.current_price if x.current_price > 0 else 0.0
 
     return SizingResult(

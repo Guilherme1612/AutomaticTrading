@@ -484,15 +484,16 @@ def main_loop() -> None:
     In production, pmacs-mutation runs as a daemon process with this loop.
     Activation gate: skips everything until cycle count >= 50 (config/mutation.toml).
     """
-    from pmacs.config import CONFIG_DIR, load_config
+    from pmacs.config import CONFIG_DIR, data_dir, load_config
 
     cfg = load_config()
     mutation_cfg = cfg.mutation
+    d = data_dir()
 
-    db_path = Path("/var/db/pmacs/pmacs.db")
-    audit_path = Path("/var/log/pmacs/audit.log")
+    db_path = d / "pmacs.db"
+    audit_path = d / "audit.log"
     registry_path = CONFIG_DIR / "model_registry.json"
-    duckdb_path = Path("/var/db/pmacs/pmacs_analytics.duckdb")
+    duckdb_path = d / "pmacs_analytics.duckdb"
 
     daemon = MutationDaemon(
         config=mutation_cfg,
@@ -508,6 +509,13 @@ def main_loop() -> None:
         level="INFO",
         msg="pmacs-mutation daemon starting",
     )
+
+    # Write initial heartbeat so pmacs status shows RUNNING immediately
+    try:
+        from pmacs.cortex.health import write_heartbeat as _wh
+        _wh("pmacs-mutation", heartbeat_dir=db_path.parent / "heartbeats")
+    except Exception:
+        pass
 
     while True:
         cycle_id = f"mutation-{int(time.time())}"
@@ -531,6 +539,7 @@ def main_loop() -> None:
             "MUTATION_DAEMON_ITERATION",
             payload={"cycle_id": cycle_id, "paper_cycle_count": paper_cycle_count},
             level="INFO",
+            cycle_id=cycle_id,
             msg=f"Mutation daemon iteration {cycle_id}",
         )
 
@@ -546,4 +555,17 @@ def main_loop() -> None:
                 msg=f"Mutation daemon loop error: {exc}",
             )
 
+        # Write heartbeat so pmacs status can detect this process is alive
+        try:
+            from pmacs.cortex.health import write_heartbeat as _wh
+            from pmacs.config import data_dir as _data_dir
+            _wh("pmacs-mutation", heartbeat_dir=_data_dir() / "heartbeats")
+        except Exception:
+            pass
+
         time.sleep(60)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    main_loop()

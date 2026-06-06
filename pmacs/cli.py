@@ -10,12 +10,29 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Default paths
+# Default paths — centralized via config.data_dir()
+from pmacs.config import data_dir as _get_data_dir
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DATA_DIR = Path(os.environ.get("PMACS_DATA_DIR", "/usr/local/var/pmacs"))
+_DATA_DIR = _get_data_dir()
 _CONFIG_DIR = Path(os.environ.get("PMACS_CONFIG_DIR", str(_PROJECT_ROOT / "config")))
 _PID_DIR = _DATA_DIR / "pids"
 _HEARTBEAT_DIR = _DATA_DIR / "heartbeats"
+
+
+def _resolve_python() -> str:
+    """Return the Python executable that has pmacs dependencies installed.
+
+    Prefers the project .venv if present, otherwise falls back to sys.executable.
+    """
+    venv_candidates = [
+        _PROJECT_ROOT / ".venv" / "bin" / "python3",
+        _PROJECT_ROOT / ".venv" / "bin" / "python",
+    ]
+    for candidate in venv_candidates:
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
 
 # Process definitions: name → (launchd_label, heartbeat_file)
 _PROCESSES = {
@@ -26,7 +43,6 @@ _PROCESSES = {
     "nervous": ("com.pmacs.nervous", "pmacs-nervous.json"),
     "stoploss": ("com.pmacs.stoploss", "pmacs-stoploss.json"),
     "mutation": ("com.pmacs.mutation", "pmacs-mutation.json"),
-    "dashboard": ("com.pmacs.dashboard", "pmacs-dashboard.json"),
 }
 
 _ORDERED_START = [
@@ -37,7 +53,6 @@ _ORDERED_START = [
     "nervous",
     "stoploss",
     "mutation",
-    "dashboard",
 ]
 
 
@@ -46,6 +61,23 @@ def _ensure_data_dir() -> None:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     _PID_DIR.mkdir(parents=True, exist_ok=True)
     _HEARTBEAT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_wizard_completed() -> bool:
+    """Check if the first-run wizard has been completed by reading SQLite."""
+    import sqlite3
+    db_path = _DATA_DIR / "pmacs.db"
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT value FROM wizard_state WHERE key = ?", ("wizard_completed",)
+        ).fetchone()
+        conn.close()
+        return row is not None and row[0] == "1"
+    except Exception:
+        return False
 
 
 def cmd_init() -> None:
@@ -90,15 +122,48 @@ def cmd_init() -> None:
     print(f"  Config dir: {_CONFIG_DIR}")
 
 
+def _read_gguf_path() -> str:
+    """Read gguf_path from resources.toml, or empty string."""
+    resources_path = _CONFIG_DIR / "resources.toml"
+    if not resources_path.exists():
+        return ""
+    for line in resources_path.read_text().splitlines():
+        if "gguf_path" in line and "=" in line:
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def _read_active_backend() -> str:
+    """Read the active backend from model_registry.json, or empty string."""
+    import json as _json
+    registry_path = _CONFIG_DIR / "model_registry.json"
+    if not registry_path.exists():
+        return ""
+    try:
+        return _json.loads(registry_path.read_text()).get("active", "")
+    except Exception:
+        return ""
+
+
 def cmd_start() -> None:
     """Start all PMACS processes via launchd."""
     _ensure_data_dir()
 
-    # Check if databases exist
+    # Check if wizard has been completed
+    if not _is_wizard_completed():
+        print("First-run setup not completed.")
+        print()
+        print("  Launching the setup wizard in your browser...")
+        print()
+        cmd_wizard()
+        return
+
+    # Check if databases exist (should exist after wizard, but safety check)
     db_path = _DATA_DIR / "pmacs.db"
     if not db_path.exists():
-        print("Databases not initialized. Run 'pmacs init' first.")
-        sys.exit(1)
+        print("Databases not initialized. Launching wizard...")
+        cmd_wizard()
+        return
 
     # Try launchd first (macOS)
     launched = 0
@@ -121,38 +186,105 @@ def cmd_start() -> None:
         print(f"\n{launched} processes started via launchd.")
         return
 
-    # Fallback: direct process launch
+    # Fallback: direct process launch (all 8 processes, spec dependency order)
     print("No launchd plists found. Starting processes directly...")
 
-    # Start inference server
-    inference_script = _PROJECT_ROOT / "ops" / "start_inference.sh"
-    if inference_script.exists():
-        subprocess.Popen([str(inference_script)], start_new_session=True)
-        print("  Started inference")
+    python = _resolve_python()
+
+    # Check model availability — local GGUF or cloud backend both count
+    gguf_path = _read_gguf_path()
+    has_local_model = gguf_path and Path(gguf_path).exists()
+    active_backend = _read_active_backend()
+    cloud_backends = {"openrouter", "anthropic", "openai"}
+    has_cloud_backend = active_backend in cloud_backends
+    has_model = has_local_model or has_cloud_backend
+
+    if not has_model:
+        print()
+        print("  NOTE: No GGUF model found. Run 'pmacs setup' to configure one.")
+        print("        Starting in simulation mode (no LLM inference).")
+        print()
+
+    # 1. Inference
+    if has_cloud_backend:
+        # Cloud backend — no local server needed, personas call API directly
+        print(f"  inference: cloud backend ({active_backend}) — no local server needed")
+    elif has_local_model:
+        inference_script = _PROJECT_ROOT / "ops" / "start_inference.sh"
+        if inference_script.exists():
+            subprocess.Popen([str(inference_script)], start_new_session=True)
+            print("  Started inference (llama-server on :8080)")
+        else:
+            print("  inference: script not found (ops/start_inference.sh)")
     else:
-        print("  inference: script not found (ops/start_inference.sh)")
+        print("  inference: SKIPPED (no model file — simulation mode)")
 
-    # Start nervous (FastAPI)
+    # 2. Cortex daemon (health monitoring, kill switch)
     try:
         subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "pmacs.web.app:app",
-             "--host", "127.0.0.1", "--port", "8000"],
+            [python, "-m", "pmacs.cortex.daemon"],
             start_new_session=True,
         )
-        print("  Started nervous on :8000")
+        print("  Started cortex")
     except Exception as exc:
-        print(f"  nervous: failed ({exc})")
+        print(f"  cortex: failed ({exc})")
 
-    # Start dashboard
+    # 2.5. Cortex self-check (meta-monitor)
     try:
         subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "pmacs.web.app:app",
-             "--host", "127.0.0.1", "--port", "8001"],
+            [python, "-m", "pmacs.cortex.self_check"],
             start_new_session=True,
         )
-        print("  Started dashboard on :8001")
+        print("  Started cortex-self-check")
     except Exception as exc:
-        print(f"  dashboard: failed ({exc})")
+        print(f"  cortex-self-check: failed ({exc})")
+
+    # 3. Execution service (UDS trade signing)
+    try:
+        subprocess.Popen(
+            [python, "-m", "pmacs.execution.service"],
+            start_new_session=True,
+        )
+        print("  Started execution")
+    except Exception as exc:
+        print(f"  execution: failed ({exc})")
+
+    # 4. Combined web + API server on :8000
+    if _check_port("127.0.0.1", 8000):
+        print("  nervous  already running on :8000")
+    else:
+        _kill_port(8000)
+        try:
+            subprocess.Popen(
+                [python, "-m", "uvicorn", "pmacs.web.app:app",
+                 "--host", "127.0.0.1", "--port", "8000"],
+                start_new_session=True,
+            )
+            print("  Started nervous+dashboard on :8000")
+        except Exception as exc:
+            print(f"  nervous: failed ({exc})")
+
+    # 5. Stop-loss daemon (RTH position monitoring)
+    try:
+        subprocess.Popen(
+            [python, "-m", "pmacs.cortex.stop_loss_daemon"],
+            start_new_session=True,
+        )
+        print("  Started stoploss")
+    except Exception as exc:
+        print(f"  stoploss: failed ({exc})")
+
+    # 6. Mutation daemon (flywheel, dormant first 50 cycles)
+    try:
+        subprocess.Popen(
+            [python, "-m", "pmacs.mutation.daemon"],
+            start_new_session=True,
+        )
+        print("  Started mutation")
+    except Exception as exc:
+        print(f"  mutation: failed ({exc})")
+
+    # (dashboard is served from :8000 in the combined app)
 
     print("\nProcesses started. Use 'pmacs status' to check health.")
 
@@ -180,8 +312,19 @@ def cmd_stop() -> None:
         print(f"\n{stopped} processes stopped.")
         return
 
-    # Fallback: kill by port
-    ports = {"inference": 8080, "nervous": 8000, "dashboard": 8001}
+    # Fallback: kill by port (network services) + find daemon PIDs
+    ports = {
+        "inference": 8080,
+        "nervous": 8000,
+    }
+    # Daemon processes (no port) — find by module name
+    daemon_modules = [
+        "pmacs.cortex.daemon",
+        "pmacs.cortex.self_check",
+        "pmacs.cortex.stop_loss_daemon",
+        "pmacs.mutation.daemon",
+        "pmacs.execution.service",
+    ]
     for name, port in ports.items():
         try:
             result = subprocess.run(
@@ -196,41 +339,157 @@ def cmd_stop() -> None:
         except (ValueError, ProcessLookupError):
             pass
 
+    # Kill daemon processes by matching module name in process list
+    try:
+        ps_out = subprocess.run(
+            ["ps", "aux"], capture_output=True, text=True,
+        ).stdout
+        for mod in daemon_modules:
+            for line in ps_out.splitlines():
+                if mod in line and "grep" not in line:
+                    parts = line.split()
+                    if parts and parts[1].isdigit():
+                        try:
+                            os.kill(int(parts[1]), signal.SIGTERM)
+                            print(f"  Stopped {mod} (PID {parts[1]})")
+                            stopped += 1
+                        except (ValueError, ProcessLookupError):
+                            pass
+    except Exception:
+        pass
+
     if stopped == 0:
         print("No running processes found.")
 
 
+def cmd_clean() -> None:
+    """Remove all personal data (databases, logs, heartbeats, pids).
+
+    Keeps config/ intact. Re-initialize with 'pmacs init' or 'pmacs setup'.
+    """
+    # Accept --force / -f to skip confirmation
+    force = "--force" in sys.argv or "-f" in sys.argv
+
+    if not _DATA_DIR.exists():
+        print("No data directory found. Nothing to clean.")
+        return
+
+    # Enumerate what will be deleted
+    targets = []
+    total_size = 0
+    for item in sorted(_DATA_DIR.rglob("*")):
+        if item.is_file():
+            size = item.stat().st_size
+            total_size += size
+            rel = item.relative_to(_DATA_DIR)
+            targets.append(rel)
+
+    if not targets:
+        print("Data directory is empty. Nothing to clean.")
+        return
+
+    print(f"PMACS Clean — will delete {len(targets)} file(s) ({_fmt_size(total_size)})")
+    print(f"  Data dir: {_DATA_DIR}")
+    for t in targets[:15]:
+        print(f"    - {t}")
+    if len(targets) > 15:
+        print(f"    ... and {len(targets) - 15} more")
+
+    if not force:
+        print("  WARNING: This will also delete .env (API keys will need to be re-entered).")
+        print()
+        try:
+            answer = input("  Delete all personal data? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("Aborted.")
+            return
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    # Stop processes first
+    print("Stopping processes...")
+    cmd_stop()
+
+    # Delete data directory contents, then recreate structure
+    print("Cleaning data...")
+    shutil.rmtree(_DATA_DIR)
+    _ensure_data_dir()
+
+    # Also clear .env if it exists (API keys)
+    env_path = _PROJECT_ROOT / ".env"
+    if env_path.exists():
+        env_path.unlink()
+        print("  Removed .env (API keys)")
+
+    print("Clean complete. Run 'pmacs init' to re-initialize databases.")
+
+
+def _fmt_size(n: int) -> str:
+    """Format bytes as human-readable size."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
 def cmd_status() -> None:
     """Show status of all PMACS processes."""
+    import time
+    from pmacs.cortex.health import check_heartbeats
+
     print("PMACS Process Status")
     print("=" * 50)
 
+    # Map display name → heartbeat proc name (as written by write_heartbeat calls).
+    # Processes with no heartbeat writer use pgrep as fallback.
+    _PROC_HB_NAMES: dict[str, str | None] = {
+        "inference": None,            # skipped in simulation mode
+        "cortex": "pmacs-cortex",
+        "cortex-self-check": "cortex-self-check",
+        "execution": None,            # UDS service — no heartbeat writer yet
+        "nervous": "nervous",
+        "stoploss": "pmacs-stoploss",
+        "mutation": "pmacs-mutation",
+    }
+    # Module fragments used for pgrep fallback (processes without heartbeat files)
+    _PROC_PGREP: dict[str, str] = {
+        "execution": "pmacs.execution.service",
+        "mutation": "pmacs.mutation.daemon",
+    }
+
+    hb_proc_names = [v for v in _PROC_HB_NAMES.values() if v is not None]
+    # Use 120s threshold — some processes write every 60s (self-check, mutation)
+    statuses = check_heartbeats(hb_proc_names, heartbeat_dir=_HEARTBEAT_DIR, stale_threshold=120.0)
+    by_hb = {s.proc: s for s in statuses}
+
     all_healthy = True
     for name in _ORDERED_START:
-        _, hb_file = _PROCESSES[name]
-        hb_path = _HEARTBEAT_DIR / hb_file
+        hb_name = _PROC_HB_NAMES[name]
 
-        if hb_path.exists():
-            try:
-                data = json.loads(hb_path.read_text())
-                status = data.get("status", "unknown")
-                ts = data.get("ts", "?")
-                print(f"  {name:20s} {status:10s} (last heartbeat: {ts})")
-            except json.JSONDecodeError:
-                print(f"  {name:20s} CORRUPT    (heartbeat file invalid)")
-                all_healthy = False
-        else:
-            # Check launchd
-            label, _ = _PROCESSES[name]
-            result = subprocess.run(
-                ["launchctl", "list", label],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                print(f"  {name:20s} RUNNING    (no heartbeat yet)")
+        if name == "inference":
+            print(f"  {name:20s} SKIPPED    (simulation mode — no model)")
+            continue
+
+        if hb_name is not None:
+            s = by_hb.get(hb_name)
+            if s and not s.is_stale:
+                ts_str = time.strftime("%H:%M:%S", time.localtime(s.last_ts)) if s.last_ts else "?"
+                print(f"  {name:20s} RUNNING    (last heartbeat: {ts_str})")
             else:
                 print(f"  {name:20s} STOPPED")
                 all_healthy = False
+        else:
+            # Execution: check for live UDS socket (created when service is listening)
+            if name == "execution":
+                sock_path = _DATA_DIR / "exec.sock"
+                if sock_path.exists():
+                    print(f"  {name:20s} RUNNING    (socket: exec.sock)")
+                else:
+                    print(f"  {name:20s} STOPPED")
+                    all_healthy = False
 
     print()
     # Check database files
@@ -250,11 +509,400 @@ def cmd_version() -> None:
     print(f"pmacs {__version__}")
 
 
+def cmd_wizard() -> None:
+    """Launch the web-based setup wizard in a browser.
+
+    Starts the nervous API temporarily on :8000 to serve the wizard UI,
+    then opens the browser to /wizard. After wizard completes, the user
+    should run 'pmacs start' to launch all processes.
+    """
+    import webbrowser
+
+    wizard_url = "http://127.0.0.1:8000/wizard/"
+
+    # Check if the combined server is already running
+    if _check_port("127.0.0.1", 8000):
+        print(f"Opening wizard in browser: {wizard_url}")
+        webbrowser.open(wizard_url)
+        return
+
+    # Start combined server on :8000 temporarily for the wizard
+    python = _resolve_python()
+    _kill_port(8000)
+    proc = subprocess.Popen(
+        [python, "-m", "uvicorn", "pmacs.web.app:app",
+         "--host", "127.0.0.1", "--port", "8000"],
+        start_new_session=True,
+    )
+    print(f"Started server on :8000 for wizard (PID {proc.pid})")
+    print(f"Opening wizard in browser: {wizard_url}")
+    webbrowser.open(wizard_url)
+    print()
+    print("After completing the wizard, run 'pmacs start' to launch all processes.")
+
+
+def _prompt(prompt: str, default: str = "") -> str:
+    """Ask the user a question with an optional default."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        value = input(f"  {prompt}{suffix}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return value or default
+
+
+def _check_port(host: str, port: int) -> bool:
+    """Check if a port is already in use."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except (ConnectionRefusedError, OSError):
+        return False
+
+
+def _kill_port(port: int) -> None:
+    """Kill any process listening on *port* (macOS)."""
+    result = subprocess.run(
+        ["lsof", "-ti", f":{port}"],
+        capture_output=True, text=True,
+    )
+    pids = result.stdout.strip().split()
+    for pid in pids:
+        if pid.isdigit():
+            subprocess.run(["kill", pid], capture_output=True)
+            print(f"  killed stale PID {pid} on :{port}")
+
+
+def cmd_setup() -> None:
+    """Interactive one-shot setup: configure, init, and start PMACS.
+
+    Asks about model location, API keys, then initializes databases,
+    writes config, and starts all services.
+    """
+    import hashlib
+
+    print()
+    print("╔═══════════════════════════════════════════════════╗")
+    print("║           PMACS Setup Wizard (CLI)                ║")
+    print("║     Portfolio Management & Catalyst Automation    ║")
+    print("╚═══════════════════════════════════════════════════╝")
+    print()
+
+    # ── Step 1: Model path ──────────────────────────────────────────────────
+    resources_path = _CONFIG_DIR / "resources.toml"
+
+    # Read current gguf_path from config
+    current_gguf = ""
+    if resources_path.exists():
+        for line in resources_path.read_text().splitlines():
+            if "gguf_path" in line and "=" in line:
+                current_gguf = line.split("=", 1)[1].strip().strip('"').strip("'")
+                break
+
+    print("Step 1: LLM Model")
+    print("  PMACS uses a local LLM for analysis. You need a GGUF model file.")
+    if current_gguf and Path(current_gguf).exists():
+        print(f"  Current model: {current_gguf}")
+    print()
+
+    has_model = _prompt("Do you have a GGUF model file? (y/n)", "y")
+    gguf_path = current_gguf
+
+    if has_model.lower() == "y":
+        if not gguf_path or not Path(gguf_path).exists():
+            gguf_path = _prompt("Enter path to GGUF model file", gguf_path or "")
+            gguf_path = str(Path(gguf_path).expanduser().resolve())
+
+        if gguf_path and Path(gguf_path).exists():
+            # Compute SHA256 (first 1MB for speed)
+            sha256 = hashlib.sha256()
+            with open(gguf_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1_048_576), b""):
+                    sha256.update(chunk)
+            file_hash = sha256.hexdigest()[:16]
+            file_size_gb = Path(gguf_path).stat().st_size / (1024 ** 3)
+            print(f"  Model found: {Path(gguf_path).name} ({file_size_gb:.1f} GB, SHA256: {file_hash}...)")
+
+            # Update resources.toml
+            if resources_path.exists():
+                content = resources_path.read_text()
+                new_content = []
+                for line in content.splitlines():
+                    if "gguf_path" in line and "=" in line:
+                        new_content.append(f'gguf_path = "{gguf_path}"')
+                    else:
+                        new_content.append(line)
+                resources_path.write_text("\n".join(new_content) + "\n")
+                print("  Updated config/resources.toml")
+        else:
+            print("  Model file not found. Will run in simulation mode.")
+            gguf_path = ""
+    else:
+        print("  No model — will run in simulation mode (no LLM inference).")
+        gguf_path = ""
+
+    print()
+
+    # ── Step 2: Broker API keys ─────────────────────────────────────────────
+    print("Step 2: Broker (Alpaca Paper Trading)")
+    print("  PMACS paper-trades via Alpaca. Get keys at https://app.alpaca.markets")
+    print("  (Paper trading account, free). Leave blank to skip and configure later.")
+    print()
+
+    alpaca_key = _prompt("Alpaca API Key", "")
+    alpaca_secret = _prompt("Alpaca API Secret", "")
+
+    if alpaca_key and alpaca_secret:
+        try:
+            import keyring
+            keyring.set_password("pmacs.credentials", "alpaca_api_key", alpaca_key)
+            keyring.set_password("pmacs.credentials", "alpaca_api_secret", alpaca_secret)
+            print("  Stored in system keychain.")
+        except Exception:
+            # Fallback: write to .env
+            env_path = _PROJECT_ROOT / ".env"
+            env_path.write_text(
+                f"ALPACA_API_KEY={alpaca_key}\nALPACA_API_SECRET={alpaca_secret}\n"
+            )
+            print(f"  Written to {env_path}")
+    else:
+        print("  Skipped — will use mock adapter for now.")
+
+    print()
+
+    # ── Step 3: Install dependencies ────────────────────────────────────────
+    print("Step 3: Install Dependencies")
+    pip_path = shutil.which("pip") or shutil.which("pip3")
+    if not pip_path:
+        pip_path = str(Path(sys.executable).parent / "pip")
+
+    # Collect missing packages
+    required_packages = [
+        "pydantic>=2.5",
+        "httpx>=0.27",
+        "cryptography>=42.0",
+        "keyring>=25.0",
+        "fastapi>=0.110",
+        "python-multipart>=0.0.7",
+        "uvicorn>=0.29",
+        "sse-starlette>=2.0",
+        "jinja2>=3.1.6",
+        "duckdb>=1.5.2",
+        "alpaca-py>=0.30",
+        "kuzu>=0.5.0",
+        "qdrant-client>=1.12.0",
+        "sentence-transformers>=3.0.0",
+        "pytz>=2024.1",
+    ]
+    import importlib
+    import re
+
+    # Map pip specifiers to import names
+    _pip_to_import = {
+        "pydantic": "pydantic",
+        "httpx": "httpx",
+        "cryptography": "cryptography",
+        "keyring": "keyring",
+        "fastapi": "fastapi",
+        "python-multipart": "multipart",
+        "uvicorn": "uvicorn",
+        "sse-starlette": "sse_starlette",
+        "jinja2": "jinja2",
+        "duckdb": "duckdb",
+        "alpaca-py": "alpaca",
+        "kuzu": "kuzu",
+        "qdrant-client": "qdrant_client",
+        "sentence-transformers": "sentence_transformers",
+        "pytz": "pytz",
+    }
+
+    missing = []
+    for spec in required_packages:
+        pkg_name = re.split(r"[>=<~!]", spec)[0]
+        import_name = _pip_to_import.get(pkg_name, pkg_name.replace("-", "_"))
+        try:
+            importlib.import_module(import_name)
+        except ImportError:
+            missing.append(spec)
+
+    if missing:
+        print(f"  {len(missing)} package(s) missing:")
+        for pkg in missing:
+            print(f"    - {pkg}")
+        print(f"  Installing via {sys.executable} ...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", *missing],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print("  All packages installed.")
+        else:
+            print(f"  pip install failed: {result.stderr.strip()}")
+            print("  Install manually: pip install -e .")
+    else:
+        print("  All Python packages OK.")
+
+    # Check external tools
+    if not shutil.which("llama-server"):
+        print("  llama-server not found — install with: brew install llama.cpp")
+        print("  (PMACS will run in simulation mode without it)")
+    else:
+        print("  llama-server OK.")
+
+    print()
+
+    # ── Step 4: Initialize databases ────────────────────────────────────────
+    print("Step 4: Initialize Databases")
+    _ensure_data_dir()
+
+    # SQLite
+    from pmacs.storage.sqlite import init_db as sqlite_init
+    db_path = _DATA_DIR / "pmacs.db"
+    sqlite_init(str(db_path))
+    print(f"  SQLite     {db_path}")
+
+    # KuzuDB
+    try:
+        from pmacs.storage.kuzu import KuzuDBAdapter
+        kuzu = KuzuDBAdapter(_DATA_DIR / "pmacs_graph.kuzu")
+        kuzu.initialize()
+        print(f"  KuzuDB     {_DATA_DIR}/pmacs_graph.kuzu")
+    except Exception as exc:
+        print(f"  KuzuDB     skipped ({exc})")
+
+    # DuckDB
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+        duckdb = DuckDBAdapter(_DATA_DIR / "pmacs_analytics.duckdb")
+        duckdb.initialize()
+        print(f"  DuckDB     {_DATA_DIR}/pmacs_analytics.duckdb")
+    except Exception as exc:
+        print(f"  DuckDB     skipped ({exc})")
+
+    # Qdrant
+    try:
+        from pmacs.storage.qdrant import QdrantAdapter
+        qdrant = QdrantAdapter()
+        qdrant.initialize()
+        print(f"  Qdrant     OK")
+    except Exception as exc:
+        print(f"  Qdrant     skipped ({exc})")
+
+    # Audit genesis
+    from pmacs.storage.audit import AuditWriter
+    audit_path = _DATA_DIR / "audit.log"
+    writer = AuditWriter(audit_path)
+    writer.append("SYSTEM_GENESIS", {"event": "cli_setup"}, cycle_id="genesis")
+    writer.close()
+    print(f"  Audit      {audit_path}")
+
+    # Mode promotion
+    import sqlite3
+    from pmacs.engines.mode_manager import transition_mode
+    from pmacs.schemas.system import Mode
+    try:
+        mt = transition_mode(
+            from_mode=Mode.INSTALLING,
+            to_mode=Mode.PAPER,
+            reason="CLI setup complete",
+            totp_verified=False,
+        )
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO mode_history (from_mode, to_mode, reason, triggered_by, changed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (mt.from_mode.value, mt.to_mode.value, mt.reason, mt.triggered_by,
+             mt.changed_at.isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        print(f"  Mode       INSTALLING -> PAPER")
+    except Exception as exc:
+        print(f"  Mode       skipped ({exc})")
+
+    print()
+
+    # ── Step 5: Start services ──────────────────────────────────────────────
+    print("Step 5: Start Services")
+    started = []
+
+    # llama-server (only if local model; cloud backends need no local server)
+    _active_backend = _read_active_backend()
+    _cloud_backends = {"openrouter", "anthropic", "openai"}
+    if _active_backend in _cloud_backends:
+        print(f"  inference  cloud backend ({_active_backend}) — no local server needed")
+    elif gguf_path and Path(gguf_path).exists():
+        if _check_port("127.0.0.1", 8080):
+            print("  inference  already running on :8080")
+        elif not shutil.which("llama-server"):
+            print("  inference  llama-server not found (install: brew install llama.cpp)")
+            print("             Will run in simulation mode.")
+        else:
+            inference_script = _PROJECT_ROOT / "ops" / "start_inference.sh"
+            if inference_script.exists():
+                proc = subprocess.Popen(
+                    [str(inference_script)],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                print(f"  inference  starting on :8080 (PID {proc.pid})")
+                started.append(proc.pid)
+            else:
+                print("  inference  ops/start_inference.sh not found")
+    else:
+        print("  inference  SKIPPED (no model — simulation mode)")
+
+    # Combined web + API server on :8000
+    if _check_port("127.0.0.1", 8000):
+        print("  nervous+dashboard  already running on :8000")
+    else:
+        _kill_port(8000)
+        proc = subprocess.Popen(
+            [_resolve_python(), "-m", "uvicorn", "pmacs.web.app:app",
+             "--host", "127.0.0.1", "--port", "8000"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"  nervous+dashboard  starting on :8000 (PID {proc.pid})")
+        started.append(proc.pid)
+
+    print()
+
+    # ── Done ────────────────────────────────────────────────────────────────
+    print("═" * 53)
+    print("  Setup complete!")
+    print()
+    print(f"  Dashboard:  http://127.0.0.1:8000")
+    if not gguf_path or not Path(gguf_path).exists():
+        print("  LLM Mode:   SIMULATION (no model file)")
+    elif not shutil.which("llama-server"):
+        print("  LLM Mode:   SIMULATION (llama-server not installed)")
+    else:
+        print("  LLM Mode:   LIVE (llama-server)")
+    print()
+    print("  Next steps:")
+    print("    pmacs status    — check running processes")
+    print("    pmacs stop      — stop all processes")
+    print("    pmacs setup     — reconfigure and restart")
+    print("═" * 53)
+
+
 def main() -> None:
     """PMACS command-line interface."""
     if len(sys.argv) < 2:
         print("Usage: pmacs <command>")
-        print("Commands: init, start, stop, status, version")
+        print("Commands: wizard, setup, init, start, stop, clean, status, version")
+        print()
+        print("  wizard  — Launch web-based setup wizard (first run)")
+        print("  setup   — Interactive one-shot: configure + init + start")
+        print("  init    — Initialize databases only")
+        print("  start   — Start all processes")
+        print("  stop    — Stop all processes")
+        print("  clean   — Delete all personal data (use --force to skip prompt)")
+        print("  status  — Show process status")
+        print("  version — Print version")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -263,7 +911,10 @@ def main() -> None:
         "init": cmd_init,
         "start": cmd_start,
         "stop": cmd_stop,
+        "clean": cmd_clean,
         "status": cmd_status,
+        "setup": cmd_setup,
+        "wizard": cmd_wizard,
     }
 
     handler = commands.get(command)
@@ -271,7 +922,7 @@ def main() -> None:
         handler()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: init, start, stop, status, version")
+        print("Commands: setup, init, start, stop, clean, status, version")
         sys.exit(1)
 
 

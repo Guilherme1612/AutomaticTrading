@@ -3,13 +3,14 @@
 Responsibilities:
 - Every 5s: write own heartbeat
 - Every 10s: check all other process heartbeats
-- Every 60s: verify audit chain integrity
+- Every 60s: verify audit chain integrity + replicate to cortex-owned copy
 - On startup: verify all processes have heartbeats within 30s
 - Kill switch trigger: audit chain failure, disk <2GB, crash loops
 - Configurable intervals via config/resources.toml
 """
 from __future__ import annotations
 
+import shutil
 import signal
 import sqlite3
 import sys
@@ -56,9 +57,45 @@ class DaemonConfig:
     health_check_interval: int = 10
     audit_check_interval: int = 60
     startup_grace_period: int = 30
-    db_path: str = "/var/db/pmacs/pmacs.db"
-    audit_path: str = "/var/db/pmacs/audit.log"
-    heartbeat_dir: str = "/var/db/pmacs/heartbeat"
+    db_path: str | None = None
+    audit_path: str | None = None
+    heartbeat_dir: str | None = None
+
+    def __post_init__(self):
+        from pmacs.config import data_dir
+        d = data_dir()
+        if self.db_path is None:
+            object.__setattr__(self, 'db_path', str(d / "pmacs.db"))
+        if self.audit_path is None:
+            object.__setattr__(self, 'audit_path', str(d / "audit.log"))
+        if self.heartbeat_dir is None:
+            object.__setattr__(self, 'heartbeat_dir', str(d / "heartbeats"))
+
+
+def _replicate_audit(primary_path: str, replica_path: str | None = None) -> bool:
+    """Replicate primary audit.log to cortex-owned copy (Architecture.md §5.1).
+
+    Uses file copy. The cortex daemon then verifies the replica's hash chain
+    independently, detecting any tampering of the primary.
+    Returns True if replication succeeded.
+    """
+    if replica_path is None:
+        replica_path = str(Path(primary_path).with_suffix(".cortex.log"))
+    primary = Path(primary_path)
+    if not primary.exists():
+        return True  # nothing to replicate yet
+    try:
+        shutil.copy2(str(primary), replica_path)
+        return True
+    except OSError as exc:
+        log_debug(
+            "AUDIT_REPLICATION_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="AUDIT_REPLICATION_FAILED",
+            msg=f"Audit replication failed: {exc}",
+        )
+        return False
 
 
 def _load_daemon_config() -> DaemonConfig:
@@ -67,11 +104,14 @@ def _load_daemon_config() -> DaemonConfig:
         from pmacs.config import load_config
 
         config = load_config()
-        return DaemonConfig(
-            heartbeat_interval=5,
-            health_check_interval=10,
-            audit_check_interval=60,
-        )
+        res = getattr(config, 'resources', None)
+        if res is not None:
+            return DaemonConfig(
+                heartbeat_interval=getattr(res, 'cortex_heartbeat_interval', 5),
+                health_check_interval=getattr(res, 'cortex_health_check_interval', 10),
+                audit_check_interval=getattr(res, 'cortex_audit_check_interval', 60),
+            )
+        return DaemonConfig()
     except Exception:
         return DaemonConfig()
 
@@ -82,6 +122,9 @@ def _startup_check(config: DaemonConfig) -> None:
     Logs warnings for stale processes but does not abort startup.
     Kill switch should already be ARMED from previous session.
     """
+    import sqlite3
+    from datetime import datetime, timezone
+
     log_debug(
         "CORTEX_STARTUP_CHECK",
         payload={"processes": ALL_PROCESSES},
@@ -110,6 +153,36 @@ def _startup_check(config: DaemonConfig) -> None:
             payload={},
             level="INFO",
             msg="Startup: all processes have fresh heartbeats",
+        )
+
+    # Mark any orphaned RUNNING cycles as INTERRUPTED (left over from previous crash/restart)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(str(config.db_path))
+        try:
+            cur = conn.execute(
+                "UPDATE cycles SET state='INTERRUPTED', closed_at=? WHERE state='RUNNING'",
+                (now,),
+            )
+            interrupted = cur.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        if interrupted:
+            log_debug(
+                "CORTEX_STARTUP_INTERRUPTED_CYCLES",
+                payload={"count": interrupted, "closed_at": now},
+                level="WARN",
+                error_code="PROCESS_HEARTBEAT_MISSED",
+                msg=f"Startup: marked {interrupted} orphaned RUNNING cycles as INTERRUPTED",
+            )
+    except Exception as exc:
+        log_debug(
+            "CORTEX_STARTUP_CYCLE_CLEANUP_FAILED",
+            payload={"error": str(exc)},
+            level="WARN",
+            error_code="SQLITE_WRITE_FAILED",
+            msg=f"Startup: failed to clean up RUNNING cycles: {exc}",
         )
 
 
@@ -208,9 +281,10 @@ def run_daemon_loop(config: DaemonConfig | None = None) -> None:
                     msg=f"Stale heartbeats: {stale}",
                 )
 
-        # Every audit_check_interval: verify audit chain + all triggers
+        # Every audit_check_interval: verify audit chain + replicate + all triggers
         if now - last_audit_check >= config.audit_check_interval:
             last_audit_check = now
+            _replicate_audit(config.audit_path)
             _check_triggers_and_engage(config)
 
         time.sleep(config.heartbeat_interval)

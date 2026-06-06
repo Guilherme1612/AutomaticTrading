@@ -21,12 +21,12 @@ from pmacs.data.universe import get_universe, UniverseEntry
 
 PROCESS_NAMES = [
     "inference",
-    "cortex",
+    "pmacs-cortex",
     "cortex-self-check",
     "execution",
     "nervous",
-    "stoploss",
-    "mutation",
+    "pmacs-stoploss",
+    "pmacs-mutation",
     "dashboard",
 ]
 
@@ -71,12 +71,15 @@ def get_active_holdings(db: sqlite3.Connection) -> list[dict[str, Any]]:
 
     Returns:
         List of holding dicts with: id, ticker, state, entry_price_usd,
-        position_size_usd, sector, verdict, conviction_score.
+        position_size_usd, sector, verdict, conviction_score,
+        thesis_summary, current_price_usd.
     """
     try:
         rows = db.execute(
             """SELECT id, ticker, state, entry_price_usd, position_size_usd,
-                      sector, verdict, conviction_score
+                      sector, verdict, conviction_score,
+                      thesis_summary, current_price_usd,
+                      COALESCE(price_target_usd, 0)
                FROM holdings
                WHERE state NOT IN ('CLOSED', 'EXITED', 'STOPPED_OUT')
                ORDER BY ticker"""
@@ -91,6 +94,9 @@ def get_active_holdings(db: sqlite3.Connection) -> list[dict[str, Any]]:
                 "sector": r[5],
                 "verdict": r[6],
                 "conviction_score": r[7],
+                "thesis_summary": r[8],
+                "current_price_usd": r[9],
+                "price_target_usd": r[10] or None,
             }
             for r in rows
         ]
@@ -101,19 +107,44 @@ def get_active_holdings(db: sqlite3.Connection) -> list[dict[str, Any]]:
 def get_recent_decisions(
     db: sqlite3.Connection, limit: int = 20
 ) -> list[dict[str, Any]]:
-    """Get recent cycle decisions from SQLite.
+    """Get recent per-ticker decisions from SQLite.
 
     Returns:
-        List of cycle dicts with: cycle_id, opened_at, closed_at, state,
-        trigger, mode.
+        List of decision dicts with: ticker, verdict, conviction, opened_at, etc.
     """
+    try:
+        rows = db.execute(
+            """SELECT cycle_id, ticker, verdict, conviction_score, decided_at
+               FROM decisions
+               ORDER BY decided_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "cycle_id": r[0],
+                "ticker": r[1],
+                "verdict": r[2],
+                "conviction": r[3],
+                "opened_at": r[4],
+            }
+            for r in rows
+        ]
+    except sqlite3.OperationalError:
+        return []
+
+
+def get_decisions_for_cycle(
+    db: sqlite3.Connection, cycle_id: str
+) -> list[dict[str, Any]]:
+    """Get all decisions for a specific cycle."""
     try:
         rows = db.execute(
             """SELECT cycle_id, opened_at, closed_at, state, trigger, mode
                FROM cycles
-               ORDER BY opened_at DESC
-               LIMIT ?""",
-            (limit,),
+               WHERE cycle_id = ?
+               ORDER BY opened_at DESC""",
+            (cycle_id,),
         ).fetchall()
         return [
             {
@@ -135,14 +166,14 @@ def get_risk_metrics(db_path: str | Path) -> dict[str, Any]:
 
     Returns:
         Dict with latest risk metrics: max_drawdown_pct, sharpe,
-        win_rate_pct, open_positions, capital_used_pct.
+        sortino, win_rate_pct, avg_risk_reward.  (Source.md §14.3)
     """
     defaults: dict[str, Any] = {
         "max_drawdown_pct": 0.0,
         "sharpe": 0.0,
+        "sortino": 0.0,
         "win_rate_pct": 0.0,
-        "open_positions": 0,
-        "capital_used_pct": 0.0,
+        "avg_risk_reward": 0.0,
     }
     try:
         from pmacs.storage.duckdb import DuckDBAdapter
@@ -152,8 +183,8 @@ def get_risk_metrics(db_path: str | Path) -> dict[str, Any]:
             """SELECT metric_name, metric_value
                FROM rolling_metrics
                WHERE metric_name IN (
-                   'max_drawdown_pct', 'sharpe', 'win_rate_pct',
-                   'open_positions', 'capital_used_pct'
+                   'max_drawdown_pct', 'sharpe', 'sortino',
+                   'win_rate_pct', 'avg_risk_reward'
                )
                ORDER BY computed_at DESC"""
         )
@@ -174,6 +205,7 @@ _SPARKLINE_WINDOWS: dict[str, str] = {
     "1W": "INTERVAL 7 DAY",
     "1M": "INTERVAL 30 DAY",
     "3M": "INTERVAL 90 DAY",
+    "YTD": "__YTD__",  # handled specially in get_sparkline_data
     "ALL": "",  # no time filter
 }
 
@@ -199,7 +231,16 @@ def get_sparkline_data(
 
         adapter = DuckDBAdapter(db_path=Path(db_path))
         interval = _SPARKLINE_WINDOWS.get(window.upper(), "INTERVAL 7 DAY")
-        if interval:
+        if interval == "__YTD__":
+            rows = adapter.execute(
+                """SELECT CAST(computed_at AS VARCHAR) AS ts, metric_value
+                   FROM rolling_metrics
+                   WHERE metric_name = ?
+                     AND computed_at >= DATE_TRUNC('year', CURRENT_DATE)
+                   ORDER BY computed_at ASC""",
+                [metric],
+            )
+        elif interval:
             rows = adapter.execute(
                 """SELECT CAST(computed_at AS VARCHAR) AS ts, metric_value
                    FROM rolling_metrics
@@ -230,29 +271,43 @@ def get_all_sparkline_data(
     Returns:
         Dict keyed by metric name, each value a list of (ts, value) tuples.
     """
-    metrics = ["max_drawdown_pct", "sharpe", "win_rate_pct", "open_positions", "capital_used_pct"]
+    metrics = ["max_drawdown_pct", "sharpe", "sortino", "win_rate_pct", "avg_risk_reward"]
     return {m: get_sparkline_data(db_path, m, window) for m in metrics}
 
 
-def get_system_health(heartbeat_dir: Path) -> dict[str, Any]:
+def get_system_health(heartbeat_dir: Path, audit_path: Path | str | None = None) -> dict[str, Any]:
     """Get system health from heartbeat files.
 
     Returns:
-        Dict with process statuses and inference health.
+        Dict with process statuses, inference health, and audit_chain_status.
     """
     statuses = check_heartbeats(PROCESS_NAMES, heartbeat_dir=heartbeat_dir)
     processes = []
     inference_ok = False
     for s in statuses:
-        proc_display = f"pmacs-{s.proc}"
+        proc_display = s.proc if s.proc.startswith("pmacs-") else f"pmacs-{s.proc}"
         status = "running" if not s.is_stale else "stale"
         processes.append({"name": proc_display, "status": status})
         if s.proc == "inference" and not s.is_stale:
             inference_ok = True
 
+    # Audit chain status
+    audit_chain_status = "unknown"
+    if audit_path is not None:
+        try:
+            from pmacs.storage.audit import AuditVerifier
+            import pathlib as _pl
+            _apath = _pl.Path(audit_path)
+            verifier = AuditVerifier(_apath)
+            audit_ok, _ = verifier.verify_incremental(last_n=100)
+            audit_chain_status = "OK" if audit_ok else "Error"
+        except Exception:
+            audit_chain_status = "Error"
+
     return {
         "processes": processes,
         "inference_ok": inference_ok,
+        "audit_chain_status": audit_chain_status,
     }
 
 
@@ -281,6 +336,10 @@ def get_queue_status(db: sqlite3.Connection) -> list[dict[str, Any]]:
         ]
     except sqlite3.OperationalError:
         return []
+
+
+_BAND_INT_TO_STR: dict[int, str] = {1: "P1", 2: "P2", 3: "P3", 4: "P4"}
+_BAND_STR_TO_INT: dict[str, int] = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
 
 
 def get_priority_banded_queue(db: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
@@ -332,7 +391,7 @@ def get_priority_banded_queue(db: sqlite3.Connection) -> dict[str, list[dict[str
         ticker, band, pinned, cat_imm, thesis, brier, pfit = r
         score = (cat_imm * 3.0) + (thesis * 2.0) + (brier * 1.5) + (pfit * 1.0)
         # Active holdings always P1
-        effective_band = "P1" if ticker in active_tickers else (band or "P4")
+        effective_band = "P1" if ticker in active_tickers else _BAND_INT_TO_STR.get(band, "P4")
         if effective_band not in bands:
             effective_band = "P4"
         bands[effective_band].append({
@@ -362,7 +421,7 @@ def reorder_queue_item(db: sqlite3.Connection, ticker: str, from_band: str, to_b
     try:
         cursor = db.execute(
             "UPDATE queue SET priority_band = ? WHERE ticker = ? AND priority_band = ? AND completed_at IS NULL",
-            (to_band, ticker, from_band),
+            (_BAND_STR_TO_INT[to_band], ticker, _BAND_STR_TO_INT[from_band]),
         )
         db.commit()
         return cursor.rowcount > 0
@@ -397,7 +456,7 @@ def promote_all_p1(db: sqlite3.Connection) -> int:
     try:
         cursor = db.execute(
             """UPDATE queue SET pinned = 1
-               WHERE priority_band = 'P1' AND completed_at IS NULL AND pinned = 0"""
+               WHERE priority_band = 1 AND completed_at IS NULL AND pinned = 0"""
         )
         db.commit()
         return cursor.rowcount
@@ -450,6 +509,24 @@ def load_priority_scheme(db_path: str | Path, name: str) -> dict[str, Any] | Non
         conn.close()
 
 
+def list_priority_schemes(db_path: str | Path) -> list[str]:
+    """List all saved priority scheme names from SQLite.
+
+    Returns:
+        List of scheme name strings.
+    """
+    conn = _sqlite_connect(db_path, readonly=True)
+    try:
+        rows = conn.execute(
+            "SELECT name FROM priority_schemes ORDER BY created_at DESC"
+        ).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def get_mutation_candidates(db: sqlite3.Connection) -> list[dict[str, Any]]:
     """Get pending mutation candidates from SQLite.
 
@@ -461,7 +538,7 @@ def get_mutation_candidates(db: sqlite3.Connection) -> list[dict[str, Any]]:
             """SELECT candidate_id, dimension, target, proposed_at,
                       sample_size, effect_size, p_value, trending_direction, status
                FROM mutation_candidates
-               WHERE status IN ('pending', 'approved', 'rejected')
+               WHERE status IN ('PROPOSED', 'approved', 'rejected')
                ORDER BY proposed_at DESC"""
         ).fetchall()
         return [
@@ -583,6 +660,63 @@ def get_debug_events(
     return list(reversed(events[-200:]))
 
 
+def get_recent_audit_entries(
+    audit_path: str | Path,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Read recent entries from the hash-chained audit.log (Architecture.md §1.9).
+
+    The audit log is TSV: timestamp TAB prev_hash TAB event_name TAB json_payload TAB hash.
+
+    Args:
+        audit_path: Path to the audit.log file.
+        limit: Max number of entries to return (newest first).
+
+    Returns:
+        List of dicts with: ts, level, event, msg, cycle_id, payload — newest first.
+    """
+    path = Path(audit_path)
+    if not path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t", 4)
+                if len(parts) < 4:
+                    continue
+                ts = parts[0]
+                event_name = parts[2]
+                payload_raw = parts[3] if len(parts) > 3 else "{}"
+                try:
+                    payload = json.loads(payload_raw)
+                except json.JSONDecodeError:
+                    payload = {}
+
+                level = payload.get("level", "INFO")
+                msg = payload.get("msg", payload.get("check", event_name))
+                cycle_id = payload.get("cycle_id", "")
+
+                entries.append(
+                    {
+                        "ts": ts,
+                        "level": level,
+                        "event": event_name,
+                        "msg": msg,
+                        "cycle_id": cycle_id,
+                        "payload": payload_raw,
+                    }
+                )
+    except OSError:
+        return []
+
+    return list(reversed(entries[-limit:]))
+
+
 def get_settings(config_dir: str | Path) -> dict[str, Any]:
     """Read configuration settings from TOML + JSON files.
 
@@ -681,11 +815,22 @@ def get_cortex_status(
     # Audit chain status
     audit_ok = True
     audit_error = ""
+    audit_entries = 0
+    audit_last_hash = "--"
     try:
         from pmacs.storage.audit import AuditVerifier
+        import pathlib as _pl
 
-        verifier = AuditVerifier(audit_path)
+        _apath = _pl.Path(audit_path)
+        verifier = AuditVerifier(_apath)
         audit_ok, audit_error = verifier.verify_incremental(last_n=100)
+        # Count entries and grab last hash
+        if _apath.exists():
+            lines = [l.strip() for l in _apath.read_text().splitlines() if l.strip()]
+            audit_entries = len(lines)
+            if lines:
+                parts = lines[-1].split("\t")
+                audit_last_hash = parts[4][:16] + "..." if len(parts) >= 5 else "--"
     except Exception as e:
         audit_ok = False
         audit_error = str(e)
@@ -701,14 +846,13 @@ def get_cortex_status(
         "nervous": 8000,
         "stoploss": None,
         "mutation": None,
-        "dashboard": 8001,
     }
     for s in process_statuses:
         processes.append(
             {
                 "name": f"pmacs-{s.proc}",
                 "port": port_map.get(s.proc),
-                "status": "running" if not s.is_stale else "unknown",
+                "status": "running" if not s.is_stale else "offline",
             }
         )
 
@@ -727,9 +871,9 @@ def get_cortex_status(
 
     return {
         "audit_chain": {
-            "status": "verified" if audit_ok else "broken",
-            "last_hash": audit_error or "--",
-            "entries": 0,
+            "status": "OK" if audit_ok else "Error",
+            "last_hash": audit_last_hash if audit_ok else (audit_error or "--"),
+            "entries": audit_entries,
         },
         "cross_db": cross_db,
         "processes": processes,
@@ -782,6 +926,8 @@ PAGE_ERROR_CODES = {
     "cortex": "E_CORTEX_001",
     "settings": "E_SETTINGS_001",
     "debug": "E_DEBUG_001",
+    "compare": "E_COMPARE_001",
+    "memo": "E_MEMO_001",
 }
 
 

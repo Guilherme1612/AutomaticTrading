@@ -173,11 +173,11 @@ class TestInferenceSection:
 
     def test_primary_backend(self, client):
         resp = client.get("/settings")
-        assert "llama-server" in resp.text
+        assert "llama_server" in resp.text
 
-    def test_port(self, client):
+    def test_inference_test_button(self, client):
         resp = client.get("/settings")
-        assert ":8080" in resp.text
+        assert "Test Connection" in resp.text
 
     def test_analysis_temperature(self, client):
         resp = client.get("/settings")
@@ -246,7 +246,7 @@ class TestTOTPGatingWithMutations:
             (candidate_id, dimension, target, proposed_at, sample_size,
              effect_size, p_value, trending_direction, status)
             VALUES ('mut-001', 'temperature', '0.25', '2026-01-15T10:00:00Z',
-                    30, 0.35, 0.03, 'positive', 'pending')"""
+                    30, 0.35, 0.03, 'positive', 'PROPOSED')"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS mutation_log (

@@ -182,14 +182,14 @@ class TestGetEngagementInfo:
 class TestCheckAllTriggers:
     """Tests for check_all_triggers()."""
 
-    def test_returns_all_10_triggers(self, tmp_env: dict[str, Path]) -> None:
-        """check_all_triggers() returns exactly 10 results."""
+    def test_returns_all_triggers(self, tmp_env: dict[str, Path]) -> None:
+        """check_all_triggers() returns one result per TRIGGER_ID."""
         results = check_all_triggers(
             db_path=tmp_env["db_path"],
             audit_path=tmp_env["audit_path"],
             heartbeat_dir=tmp_env["heartbeat_dir"],
         )
-        assert len(results) == 10
+        assert len(results) == len(TRIGGER_IDS)
         trigger_ids = [r.trigger_id for r in results]
         for tid in TRIGGER_IDS:
             assert tid in trigger_ids, f"Missing trigger: {tid}"

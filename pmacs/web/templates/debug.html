@@ -12,26 +12,31 @@
 {% include "components/error_state.html" %}
 {% else %}
 <!-- Filter bar -->
-<div class="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
-            <h3 class="text-sm font-semibold text-zinc-900">Event Stream</h3>
-            <div class="flex gap-1.5">
+<div class="card card-elevated p-4 mb-8 reveal">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-3 sm:gap-4">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-accent anim-breathing"></span>
+                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Event Stream</h3>
+            </div>
+            <div class="flex gap-1.5 bg-surface-sunken/50 rounded-xl p-0.5 overflow-x-auto" style="-webkit-overflow-scrolling:touch">
                 {% for chip in filter_chips %}
-                <button class="px-2.5 py-1 text-xs rounded font-mono transition-colors
-                               {{ 'bg-blue-50 text-blue-600 border border-blue-200' if loop.first else 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200' }}"
+                <button type="button" class="px-3 py-1.5 text-xs rounded-xl font-mono transition-colors whitespace-nowrap
+                               {{ 'bg-accent-soft text-accent font-medium' if loop.first else 'text-text-secondary hover:bg-surface-sunken' }}"
                         onclick="filterEvents('{{ chip }}')">
                     {{ chip }}
                 </button>
                 {% endfor %}
             </div>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <input type="text" placeholder="Search events..."
                    data-page-search
-                   class="px-3 py-1.5 text-sm border border-zinc-200 rounded focus:border-blue-500 outline-none">
-            <span id="event-count" class="text-xs text-zinc-400 font-mono">{{ events | length }} events</span>
-            <button class="px-3 py-1.5 text-sm border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
+                   oninput="searchEvents(this.value)"
+                   class="px-3 py-1.5 text-sm border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
+            <span id="event-count" class="text-xs text-text-muted font-mono">{{ (events or recent_events) | length }} events{% if not events and recent_events %} (historical){% endif %}</span>
+            <button type="button" class="px-4 py-1.5 text-sm border border-border rounded-xl hover:bg-surface-sunken transition-colors font-medium"
+                    onclick="clearEvents()">
                 Clear
             </button>
         </div>
@@ -39,43 +44,46 @@
 </div>
 
 <!-- Event stream -->
-<div id="event-stream" class="bg-white border border-zinc-200 rounded-lg overflow-hidden">
+<div id="event-stream" class="card card-elevated overflow-hidden reveal">
     {% if events %}
-    <div class="divide-y divide-zinc-100">
+    <div class="divide-y divide-border-subtle">
         {% for event in events %}
-        <div class="px-4 py-3 hover:bg-zinc-50 cursor-pointer" data-event-level="{{ event.level }}" onclick="toggleEventDetail(this)">
-            <div class="flex items-center gap-3">
-                <span class="px-1.5 py-0.5 text-xs font-mono rounded
-                             {{ 'bg-red-100 text-red-700' if event.level == 'ERROR' else '' }}
-                             {{ 'bg-amber-100 text-amber-700' if event.level == 'WARN' else '' }}
-                             {{ 'bg-blue-100 text-blue-700' if event.level == 'INFO' else '' }}
-                             {{ 'bg-zinc-100 text-zinc-500' if event.level == 'DEBUG' else '' }}">
+        <div class="px-4 py-3 hover:bg-surface-sunken/50 cursor-pointer transition-colors
+                    {{ 'border-l-[3px] border-l-red-500' if event.level == 'ERROR' else '' }}
+                    {{ 'border-l-[3px] border-l-amber-500' if event.level == 'WARN' else '' }}"
+             data-event-level="{{ event.level }}" data-stagger onclick="toggleEventDetail(this)">
+            <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+                <span class="px-2 py-0.5 text-xs font-mono rounded-lg border whitespace-nowrap
+                             {{ 'bg-negative-soft text-negative border-negative/30' if event.level == 'ERROR' else '' }}
+                             {{ 'bg-crucible-soft text-crucible border-crucible/30' if event.level == 'WARN' else '' }}
+                             {{ 'bg-accent-soft text-accent border-accent/30' if event.level == 'INFO' else '' }}
+                             {{ 'bg-surface-sunken text-text-muted border-border-subtle' if event.level == 'DEBUG' else '' }}">
                     {{ event.level }}
                 </span>
-                <span class="text-xs font-mono text-zinc-400">{{ event.timestamp }}</span>
-                <span class="text-xs font-mono text-blue-600">{{ event.stream }}</span>
+                <span class="text-xs font-mono text-text-muted">{{ event.timestamp }}</span>
+                <span class="text-xs font-mono text-accent">{{ event.stream }}</span>
                 {% if event.error_code %}
-                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-50 text-red-600">{{ event.error_code }}</span>
+                <span class="text-xs font-mono px-2 py-0.5 rounded-lg bg-negative-soft text-negative">{{ event.error_code }}</span>
                 {% endif %}
                 {% if event.cycle_id %}
-                <span class="text-xs font-mono text-zinc-400" title="Cycle ID">{{ event.cycle_id }}</span>
+                <span class="text-xs font-mono text-text-muted" title="Cycle ID">{{ event.cycle_id }}</span>
                 {% endif %}
-                <span class="text-sm text-zinc-700 flex-1">{{ event.message }}</span>
+                <span class="text-sm text-text-secondary flex-1">{{ event.message }}</span>
             </div>
             <!-- Expanded detail row -->
-            <div class="event-detail-row hidden mt-3 ml-16 space-y-2">
+            <div class="event-detail-row hidden mt-3 sm:ml-16 space-y-2">
                 <!-- Payload JSON -->
-                <div class="text-xs font-mono text-zinc-500 bg-zinc-50 rounded p-3 relative">
+                <div class="text-xs font-mono text-text-secondary bg-surface-sunken/50 rounded-xl p-3 relative">
                     <div class="flex items-center justify-between mb-1">
-                        <span class="text-zinc-400 text-[10px] uppercase tracking-wider">Payload</span>
+                        <span class="text-text-muted text-[10px] uppercase tracking-widest">Payload</span>
                         <div class="flex gap-2">
-                            <button onclick="event.stopPropagation(); copyEventJSON(this)"
-                                    class="px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-700 hover:bg-white rounded transition-colors"
+                            <button type="button" onclick="event.stopPropagation(); copyEventJSON(this)"
+                                    class="px-2.5 py-0.5 text-xs text-text-muted hover:text-text-primary hover:bg-white rounded-lg transition-colors"
                                     title="Copy raw JSON">
                                 Copy JSON
                             </button>
-                            <button onclick="event.stopPropagation(); copyForClaudeCode(this)"
-                                    class="px-2.5 py-0.5 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors font-medium"
+                            <button type="button" onclick="event.stopPropagation(); copyForClaudeCode(this)"
+                                    class="px-3 py-0.5 text-xs text-accent hover:bg-accent-soft rounded-lg transition-colors font-medium"
                                     title="Copy formatted prompt for Claude Code"
                                     data-event-id="{{ event.event_id }}"
                                     data-error-code="{{ event.error_code }}"
@@ -94,13 +102,13 @@
                 <!-- Spec reference -->
                 {% if event.spec_ref %}
                 <div class="flex items-center gap-2 text-xs">
-                    <span class="text-zinc-400">Spec ref:</span>
-                    <span class="font-mono text-blue-600">{{ event.spec_ref }}</span>
+                    <span class="text-text-muted">Spec ref:</span>
+                    <span class="font-mono text-accent">{{ event.spec_ref }}</span>
                 </div>
                 {% endif %}
                 <!-- Repro hint -->
                 {% if event.error_code %}
-                <div class="flex items-center gap-2 text-xs text-zinc-400">
+                <div class="flex items-center gap-2 text-xs text-text-muted">
                     <span>Repro:</span>
                     <span class="font-mono">Run cycle and look for {{ event.error_code }} in debug events</span>
                 </div>
@@ -109,13 +117,90 @@
         </div>
         {% endfor %}
     </div>
+    {% elif recent_events %}
+    <!-- Historical audit entries pre-populated on page load -->
+    <div class="px-4 py-2 bg-surface-sunken/60 border-b border-border-subtle flex items-center gap-2">
+        <span class="text-[10px] font-mono uppercase tracking-widest text-text-muted">Historical</span>
+        <span class="text-[10px] text-text-muted opacity-60">— audit log, last {{ recent_events | length }} entries — new live events appear above</span>
+    </div>
+    <div class="divide-y divide-border-subtle">
+        {% for event in recent_events %}
+        <div class="px-4 py-3 hover:bg-surface-sunken/50 cursor-pointer transition-colors opacity-70
+                    {{ 'border-l-[3px] border-l-red-500' if event.level == 'ERROR' else '' }}
+                    {{ 'border-l-[3px] border-l-amber-500' if event.level == 'WARN' else '' }}"
+             data-event-level="{{ event.level }}" data-historical data-stagger onclick="toggleEventDetail(this)">
+            <div class="flex items-center gap-3">
+                <span class="px-2 py-0.5 text-xs font-mono rounded-lg border
+                             {{ 'bg-negative-soft text-negative border-negative/30' if event.level == 'ERROR' else '' }}
+                             {{ 'bg-crucible-soft text-crucible border-crucible/30' if event.level == 'WARN' else '' }}
+                             {{ 'bg-accent-soft text-accent border-accent/30' if event.level == 'INFO' else '' }}
+                             {{ 'bg-surface-sunken text-text-muted border-border-subtle' if event.level == 'DEBUG' else '' }}
+                             {{ 'bg-surface-sunken text-text-muted border-border-subtle' if event.level not in ('ERROR','WARN','INFO','DEBUG') else '' }}">
+                    {{ event.level }}
+                </span>
+                <span class="text-xs font-mono text-text-muted">{{ event.timestamp }}</span>
+                <span class="text-xs font-mono text-accent">{{ event.stream }}</span>
+                {% if event.cycle_id %}
+                <span class="text-xs font-mono text-text-muted" title="Cycle ID">{{ event.cycle_id }}</span>
+                {% endif %}
+                <span class="text-sm text-text-secondary flex-1">{{ event.message }}</span>
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-sunken text-text-muted border border-border-subtle">HIST</span>
+            </div>
+            <!-- Expanded detail row -->
+            <div class="event-detail-row hidden mt-3 sm:ml-16 space-y-2">
+                <div class="text-xs font-mono text-text-secondary bg-surface-sunken/50 rounded-xl p-3">
+                    <span class="text-text-muted text-[10px] uppercase tracking-widest block mb-1">Payload</span>
+                    <pre>{{ event.detail | default('No detail') }}</pre>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
     {% else %}
     <div class="p-12 text-center" id="event-stream-empty">
-        <h3 class="text-base font-semibold text-zinc-900 mb-2">Waiting for debug events</h3>
-        <p class="text-sm text-zinc-400">Events will stream from pmacs-nervous via SSE when cycles run.</p>
-        <p class="text-xs text-zinc-300 mt-2 font-mono">Subscribe: pmacs-nervous:8000/events</p>
+        <h3 class="text-base font-semibold text-text-primary mb-2">Waiting for debug events</h3>
+        <p class="text-sm text-text-muted">Events will stream from pmacs-nervous via SSE when cycles run.</p>
+        <p class="text-xs text-text-muted mt-2 font-mono opacity-60">Subscribe: pmacs-nervous:8000/events</p>
     </div>
     {% endif %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function clearEvents() {
+    var stream = document.getElementById("event-stream");
+    if (!stream) return;
+    var rows = stream.querySelectorAll("[data-event-level]");
+    rows.forEach(function(r) { r.remove(); });
+    var count = document.getElementById("event-count");
+    if (count) count.textContent = "0 events";
+    var empty = document.getElementById("event-stream-empty");
+    if (!empty) {
+        empty = document.createElement("div");
+        empty.id = "event-stream-empty";
+        empty.className = "p-12 text-center";
+        empty.innerHTML = '<h3 class="text-base font-semibold text-text-primary mb-2">Events cleared</h3>' +
+            '<p class="text-sm text-text-muted">New events will appear as they stream in.</p>';
+        stream.appendChild(empty);
+    }
+}
+
+function searchEvents(query) {
+    var stream = document.getElementById("event-stream");
+    if (!stream) return;
+    var q = query.toLowerCase();
+    var rows = stream.querySelectorAll("[data-event-level]");
+    var visible = 0;
+    rows.forEach(function(r) {
+        var text = r.textContent.toLowerCase();
+        var show = !q || text.indexOf(q) >= 0;
+        r.style.display = show ? "" : "none";
+        if (show) visible++;
+    });
+    var count = document.getElementById("event-count");
+    if (count) count.textContent = visible + " events";
+}
+</script>
 {% endblock %}

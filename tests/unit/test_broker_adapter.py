@@ -90,9 +90,14 @@ class TestCreateAdapter:
         with pytest.raises(ValueError, match="api_key and api_secret required"):
             create_adapter(Mode.PAPER.value)
 
-    def test_live_mode_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="LIVE modes not yet supported"):
-            create_adapter(Mode.LIVE_EARLY.value)
+    def test_live_mode_returns_ibkr_adapter(self) -> None:
+        pytest.importorskip("ib_insync", reason="ib_insync not installed")
+        adapter = create_adapter(
+            Mode.LIVE_EARLY.value,
+            api_key="test_key",
+            api_secret="test_secret",
+        )
+        assert adapter.__class__.__name__ == "IBKRLiveAdapter"
 
     def test_unknown_mode_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="Unknown mode"):
@@ -107,6 +112,10 @@ class TestBrokerAdapterABC:
             BrokerAdapter()  # type: ignore[abstract]
 
 
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("alpaca"),
+    reason="alpaca-py not installed",
+)
 class TestAlpacaPaperAdapterWithMock:
     """AlpacaPaperAdapter unit tests with mocked TradingClient."""
 

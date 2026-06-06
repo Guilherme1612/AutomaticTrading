@@ -3,15 +3,41 @@
     "llama_server": {
       "url": "http://127.0.0.1:8080",
       "default_model": "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
-      "structured_output": "gbnf"
+      "structured_output": "gbnf",
+      "api_key_ref": "",
+      "base_url": ""
     },
     "ollama": {
       "url": "http://127.0.0.1:11434",
-      "default_model": "qwen3.6:35b-a3b-coding-mxfp8",
-      "structured_output": "json_schema"
+      "default_model": "qwen3.6:latest",
+      "structured_output": "json_schema",
+      "api_key_ref": "",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "extra_params": {"max_tokens_multiplier": 3}
+    },
+    "anthropic": {
+      "url": "",
+      "default_model": "claude-sonnet-4-20250514",
+      "structured_output": "tool_use",
+      "api_key_ref": "pmacs.credentials.anthropic_api_key",
+      "base_url": "https://api.anthropic.com"
+    },
+    "openai": {
+      "url": "",
+      "default_model": "gpt-4o",
+      "structured_output": "json_schema",
+      "api_key_ref": "pmacs.credentials.openai_api_key",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "openrouter": {
+      "url": "",
+      "default_model": "deepseek/deepseek-v4-flash",
+      "structured_output": "json_schema",
+      "api_key_ref": "pmacs.credentials.openrouter_api_key",
+      "base_url": "https://openrouter.ai/api/v1"
     }
   },
-  "active": "llama_server",
+  "active": "openrouter",
   "personas": {
     "gatekeeper": null,
     "macro_regime": "default",

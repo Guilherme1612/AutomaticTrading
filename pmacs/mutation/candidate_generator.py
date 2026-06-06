@@ -14,6 +14,17 @@ from pmacs.constants import MUTATION_ACTIVATION_CYCLES
 from pmacs.schemas.mutation import MutationDimension
 from pmacs.storage.audit import canonical_json
 
+
+# Phases.md §6.3 Checkpoint C: excluded mutation targets
+EXCLUDED_TARGETS: frozenset[str] = frozenset({
+    "arbitration.formula",
+    "arbitration.weights",
+    "state_machine.transitions",
+    "kill_switch.thresholds",
+    "conviction.floor",
+    "conviction.thresholds",
+})
+
 # Rule-based candidate generation (Agents.md §17.2)
 GENERATION_RULES: list[dict] = [
     {
@@ -133,18 +144,22 @@ def generate_candidates(
     Each rule matches a failure taxonomy and requires a minimum count
     within a window of recent cycles.
     """
-    threshold = config.min_paper_cycles if config is not None else MUTATION_ACTIVATION_CYCLES
+    threshold = getattr(config, 'min_paper_cycles', MUTATION_ACTIVATION_CYCLES) if config is not None else MUTATION_ACTIVATION_CYCLES
     if paper_cycle_count < threshold:
         return []
 
     candidates: list[MutationCandidateData] = []
     for rule in GENERATION_RULES:
+        # Phases.md §6.3 Checkpoint C: reject excluded targets
+        if rule["target"] in EXCLUDED_TARGETS:
+            continue
+
         matching = [
             f for f in failure_clusters if f.get("taxonomy") == rule["taxonomy"]
         ]
         count = sum(f.get("count", 0) for f in matching)
         if count >= rule["min_count"]:
-            baseline = canonical_json({"current": "production"})
+            baseline = _read_baseline_config(rule["target"])
             candidate_id = hashlib.sha256(
                 f"{rule['dimension']}:{rule['target']}:{rule['taxonomy']}".encode()
             ).hexdigest()[:16]
@@ -164,3 +179,27 @@ def generate_candidates(
             )
 
     return candidates
+
+
+def _read_baseline_config(target: str) -> str:
+    """Read the actual current production value for a mutation target.
+
+    Falls back to a generic placeholder if the config file is unavailable.
+    """
+    try:
+        from pathlib import Path
+        config_path = Path("config/model_registry.json")
+        if config_path.exists():
+            import json
+            with open(config_path) as f:
+                registry = json.load(f)
+            # Navigate dot-separated path into the registry
+            parts = target.replace(".system_prompt", "").replace(".weight", "").split(".")
+            current = registry
+            for part in parts:
+                if isinstance(current, dict):
+                    current = current.get(part, {})
+            return canonical_json({"current": current if current else "production"})
+    except Exception:
+        pass
+    return canonical_json({"current": "production"})

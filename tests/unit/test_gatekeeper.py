@@ -139,7 +139,7 @@ class TestPortfolioLimit:
         conn.execute("CREATE TABLE IF NOT EXISTS holdings (ticker TEXT, state TEXT)")
         # 5 open positions
         for i in range(5):
-            conn.execute(f"INSERT INTO holdings VALUES ('T{i}', 'OPEN')")
+            conn.execute(f"INSERT INTO holdings VALUES ('T{i}', 'ACTIVE')")
         conn.commit()
         conn.close()
 
@@ -156,9 +156,9 @@ class TestPortfolioLimit:
         conn = sqlite3.connect(str(db))
         conn.execute("CREATE TABLE IF NOT EXISTS universe (ticker TEXT PRIMARY KEY, halted INTEGER DEFAULT 0, delisted INTEGER DEFAULT 0)")
         conn.execute("CREATE TABLE IF NOT EXISTS holdings (ticker TEXT, state TEXT)")
-        conn.execute("INSERT INTO holdings VALUES ('AAPL', 'OPEN')")
+        conn.execute("INSERT INTO holdings VALUES ('AAPL', 'ACTIVE')")
         for i in range(4):
-            conn.execute(f"INSERT INTO holdings VALUES ('T{i}', 'OPEN')")
+            conn.execute(f"INSERT INTO holdings VALUES ('T{i}', 'ACTIVE')")
         conn.commit()
         conn.close()
 

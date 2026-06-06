@@ -109,7 +109,7 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
   - `"OPPORTUNITY_COST_FAILED"` (line 2509) -- not in registry
   - `"LEDGER_CONSTRAINT"` (line 1579) -- not in registry
   - `"DB_WRITE_FAILED"` (lines 1533, 1693, 3023) -- the registry has `SQLITE_WRITE_FAILED`, not `DB_WRITE_FAILED`
-  
+
   Architecture.md §5.5 states: "Every WARN+ debug event MUST carry an error_code from this registry."
 - **Risk:** Debug events with unregistered codes cannot be validated by monitoring tools. Downstream consumers that filter by canonical error codes will miss these events.
 - **Fix:** Add all six error codes to `pmacs/logsys/error_classifier.py`:
@@ -172,7 +172,7 @@ def _run_symbol(self, cycle_id, item, op_seq):
   - Line 1324 (sizing abort): no pop before return
   - Line 1388 (verdict SKIP abort): no pop before return
   - Line 1428 (risk gate abort): no pop before return
-  
+
   Compare with the antipattern abort (line 987), data unavailable abort (line 1055), and persona timeout abort (line 1098) which all call `pop` before returning.
 - **Risk:** If a mid-cycle abort (kill switch or SIGTERM) occurs after one of these three abort paths, the `_interrupt_remaining_holdings` will attempt to transition a holding that is already in a terminal abort state (ABORTED_RISK), which will raise `InvalidStateTransition` or silently skip. The holding stays in `_symbol_holdings` dict forever (within the cycle), wasting memory and potentially confusing the interrupt logic.
 - **Fix:** Add `self._symbol_holdings.pop(ticker, None)` before each return in the sizing, verdict, and risk gate abort paths:

@@ -1,7 +1,9 @@
 {# Wizard Step 3 — Model download and verification (Source.md §12.1)
    Downloads Qwen3.6-35B-A3B, SHA256 verification, progress bar.
+   Only shown for local inference path (skipped for cloud).
    Expects: current_step, model_result
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8">
     <h1 class="text-2xl font-bold text-text-primary mb-2">Model Download</h1>
     <p class="text-text-secondary text-sm mb-8">Downloading and verifying the inference model.</p>
@@ -26,8 +28,8 @@
                 <span>Downloading...</span>
                 <span>{{ model_result.get("progress_pct", 0) }}%</span>
             </div>
-            <div class="w-full bg-zinc-700 rounded-full h-2">
-                <div class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+            <div class="w-full bg-surface-overlay rounded-full h-2">
+                <div class="bg-accent h-2 rounded-full transition-all duration-300"
                      style="width: {{ model_result.get("progress_pct", 0) }}%"></div>
             </div>
         </div>
@@ -55,20 +57,33 @@
     {% endif %}
 
     <div class="flex justify-between">
+        {% if model_result and not model_result.get("all_ok") %}
+        <button hx-post="/wizard/step/3"
+                hx-vals='{"skip_model": "true"}'
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-4 py-2 text-text-secondary text-sm hover:text-text-primary transition-colors">
+            Skip for now
+        </button>
+        {% else %}
         <span></span>
+        {% endif %}
         {% if model_result and model_result.get("all_ok") %}
         <button hx-post="/wizard/step/3"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:opacity-90 transition-opacity">
             Next
         </button>
         {% else %}
         <button hx-post="/wizard/step/3"
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
-            {% if model_result and model_result.get("downloading") %}Refresh{% else %}Download Model{% endif %}
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:opacity-90 transition-opacity">
+            {% if model_result and model_result.get("downloading") %}Refresh{% else %}Check Again{% endif %}
         </button>
         {% endif %}
     </div>

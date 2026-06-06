@@ -176,7 +176,7 @@ All shortcuts work from any page. Shortcuts are suppressed when a text input is 
 | Shortcut | Action |
 |---|---|
 | `Cmd-K` | Open command palette (search tickers, actions, audit entries) |
-| `Cmd-1` through `Cmd-7` | Navigate to page (Dashboard, Agents, Pipeline, Universe, Cortex, Settings, Debug) |
+| `Cmd-1` through `Cmd-7` | Navigate to page (Dashboard, Agents, Pipeline, Universe, Cortex, Debug, Settings) |
 | `Cmd-R` | Refresh current page data |
 | `Cmd-/` | Show keyboard shortcuts overlay |
 | `/` | Focus search/filter on current page |

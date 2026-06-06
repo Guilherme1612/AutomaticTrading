@@ -8,9 +8,15 @@ Uses Hypothesis to verify:
 - Arbitrated probability constraints
 """
 
-from datetime import date, datetime, timezone
+import importlib.util
 
 import pytest
+
+if not importlib.util.find_spec("hypothesis"):
+    pytest.skip("hypothesis not installed", allow_module_level=True)
+
+from datetime import date, datetime, timezone
+
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 

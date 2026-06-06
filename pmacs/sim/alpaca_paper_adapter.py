@@ -43,6 +43,11 @@ class AlpacaPaperAdapter(BrokerAdapter):
     def __init__(self, api_key: str, api_secret: str) -> None:
         from alpaca.trading.client import TradingClient
 
+        # Suppress httpx/requests logging to prevent credential leakage in headers
+        import logging
+        for _logger_name in ("httpx", "httpcore", "urllib3"):
+            logging.getLogger(_logger_name).setLevel(logging.WARNING)
+
         self._client = TradingClient(
             api_key=api_key,
             secret_key=api_secret,

@@ -29,12 +29,23 @@ def compute_conviction(
     direction = arb.p_up - arb.p_down
 
     if is_bootstrap:
-        maturity_factor = max(0.50, min(arb.matured_sources_used / 4.0, 1.0))
+        # Bootstrap: no calibration history exists yet, so maturity dampening is
+        # meaningless — we can't say an agent is "poorly calibrated", we simply have
+        # no evidence either way. Use maturity_factor = 1.0 so that a genuine majority
+        # consensus (direction >= 0.35 with reasonable Crucible + EV) can cross the
+        # BUY threshold. Once agents have 30+ historical predictions, they graduate to
+        # mature mode and Brier-inverse weighting takes over.
+        maturity_factor = 1.0
     else:
+        # Floor at 0.25 so partial maturity (e.g. 1/4 sources mature) still allows
+        # conviction to register. In non-bootstrap with 0 mature sources, arbitration
+        # should have aborted before reaching here.
         maturity_factor = max(0.25, min(arb.matured_sources_used / 4.0, 1.0))
 
     crucible_factor = max(0.0, 1.0 - crucible_severity)
-    ev_factor = min(ev_multiple / 1.5, 1.0)
+    # Clamp ev_factor to [0, 1]: negative EV means no edge; we suppress conviction
+    # to 0 rather than inverting it (which would produce a false BUY for bearish setups).
+    ev_factor = max(0.0, min(ev_multiple / 1.5, 1.0))
 
     conviction = direction * maturity_factor * crucible_factor * ev_factor
     # Clamp to [-1.0, 1.0]

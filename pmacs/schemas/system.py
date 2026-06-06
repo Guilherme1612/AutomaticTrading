@@ -60,4 +60,24 @@ VALID_MODE_TRANSITIONS: dict[Mode, set[Mode]] = {
 }
 
 # Combined SHADOW + PAPER is the standard mode after wizard
+# SHADOW is always-on: it captures audit-only signals (math-gate metrics, verdicts)
+# alongside whatever the active execution mode does. Architecture.md §16.9:
+# "Mutation A/B running in PAPER — candidate arm runs SHADOW-only."
+# Phases.md §3.7: "SHADOW and PAPER are concurrent from day 1."
 SHADOW_PAPER_MODES: frozenset[Mode] = frozenset({Mode.SHADOW, Mode.PAPER})
+
+
+def is_shadow_active(mode: str) -> bool:
+    """Check if SHADOW audit capture is active for the given mode.
+
+    SHADOW is always-on for PAPER and above. INSTALLING has no shadow.
+    Pure SHADOW mode (rare, manual) is shadow-only.
+    """
+    return mode in (
+        Mode.SHADOW.value,
+        Mode.PAPER.value,
+        Mode.PAPER_VALIDATED.value,
+        Mode.LIVE_EARLY.value,
+        Mode.LIVE_STANDARD.value,
+        Mode.LIVE_EXPANDED.value,
+    )

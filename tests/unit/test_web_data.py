@@ -79,13 +79,23 @@ class TestGetRecentDecisions:
         assert result == []
 
     def test_returns_recent_cycles_ordered(self, db):
+        # get_recent_decisions queries the decisions table (not cycles)
+        # Insert parent cycle rows first (FK constraint)
         db.execute(
-            "INSERT INTO cycles (cycle_id, opened_at, closed_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?, ?)",
-            ("c1", "2024-01-01T10:00:00", "2024-01-01T10:05:00", "CLOSED", "timed", "SHADOW"),
+            "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?)",
+            ("c1", "2024-01-01T10:00:00", "CLOSED", "timed", "SHADOW"),
         )
         db.execute(
-            "INSERT INTO cycles (cycle_id, opened_at, closed_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?, ?)",
-            ("c2", "2024-01-01T11:00:00", None, "OPEN", "manual", "SHADOW"),
+            "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?)",
+            ("c2", "2024-01-01T11:00:00", "OPEN", "manual", "SHADOW"),
+        )
+        db.execute(
+            "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, decided_at) VALUES (?, ?, ?, ?, ?)",
+            ("c1", "AAPL", "BUY", 0.7, "2024-01-01T10:05:00"),
+        )
+        db.execute(
+            "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, decided_at) VALUES (?, ?, ?, ?, ?)",
+            ("c2", "MSFT", "SKIP", 0.2, "2024-01-01T11:05:00"),
         )
         db.commit()
         result = get_recent_decisions(db, limit=10)
@@ -101,9 +111,13 @@ class TestGetRiskMetrics:
         assert result["max_drawdown_pct"] == 0.0
         assert result["sharpe"] == 0.0
         assert result["win_rate_pct"] == 0.0
-        assert result["open_positions"] == 0
-        assert result["capital_used_pct"] == 0.0
+        assert result["sortino"] == 0.0
+        assert result["avg_risk_reward"] == 0.0
 
+    @pytest.mark.skipif(
+        not __import__("importlib").util.find_spec("duckdb"),
+        reason="duckdb not installed",
+    )
     def test_returns_metrics_from_duckdb(self, tmp_path):
         from pmacs.storage.duckdb import DuckDBAdapter
 
@@ -247,14 +261,14 @@ class TestGetCortexStatus:
         writer.close()
 
         result = get_cortex_status(db, heartbeat_dir, audit_path)
-        assert result["audit_chain"]["status"] == "verified"
+        assert result["audit_chain"]["status"] == "OK"
         assert "processes" in result
         assert "cross_db" in result
         assert result["kill_switch"]["totp_required"] is True
 
     def test_handles_missing_audit(self, db, heartbeat_dir, tmp_path):
         result = get_cortex_status(db, heartbeat_dir, tmp_path / "nope.log")
-        assert result["audit_chain"]["status"] == "verified"  # Empty file = ok
+        assert result["audit_chain"]["status"] == "OK"  # Empty file = ok
 
 
 class TestGetAgentCycleData:

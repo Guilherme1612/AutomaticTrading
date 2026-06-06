@@ -85,7 +85,7 @@ class TestBackupRestore:
         output_dir = tmp_path / "backups"
         _create_test_data(data_dir, audit_entries=10)
 
-        backup_dir = do_backup(data_dir, output_dir, verbose=True)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent, verbose=True)
 
         # Verify backup contains all stores
         for name, relpath, kind in STORES:
@@ -97,7 +97,7 @@ class TestBackupRestore:
         output_dir = tmp_path / "backups"
         _create_test_data(data_dir, audit_entries=10)
 
-        backup_dir = do_backup(data_dir, output_dir, verbose=True)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent, verbose=True)
 
         # Wipe and restore
         do_restore(backup_dir, data_dir, verbose=True)
@@ -113,7 +113,7 @@ class TestBackupRestore:
         _create_test_data(data_dir, audit_entries=100)
 
         # Backup
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
 
         # Wipe and restore
         do_restore(backup_dir, data_dir)
@@ -129,7 +129,7 @@ class TestBackupRestore:
         output_dir = tmp_path / "backups"
         _create_test_data(data_dir, audit_entries=10)
 
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
         do_restore(backup_dir, data_dir)
 
         conn = sqlite3.connect(str(data_dir / "pmacs.db"))
@@ -153,7 +153,7 @@ class TestBackupRestore:
         _create_test_data(data_dir, audit_entries=100)
 
         # Step 1: Backup
-        backup_dir = do_backup(data_dir, output_dir)
+        backup_dir = do_backup(data_dir, output_dir, project_root=data_dir.parent)
         assert backup_dir.exists()
 
         # Step 2: Wipe

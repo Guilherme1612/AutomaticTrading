@@ -195,9 +195,9 @@ class TestGatekeeperIntegration:
         db_path = _make_db_with_holdings(
             tmp_path,
             [
-                ("h1", "AAPL", "OPEN", "c1"),
-                ("h2", "MSFT", "OPEN", "c1"),
-                ("h3", "GOOG", "OPEN", "c1"),
+                ("h1", "AAPL", "ACTIVE", "c1"),
+                ("h2", "MSFT", "ACTIVE", "c1"),
+                ("h3", "GOOG", "ACTIVE", "c1"),
             ],
         )
         result = gate(
@@ -214,9 +214,9 @@ class TestGatekeeperIntegration:
         db_path = _make_db_with_holdings(
             tmp_path,
             [
-                ("h1", "AAPL", "OPEN", "c1"),
-                ("h2", "MSFT", "OPEN", "c1"),
-                ("h3", "GOOG", "OPEN", "c1"),
+                ("h1", "AAPL", "ACTIVE", "c1"),
+                ("h2", "MSFT", "ACTIVE", "c1"),
+                ("h3", "GOOG", "ACTIVE", "c1"),
             ],
         )
         # AAPL already has an open position, so it should pass
@@ -233,8 +233,8 @@ class TestGatekeeperIntegration:
         db_path = _make_db_with_holdings(
             tmp_path,
             [
-                ("h1", "AAPL", "OPEN", "c1"),
-                ("h2", "MSFT", "CLOSED", "c1"),
+                ("h1", "AAPL", "ACTIVE", "c1"),
+                ("h2", "MSFT", "RESOLVED_FLAT", "c1"),
             ],
         )
         result = gate(

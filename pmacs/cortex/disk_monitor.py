@@ -10,8 +10,10 @@ from pathlib import Path
 
 from pmacs.logsys import log_debug
 
+from pmacs.config import data_dir as _data_dir
+
 _MIN_FREE_GB = 2.0
-_PMACS_HOME = Path("/var/db/pmacs")
+_PMACS_HOME = _data_dir()
 
 
 def check_disk_space(

@@ -7,9 +7,14 @@ Spec ref: Source.md §12
 """
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
+
+if not importlib.util.find_spec("multipart"):
+    pytest.skip("python-multipart not installed", allow_module_level=True)
 
 
 @pytest.fixture
@@ -68,7 +73,7 @@ class TestWizardStepRouting:
         resp = client.post("/wizard/step/0")
         assert resp.status_code == 400
 
-        resp = client.post("/wizard/step/12")
+        resp = client.post("/wizard/step/13")
         assert resp.status_code == 400
 
     def test_step_4_accepts_form_data(self, client):
@@ -91,6 +96,107 @@ class TestWizardStepRouting:
         }
         resp = client.post("/wizard/step/9", data=form_data)
         assert resp.status_code == 200
+
+    def _reset_model_registry(self):
+        """Reset model_registry.json to default state after test."""
+        import json
+        from pathlib import Path
+
+        config_dir = Path(__file__).resolve().parents[2] / "config"
+        registry_path = config_dir / "model_registry.json"
+        default = {
+            "backends": {
+                "llama_server": {
+                    "url": "http://127.0.0.1:8080",
+                    "default_model": "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
+                    "structured_output": "gbnf",
+                    "api_key_ref": "",
+                    "base_url": "",
+                },
+                "ollama": {
+                    "url": "http://127.0.0.1:11434",
+                    "default_model": "qwen3.6:35b-a3b-coding-mxfp8",
+                    "structured_output": "json_schema",
+                    "api_key_ref": "",
+                    "base_url": "",
+                },
+                "anthropic": {
+                    "url": "",
+                    "default_model": "claude-sonnet-4-20250514",
+                    "structured_output": "tool_use",
+                    "api_key_ref": "pmacs.credentials.anthropic_api_key",
+                    "base_url": "https://api.anthropic.com",
+                },
+                "openai": {
+                    "url": "",
+                    "default_model": "gpt-4o",
+                    "structured_output": "json_schema",
+                    "api_key_ref": "pmacs.credentials.openai_api_key",
+                    "base_url": "https://api.openai.com/v1",
+                },
+                "openrouter": {
+                    "url": "",
+                    "default_model": "openai/gpt-4o",
+                    "structured_output": "json_schema",
+                    "api_key_ref": "pmacs.credentials.openrouter_api_key",
+                    "base_url": "https://openrouter.ai/api/v1",
+                },
+            },
+            "active": "llama_server",
+            "personas": {
+                "gatekeeper": None,
+                "macro_regime": "default",
+                "catalyst_summarizer": "default",
+                "moat_analyst": "default",
+                "growth_hunter": "default",
+                "insider_activity": "default",
+                "short_interest": "default",
+                "forensics": "default",
+                "crucible": "default",
+            },
+            "candidates": {},
+        }
+        registry_path.write_text(json.dumps(default, indent=2))
+
+    def test_step_10_llm_provider_local_default(self, client):
+        """LLM provider step saves provider choice to model_registry.json."""
+        form_data = {"provider": "llama_server"}
+        resp = client.post("/wizard/step/10", data=form_data)
+        assert resp.status_code == 200
+        self._reset_model_registry()
+
+    def test_step_10_llm_provider_anthropic(self, client):
+        """LLM provider step accepts anthropic with API key."""
+        form_data = {
+            "provider": "anthropic",
+            "api_model": "claude-sonnet-4-20250514",
+            "api_key": "sk-ant-test123",
+        }
+        resp = client.post("/wizard/step/10", data=form_data)
+        assert resp.status_code == 200
+        self._reset_model_registry()
+
+    def test_step_10_llm_provider_openai(self, client):
+        """LLM provider step accepts openai with API key."""
+        form_data = {
+            "provider": "openai",
+            "api_model": "gpt-4o",
+            "api_key": "sk-test123",
+        }
+        resp = client.post("/wizard/step/10", data=form_data)
+        assert resp.status_code == 200
+        self._reset_model_registry()
+
+    def test_step_10_llm_provider_openrouter(self, client):
+        """LLM provider step accepts openrouter with API key."""
+        form_data = {
+            "provider": "openrouter",
+            "api_model": "anthropic/claude-sonnet-4",
+            "api_key": "sk-or-test123",
+        }
+        resp = client.post("/wizard/step/10", data=form_data)
+        assert resp.status_code == 200
+        self._reset_model_registry()
 
 
 class TestVerifyLLMStep:
@@ -132,7 +238,7 @@ class TestVerifyLLMStep:
 
             result = await run({})
             assert result["ok"] is False
-            assert "not running" in result["message"].lower() or "install" in result["message"].lower()
+            assert "not running" in result["message"].lower() or "install" in result["message"].lower() or "nothing is listening" in result["message"].lower()
 
 
 class TestVerifyDataStep:

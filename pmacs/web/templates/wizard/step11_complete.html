@@ -2,7 +2,9 @@
    Promote to SHADOW + PAPER, link to dashboard.
    Expects: current_step, promotion_result
 #}
+{% include "wizard/_progress.html" %}
 <div class="w-full max-w-xl px-8 text-center">
+    {% if promotion_result and promotion_result.get("promoted") %}
     <div class="mb-8">
         <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 mb-4">
             <span class="text-positive text-3xl">&#10003;</span>
@@ -10,6 +12,37 @@
         <h1 class="text-3xl font-bold text-text-primary mb-2">Setup Complete</h1>
         <p class="text-text-secondary text-base">PMACS is ready. Mode promoted to <span class="font-mono text-positive">SHADOW + PAPER</span>.</p>
     </div>
+    {% elif promotion_result %}
+    <div class="mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-900/30 mb-4">
+            <span class="text-negative text-3xl">&#10007;</span>
+        </div>
+        <h1 class="text-3xl font-bold text-text-primary mb-2">Promotion Failed</h1>
+        <p class="text-text-secondary text-base">System setup is done, but mode promotion encountered an error.</p>
+    </div>
+    {% if wizard_error or promotion_result.get("error") %}
+    <div class="mb-6 p-4 bg-red-900/20 border border-red-700/40 rounded-lg text-left">
+        <p class="text-sm text-negative">{{ wizard_error or promotion_result.get("error", "Unknown error") }}</p>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-900/30 mb-4">
+            <span class="text-warning text-3xl">&#9888;</span>
+        </div>
+        <h1 class="text-3xl font-bold text-text-primary mb-2">Finishing Setup</h1>
+        <p class="text-text-secondary text-base">Something unexpected happened. You can retry promotion.</p>
+    </div>
+    <div class="flex justify-center mb-8">
+        <button hx-post="/wizard/step/11"
+                hx-target="#wizard-content"
+                hx-swap="innerHTML transition:200ms"
+                hx-indicator="#wizard-loader"
+                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+            Retry Promotion
+        </button>
+    </div>
+    {% endif %}
 
     <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-8 text-left">
         <h2 class="text-sm font-semibold text-text-primary mb-4 uppercase tracking-wider">Configuration Summary</h2>
@@ -20,6 +53,12 @@
                 <span class="text-text-secondary">Mode</span>
                 <span class="font-mono text-positive">SHADOW + PAPER</span>
             </div>
+            {% if promotion_result.get("provider") %}
+            <div class="flex justify-between items-center py-2 border-b border-border">
+                <span class="text-text-secondary">Provider</span>
+                <span class="font-mono text-text-primary text-xs">{{ promotion_result["provider"] }}</span>
+            </div>
+            {% endif %}
             {% if promotion_result.get("model") %}
             <div class="flex justify-between items-center py-2 border-b border-border">
                 <span class="text-text-secondary">Inference Model</span>

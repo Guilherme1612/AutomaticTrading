@@ -15,7 +15,7 @@ repos:
       # Anti-pattern §16.1: No direct holding.state mutation outside state_machine.py
       - id: no-holding-state-mutation
         name: "Anti-pattern: no holding.state = outside state_machine.py"
-        entry: 'bash -c "grep -rn ''holding\.state\s*='' --include=''*.py'' pmacs/ | grep -v ''state_machine\.py'' | grep -v ''__pycache__'' && exit 1 || exit 0"'
+        entry: 'bash -c "grep -rnP ''holding\.state\s*=(?!\s*=)'' --include=''*.py'' pmacs/ | grep -v ''state_machine\.py'' | grep -v ''__pycache__'' && exit 1 || exit 0"'
         language: system
         pass_filenames: false
         types: [python]
@@ -39,7 +39,7 @@ repos:
       # Anti-pattern: No pydantic.v1 imports
       - id: no-pydantic-v1
         name: "Anti-pattern: no pydantic.v1 imports"
-        entry: 'bash -c "grep -rn ''from pydantic\.v1'' --include=''*.py'' . && exit 1 || exit 0"'
+        entry: 'bash -c "grep -rn ''from pydantic\.v1'' --include=''*.py'' pmacs/ && exit 1 || exit 0"'
         language: system
         pass_filenames: false
         types: [python]

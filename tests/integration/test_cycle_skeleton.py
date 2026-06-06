@@ -198,8 +198,8 @@ class TestCycleOpenClose:
             events.append(json.loads(frame))
 
         event_types = [e["type"] for e in events]
-        assert "cycle.opened" in event_types
-        assert "cycle.closed" in event_types
+        assert "cycle.open" in event_types
+        assert "cycle.close" in event_types
 
         publisher.unsubscribe(client_id)
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from pmacs.constants import MUTATION_PROBATION_CYCLES
+from pmacs.mutation.candidate_generator import EXCLUDED_TARGETS
 
 
 def _resolve_verify_fn(
@@ -29,7 +30,7 @@ def _resolve_verify_fn(
     from pmacs.storage.keychain import get_api_key
     from pmacs.cortex.totp import verify_totp
 
-    secret = get_api_key("pmacs.security", "totp_secret")
+    secret = get_api_key("pmacs.system.totp_secret", "operator")
     return lambda code: verify_totp(secret, code)
 
 
@@ -79,6 +80,13 @@ def operator_promote(
 
     if not resolved_verify(totp_code):
         raise PermissionError("Invalid TOTP code")
+
+    # Phases.md §6.3 Checkpoint C: reject excluded targets
+    if target and target in EXCLUDED_TARGETS:
+        raise ValueError(
+            f"Mutation target '{target}' is excluded per spec safety invariant "
+            f"(Phases.md §6.3 Checkpoint C). Cannot mutate: {EXCLUDED_TARGETS}"
+        )
 
     probation = getattr(config, "probation_cycles", MUTATION_PROBATION_CYCLES)
     now = datetime.now(timezone.utc).isoformat()

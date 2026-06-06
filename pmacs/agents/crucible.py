@@ -47,11 +47,7 @@ class CrucibleRunner(PersonaRunner):
         template_path = Path(__file__).parent / "prompts" / "crucible.md"
         template = template_path.read_text(encoding="utf-8")
 
-        evidence_text = ""
-        for packet in evidence:
-            evidence_text += f"\n--- Evidence ({packet.ticker}) ---\n"
-            for ev in getattr(packet, "evidence", []):
-                evidence_text += f"[{getattr(ev, 'id', 'unknown')}] {getattr(ev, 'content', str(ev))}\n"
+        evidence_text = self.format_evidence_for_prompt(evidence)
 
         context_block = ""
         if episodic_context:

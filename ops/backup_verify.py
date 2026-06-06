@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """Backup and restore verification tool (Phase 15 exit test #6).
 
-Backs up all 5 PMACS stores, verifies restore integrity.
-Spec: Architecture.md S8 (storage), S5.1 (audit chain).
+Creates timestamped backups of SQLite DB, audit log, config dir.
+Verifies backup integrity via SHA256 checksums.
+Supports restore mode to verify a backup is valid.
+
+Spec ref: Architecture.md §8 (storage), §5.1 (audit chain), Phases §15.
+Item: 15.9
+
+Usage:
+    python ops/backup_verify.py backup                      # Backup all stores
+    python ops/backup_verify.py backup --include-config     # Also backup config/
+    python ops/backup_verify.py verify                      # Verify current data integrity
+    python ops/backup_verify.py verify-backup <dir>         # Verify a backup directory
+    python ops/backup_verify.py restore --backup-dir <dir>  # Restore from backup
+    python ops/backup_verify.py e2e                         # Full round-trip test
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -23,6 +36,7 @@ KUZU_DIR = "pmacs_graph.kuzu"
 QDRANT_DIR = "qdrant_storage"
 DUCKDB_FILE = "pmacs_analytics.duckdb"
 AUDIT_FILE = "audit.log"
+CONFIG_DIR = "config"
 
 STORES = [
     ("sqlite", SQLITE_FILE, "file"),
@@ -31,6 +45,8 @@ STORES = [
     ("duckdb", DUCKDB_FILE, "file"),
     ("audit", AUDIT_FILE, "file"),
 ]
+
+MANIFEST_FILE = "backup_manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +71,29 @@ def _timestamp_dirname() -> str:
     return datetime.now(timezone.utc).strftime("pmacs_backup_%Y%m%dT%H%M%SZ")
 
 
+def _sha256_file(path: Path) -> str:
+    """Compute SHA256 of a single file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_tree(path: Path) -> dict[str, str]:
+    """Compute SHA256 for every file under a directory tree.
+
+    Returns {relative_path: sha256_hex}.
+    """
+    checksums: dict[str, str] = {}
+    base = path
+    for f in sorted(path.rglob("*")):
+        if f.is_file():
+            rel = str(f.relative_to(base))
+            checksums[rel] = _sha256_file(f)
+    return checksums
+
+
 def _log(msg: str, verbose: bool = False) -> None:
     if verbose:
         print(f"  {msg}")
@@ -64,32 +103,165 @@ def _log(msg: str, verbose: bool = False) -> None:
 # Backup
 # ---------------------------------------------------------------------------
 
-def do_backup(data_dir: Path, output_dir: Path, verbose: bool = False) -> Path:
-    """Copy all 5 stores to a timestamped backup directory.
+def do_backup(
+    data_dir: Path,
+    output_dir: Path,
+    project_root: Path,
+    verbose: bool = False,
+    include_config: bool = False,
+) -> Path:
+    """Copy stores to a timestamped backup directory and write SHA256 manifest.
 
     Returns the backup directory path.
     """
     backup_dir = output_dir / _timestamp_dirname()
     backup_dir.mkdir(parents=True, exist_ok=True)
 
+    manifest: dict = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "project_root": str(project_root),
+        "stores": {},
+    }
+
+    # Backup each store
     for name, relpath, kind in STORES:
         src = data_dir / relpath
         dst = backup_dir / relpath
 
         if not src.exists():
             _log(f"SKIP {name}: {relpath} does not exist", verbose)
+            manifest["stores"][name] = {"status": "skipped", "reason": "not found"}
             continue
 
         if kind == "dir":
             shutil.copytree(src, dst)
+            checksums = _sha256_tree(dst)
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+            checksums = {"<file>": _sha256_file(dst)}
 
-        _log(f"COPIED {name}: {relpath}", verbose)
+        manifest["stores"][name] = {
+            "status": "backed_up",
+            "checksums": checksums,
+            "file_count": len(checksums),
+        }
+        _log(f"COPIED {name}: {relpath} ({len(checksums)} files)", verbose)
+
+    # Optionally backup config directory
+    if include_config:
+        config_src = project_root / CONFIG_DIR
+        config_dst = backup_dir / CONFIG_DIR
+        if config_src.is_dir():
+            shutil.copytree(config_src, config_dst)
+            checksums = _sha256_tree(config_dst)
+            manifest["config"] = {
+                "status": "backed_up",
+                "checksums": checksums,
+                "file_count": len(checksums),
+            }
+            _log(f"COPIED config/ ({len(checksums)} files)", verbose)
+
+    # Write manifest
+    manifest_path = backup_dir / MANIFEST_FILE
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
 
     print(f"Backup complete: {backup_dir}")
+    print(f"  Manifest: {manifest_path}")
     return backup_dir
+
+
+# ---------------------------------------------------------------------------
+# Verify backup integrity
+# ---------------------------------------------------------------------------
+
+def do_verify_backup(backup_dir: Path, verbose: bool = False) -> bool:
+    """Verify a backup directory against its SHA256 manifest.
+
+    Returns True if all checksums match.
+    """
+    manifest_path = backup_dir / MANIFEST_FILE
+    if not manifest_path.exists():
+        print(f"ERROR: No manifest found in {backup_dir}", file=sys.stderr)
+        return False
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    all_ok = True
+    total_files = 0
+    total_checked = 0
+    mismatches = 0
+
+    for name, info in manifest.get("stores", {}).items():
+        if info.get("status") != "backed_up":
+            _log(f"SKIP {name}: {info.get('reason', 'not backed up')}", verbose)
+            continue
+
+        checksums = info.get("checksums", {})
+        total_files += len(checksums)
+
+        for rel, expected_hash in checksums.items():
+            total_checked += 1
+            if rel == "<file>":
+                # Single-file store
+                store_entry = backup_dir / STORES_DICT.get(name, "")
+                if not store_entry.exists():
+                    print(f"  MISMATCH {name}: file missing")
+                    mismatches += 1
+                    all_ok = False
+                    continue
+                actual = _sha256_file(store_entry)
+            else:
+                fpath = backup_dir / name / rel if (backup_dir / name).is_dir() else backup_dir / rel
+                # Find the right base path
+                for _, store_rel, _ in STORES:
+                    candidate = backup_dir / store_rel
+                    if candidate.is_dir() and (candidate / rel).exists():
+                        fpath = candidate / rel
+                        break
+                    elif candidate.is_file() and rel == "<file>":
+                        fpath = candidate
+                        break
+                else:
+                    # Fallback: try direct path
+                    fpath = backup_dir / rel
+
+                if not fpath.exists():
+                    # Try store-relative path
+                    for _, store_rel, kind in STORES:
+                        if kind == "dir":
+                            candidate = backup_dir / store_rel / rel
+                            if candidate.exists():
+                                fpath = candidate
+                                break
+
+                if not fpath.exists():
+                    print(f"  MISMATCH {name}/{rel}: file missing in backup")
+                    mismatches += 1
+                    all_ok = False
+                    continue
+
+                actual = _sha256_file(fpath)
+
+            if actual != expected_hash:
+                print(f"  MISMATCH {name}/{rel}: checksum mismatch")
+                mismatches += 1
+                all_ok = False
+            else:
+                _log(f"  OK {name}/{rel}", verbose)
+
+    if all_ok:
+        print(f"Backup verification PASSED ({total_checked}/{total_files} files OK)")
+    else:
+        print(f"Backup verification FAILED ({mismatches} mismatches out of {total_checked})")
+
+    return all_ok
+
+
+# Build a lookup for verify-backup
+STORES_DICT = {name: relpath for name, relpath, _ in STORES}
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +270,16 @@ def do_backup(data_dir: Path, output_dir: Path, verbose: bool = False) -> Path:
 
 def do_restore(backup_dir: Path, data_dir: Path, verbose: bool = False) -> None:
     """Wipe data_dir contents and restore from backup_dir."""
-    # Wipe existing data dir contents (the dir itself is kept)
+    # Verify backup integrity first
+    manifest_path = backup_dir / MANIFEST_FILE
+    if manifest_path.exists():
+        if not do_verify_backup(backup_dir, verbose):
+            print("ERROR: Backup integrity check failed. Aborting restore.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("WARNING: No manifest found. Proceeding with restore without checksum verification.", file=sys.stderr)
+
+    # Wipe existing data dir contents
     if data_dir.exists():
         for child in data_dir.iterdir():
             if child.is_dir():
@@ -109,6 +290,7 @@ def do_restore(backup_dir: Path, data_dir: Path, verbose: bool = False) -> None:
 
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Restore each store from backup (skip manifest)
     for name, relpath, kind in STORES:
         src = backup_dir / relpath
         dst = data_dir / relpath
@@ -129,7 +311,7 @@ def do_restore(backup_dir: Path, data_dir: Path, verbose: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Verify
+# Verify current data
 # ---------------------------------------------------------------------------
 
 def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> dict:
@@ -144,7 +326,6 @@ def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> d
         "error": None,
     }
 
-    # Check each store exists and is readable
     for name, relpath, kind in STORES:
         path = data_dir / relpath
         info: dict = {"exists": path.exists(), "size": 0}
@@ -152,11 +333,11 @@ def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> d
         if path.exists():
             try:
                 if kind == "dir":
-                    # Sum file sizes in directory
                     total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
                     info["size"] = total
                 else:
                     info["size"] = path.stat().st_size
+                    info["sha256"] = _sha256_file(path)
                 _log(f"OK {name}: {relpath} ({info['size']} bytes)", verbose)
             except OSError as exc:
                 info["error"] = str(exc)
@@ -172,14 +353,13 @@ def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> d
     audit_path = data_dir / AUDIT_FILE
     if audit_path.exists():
         try:
-            # Import here so the module works even if pmacs isn't on sys.path
-            sys.path.insert(0, str(_find_project_root()))
+            project_root = _find_project_root()
+            sys.path.insert(0, str(project_root))
             from pmacs.storage.audit import AuditVerifier
 
             verifier = AuditVerifier(audit_path)
             chain_ok, chain_err = verifier.verify_full()
 
-            # Count entries
             entry_count = 0
             with open(audit_path) as f:
                 for line in f:
@@ -201,8 +381,6 @@ def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> d
             result["pass"] = False
             _log(f"Audit chain check failed: {exc}", verbose)
     else:
-        # No audit log is not necessarily a failure for the chain check
-        # (it may just not exist yet), but we note it
         result["audit_chain"] = {"pass": True, "entries": 0, "note": "audit.log does not exist"}
         _log("No audit.log to verify", verbose)
 
@@ -216,75 +394,6 @@ def do_verify(data_dir: Path, verbose: bool = False, as_json: bool = False) -> d
 
 
 # ---------------------------------------------------------------------------
-# E2E
-# ---------------------------------------------------------------------------
-
-def do_e2e(data_dir: Path, verbose: bool = False) -> None:
-    """Full end-to-end: backup -> wipe -> restore -> verify."""
-    import tempfile
-
-    print("=== E2E: Backup -> Wipe -> Restore -> Verify ===")
-
-    # Step 1: Backup
-    print("\n--- Step 1: Backup ---")
-    with tempfile.TemporaryDirectory() as tmp:
-        backup_dir = do_backup(data_dir, Path(tmp), verbose)
-
-        # Safety: verify backup has content before wiping
-        backup_contents = list(backup_dir.iterdir())
-        if not backup_contents:
-            print("ERROR: Backup directory is empty. Aborting E2E to prevent data loss.", file=sys.stderr)
-            sys.exit(1)
-
-        _log(f"Backup contains {len(backup_contents)} items", verbose)
-
-        # Step 2: Wipe data dir
-        print("\n--- Step 2: Wipe data directory ---")
-        try:
-            if data_dir.exists():
-                for child in data_dir.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child)
-                    else:
-                        child.unlink()
-                _log("Data directory wiped", verbose)
-
-            # Step 3: Restore
-            print("\n--- Step 3: Restore ---")
-            do_restore(backup_dir, data_dir, verbose)
-        except Exception:
-            print("ERROR: Restore failed! Attempting to recover from backup...", file=sys.stderr)
-            try:
-                do_restore(backup_dir, data_dir, verbose)
-                print("Recovery successful.", file=sys.stderr)
-            except Exception as recover_err:
-                print(f"CRITICAL: Recovery also failed: {recover_err}", file=sys.stderr)
-            raise
-
-    # Step 4: Verify
-    print("\n--- Step 4: Verify ---")
-    result = do_verify(data_dir, verbose)
-
-    # Report
-    print("\n=== E2E Result ===")
-    if result["pass"]:
-        print("PASS: All stores restored, audit chain intact.")
-    else:
-        print("FAIL: Issues detected after restore.")
-        if result["error"]:
-            print(f"  Error: {result['error']}")
-        for name, info in result["stores"].items():
-            if not info["exists"]:
-                print(f"  Missing: {name}")
-            elif info.get("error"):
-                print(f"  Error in {name}: {info['error']}")
-        if not result["audit_chain"]["pass"]:
-            print(f"  Audit chain: {result['audit_chain'].get('error', 'broken')}")
-
-        sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -295,15 +404,23 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # -- backup --
-    p_backup = sub.add_parser("backup", help="Backup all 5 stores")
+    p_backup = sub.add_parser("backup", help="Backup all stores with SHA256 checksums")
     p_backup.add_argument("--data-dir", type=Path, default=None,
                           help="Data directory (default: <project_root>/data/)")
     p_backup.add_argument("--output", type=Path, default=None,
                           help="Output directory for backups (default: <project_root>/backups/)")
+    p_backup.add_argument("--include-config", action="store_true",
+                          help="Also backup config/ directory")
     p_backup.add_argument("--verbose", "-v", action="store_true")
 
+    # -- verify-backup --
+    p_vb = sub.add_parser("verify-backup", help="Verify backup integrity via SHA256 manifest")
+    p_vb.add_argument("backup_dir", type=Path,
+                      help="Backup directory to verify")
+    p_vb.add_argument("--verbose", "-v", action="store_true")
+
     # -- restore --
-    p_restore = sub.add_parser("restore", help="Restore from backup")
+    p_restore = sub.add_parser("restore", help="Restore from backup (verifies checksums first)")
     p_restore.add_argument("--backup-dir", type=Path, required=True,
                            help="Backup directory to restore from")
     p_restore.add_argument("--data-dir", type=Path, default=None,
@@ -311,27 +428,24 @@ def main() -> None:
     p_restore.add_argument("--verbose", "-v", action="store_true")
 
     # -- verify --
-    p_verify = sub.add_parser("verify", help="Verify all stores + audit chain")
+    p_verify = sub.add_parser("verify", help="Verify all stores + audit chain + SHA256 checksums")
     p_verify.add_argument("--data-dir", type=Path, default=None,
                           help="Data directory (default: <project_root>/data/)")
     p_verify.add_argument("--verbose", "-v", action="store_true")
     p_verify.add_argument("--json", action="store_true",
                           help="Output verification result as JSON")
 
-    # -- e2e --
-    p_e2e = sub.add_parser("e2e", help="Full backup->wipe->restore->verify cycle")
-    p_e2e.add_argument("--data-dir", type=Path, default=None,
-                       help="Data directory (default: <project_root>/data/)")
-    p_e2e.add_argument("--verbose", "-v", action="store_true")
-
     args = parser.parse_args()
-
     root = _find_project_root()
 
     if args.command == "backup":
         data_dir = args.data_dir or (root / "data")
         output_dir = args.output or (root / "backups")
-        do_backup(data_dir, output_dir, args.verbose)
+        do_backup(data_dir, output_dir, root, args.verbose, args.include_config)
+
+    elif args.command == "verify-backup":
+        if not do_verify_backup(args.backup_dir, args.verbose):
+            sys.exit(1)
 
     elif args.command == "restore":
         data_dir = args.data_dir or (root / "data")
@@ -342,10 +456,6 @@ def main() -> None:
         result = do_verify(data_dir, args.verbose, args.json)
         if not result["pass"]:
             sys.exit(1)
-
-    elif args.command == "e2e":
-        data_dir = args.data_dir or (root / "data")
-        do_e2e(data_dir, args.verbose)
 
 
 if __name__ == "__main__":

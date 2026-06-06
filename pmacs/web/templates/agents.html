@@ -11,159 +11,554 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-{% if not current_ticker %}
-<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 flex items-center justify-between">
-    <span class="text-sm text-blue-700">No active cycle. Showing last completed cycle.</span>
-    <button onclick="runCycleNow()" class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2">Run new cycle</button>
+{% if not current_ticker and not is_cycle_running %}
+<div id="no-cycle-banner" class="card card-elevated border-accent/20 mb-8 flex items-center justify-between reveal">
+    <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-full bg-accent-soft flex items-center justify-center">
+            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+        </div>
+        <span class="text-sm text-accent font-medium">No active cycle. Showing last completed cycle.</span>
+    </div>
+    <button type="button" onclick="runCycleNow()" class="px-4 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium">Run new cycle</button>
 </div>
 {% endif %}
 
-<!-- Queue strip with drag-reorder (Source.md §16.5) -->
-<div class="bg-surface-elevated border border-border rounded-lg p-4 mb-6">
-    <div class="flex items-center gap-4">
-        <h3 class="text-sm font-semibold text-text-primary">Queue</h3>
-        <div id="queue-list" class="flex gap-2 flex-wrap">
-            {% if queue %}
-                {% for item in queue %}
-                <span class="px-2 py-1 text-xs font-mono bg-zinc-100 rounded cursor-grab active:cursor-grabbing"
-                      draggable="true" data-ticker="{{ item }}"
-                      ondragstart="queueDragStart(event)" ondragover="queueDragOver(event)" ondrop="queueDrop(event)">
-                    {{ item }}
-                </span>
-                {% endfor %}
-            {% else %}
-                <span class="text-sm text-text-muted">Empty</span>
-            {% endif %}
+<!-- Queue info + link to Pipeline -->
+<div class="flex flex-wrap items-center justify-between gap-2 mb-8 reveal" data-stagger>
+    <div class="flex items-center gap-2">
+        <span class="text-xs text-text-muted">Queue: <span class="font-mono font-medium text-text-primary">{{ queue|length }} ticker{{ 's' if queue|length != 1 else '' }}</span></span>
+        <a href="/pipeline" class="text-xs text-accent hover:underline font-medium">Manage queue →</a>
+    </div>
+    <a href="/" class="text-xs text-text-muted hover:text-accent transition-colors font-medium flex items-center gap-1.5">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        Dashboard →
+    </a>
+</div>
+
+<!-- Result Cards Carousel -->
+<div id="result-cards-section" class="hidden mb-8 reveal" data-stagger>
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Completed</h3>
+            <span id="result-cards-counter" class="px-2 py-0.5 text-[10px] font-mono bg-surface-sunken rounded-lg text-text-muted"></span>
         </div>
-        {% if queue and queue|length > 0 %}
-        <button onclick="promoteQueueHead()" class="ml-auto px-3 py-1 text-xs border border-zinc-200 rounded hover:bg-zinc-50 transition-colors">
-            Promote P1 Head
-        </button>
-        {% endif %}
+        <div class="flex items-center gap-2">
+            <button type="button" id="result-card-prev"
+                    class="w-7 h-7 flex items-center justify-center rounded-lg border border-border hover:bg-surface-sunken transition-colors text-text-muted disabled:opacity-30"
+                    onclick="resultCardNav(-1)">&larr;</button>
+            <button type="button" id="result-card-next"
+                    class="w-7 h-7 flex items-center justify-center rounded-lg border border-border hover:bg-surface-sunken transition-colors text-text-muted disabled:opacity-30"
+                    onclick="resultCardNav(1)">&rarr;</button>
+            <button type="button" onclick="resultCardsClearAll()"
+                    class="text-[10px] text-text-muted hover:text-negative transition-colors font-medium px-2 py-1 rounded-lg hover:bg-surface-sunken">
+                Clear all
+            </button>
+        </div>
+    </div>
+    <div id="result-cards-viewport" class="relative overflow-hidden">
+        <div id="result-cards-track" class="flex transition-transform duration-300 ease-out gap-4"></div>
     </div>
 </div>
 
 <!-- Current ticker panel -->
-<div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
+<div class="card card-elevated {{ 'card-accent-blue' if is_cycle_running else '' }} mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between">
-        <h3 class="text-sm font-semibold text-text-primary">Current Analysis</h3>
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full {{ 'bg-blue-500 anim-breathing' if is_cycle_running else 'bg-text-muted' }}"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">{{ 'Current Analysis' if is_cycle_running else 'Next Up' }}</h3>
+        </div>
         {% if current_ticker %}
-        <span class="font-mono text-lg font-semibold text-accent">{{ current_ticker }}</span>
+        <span id="current-ticker" class="font-mono text-xl font-bold {{ 'text-accent' if is_cycle_running else 'text-text-secondary' }} truncate max-w-xs block">{{ current_ticker }}</span>
         {% else %}
-        <span class="text-sm text-text-muted">No ticker in progress</span>
+        <span id="current-ticker" class="text-sm text-text-muted">No ticker queued</span>
         {% endif %}
     </div>
 </div>
 
-<!-- 9 persona cards in a row -->
-<div class="grid grid-cols-3 gap-4 mb-6">
+<!-- 9 persona cards in a responsive grid -->
+<div class="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
     {% for persona in personas %}
-    <div class="bg-surface-elevated border border-border rounded-lg p-5" data-stagger aria-live="polite">
-        <div class="flex items-center justify-between mb-3">
-            <h4 class="text-sm font-semibold text-text-primary">{{ persona.name }}</h4>
-            <span class="px-1.5 py-0.5 text-xs rounded {{ 'bg-green-100 text-green-700' if loop.index <= 3 else 'bg-zinc-100 text-text-muted' }}">
-                {{ 'ready' if loop.index <= 3 else 'idle' }}
-            </span>
+    {% set status_accent = 'blue' if persona.status == 'running' else 'green' if persona.status == 'complete' else 'red' if persona.status == 'error' else '' %}
+    <div class="card card-elevated {{ 'card-accent-' + status_accent if status_accent else '' }} reveal"
+         data-stagger
+         data-persona="{{ persona.id }}"
+         aria-live="polite"
+         role="region"
+         aria-label="{{ persona.name }} analysis status">
+
+        <!-- Header: name + confidence + status -->
+        <div class="flex items-start justify-between mb-1.5 gap-2">
+            <h4 class="text-sm font-semibold text-text-primary leading-tight">{{ persona.name }}</h4>
+            <div class="flex items-center gap-1.5 shrink-0">
+                {% if persona.status == 'complete' and persona.confidence is defined %}
+                <span class="text-[10px] font-mono text-text-muted" data-confidence-badge>{{ "%.0f"|format(persona.confidence * 100) }}% conf</span>
+                {% endif %}
+                <span class="px-2 py-0.5 text-[10px] rounded-lg font-medium whitespace-nowrap
+                              {{ 'bg-positive-soft text-positive' if persona.status == 'complete' else '' }}
+                              {{ 'bg-accent-soft text-accent' if persona.status == 'running' else '' }}
+                              {{ 'bg-negative-soft text-negative' if persona.status == 'error' else '' }}
+                              {{ 'bg-surface-sunken text-text-muted' if persona.status not in ('running', 'complete', 'error') else '' }}"
+                      {{ 'anim-pulse-glow' if persona.status == 'running' else '' }}
+                      data-status-badge>
+                    {{ persona.status if persona.status in ('running', 'complete', 'error') else ('ready' if loop.index <= 3 else 'idle') }}
+                </span>
+            </div>
         </div>
-        <p class="text-xs text-text-secondary mb-3">{{ persona.role }}</p>
-        <div class="border-t border-zinc-100 pt-3">
+        <p class="text-[11px] text-text-muted mb-2">{{ persona.role }}</p>
+
+        <div class="border-t border-border-subtle pt-2.5">
             {% if persona.status == 'running' %}
             <div class="persona-progress mb-2">
-                <div class="persona-progress-fill status-running" style="width: {{ persona.progress | default(0) }}%"></div>
+                <div class="persona-progress-fill status-running {{ 'indeterminate' if not persona.progress else '' }}"
+                     style="width: {{ persona.progress | default(0) }}%"
+                     data-progress-bar></div>
             </div>
-            <p class="text-xs text-text-secondary">Analyzing...</p>
+            <p class="text-xs text-text-secondary" data-status-text>Analyzing...</p>
             {% elif persona.status == 'complete' %}
-            <div class="persona-progress mb-2">
+            <div class="persona-progress mb-1.5">
                 <div class="persona-progress-fill status-complete" style="width: 100%"></div>
             </div>
-            <div class="flex gap-2 text-xs font-mono">
-                <span class="text-positive">&#8593;{{ persona.p_up | default('&mdash;') }}</span>
-                <span class="text-text-muted">&#8594;{{ persona.p_flat | default('&mdash;') }}</span>
-                <span class="text-negative">&#8595;{{ persona.p_down | default('&mdash;') }}</span>
+            <!-- Probability bar -->
+            <div class="flex gap-0.5 w-full h-2.5 rounded-md overflow-hidden mb-1">
+                <div class="bg-positive transition-all duration-500" style="width: {{ (persona.p_up | default(0.33)) * 100 | int }}%"></div>
+                <div class="bg-border-strong transition-all duration-500" style="width: {{ (persona.p_flat | default(0.34)) * 100 | int }}%"></div>
+                <div class="bg-negative transition-all duration-500" style="width: {{ (persona.p_down | default(0.33)) * 100 | int }}%"></div>
+            </div>
+            <div class="flex gap-3 text-xs font-mono mb-2.5">
+                <span class="text-positive font-medium">&uarr;{{ "%.0f"|format((persona.p_up | default(0.33)) * 100) }}%</span>
+                <span class="text-text-muted">&rarr;{{ "%.0f"|format((persona.p_flat | default(0.34)) * 100) }}%</span>
+                <span class="text-negative font-medium">&darr;{{ "%.0f"|format((persona.p_down | default(0.33)) * 100) }}%</span>
             </div>
             {% elif persona.status == 'error' %}
             <div class="persona-progress mb-2">
                 <div class="persona-progress-fill status-error" style="width: 100%"></div>
             </div>
-            <p class="text-xs text-negative">Error &mdash; see debug log</p>
+            <p class="text-xs text-negative font-medium">Error — see debug log</p>
             {% else %}
-            <p class="text-xs text-text-muted">Waiting for cycle...</p>
+            <div class="persona-progress mb-2">
+                <div class="persona-progress-fill status-running indeterminate" style="width: 0%" data-progress-bar></div>
+            </div>
+            <p class="text-xs text-text-muted" data-status-text>Waiting for cycle...</p>
+            {% endif %}
+
+            <!-- Analysis block (shown when complete) -->
+            <div data-analysis-text class="overflow-hidden transition-all duration-300 ease-out
+                {% if persona.status == 'complete' and (persona.key_signal or persona.analysis or persona.evidence_cited) %}max-h-[400px]{% else %}max-h-0{% endif %}">
+                {% if persona.status == 'complete' %}
+                    {% if persona.key_signal %}
+                    <p class="text-xs font-semibold text-text-primary mb-1.5 leading-snug">{{ persona.key_signal }}</p>
+                    {% endif %}
+
+                    <!-- Evidence list (numbers/data, most recent first) -->
+                    {% if persona.evidence_cited %}
+                    <ul class="space-y-1 mb-2" data-evidence-list>
+                        {% for ev in persona.evidence_cited[:3] %}
+                        <li class="flex gap-1.5 text-[11px] text-text-secondary leading-snug">
+                            <span class="text-accent shrink-0 mt-0.5 font-bold">·</span>
+                            <span>{{ ev }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+
+                    <!-- Analysis text (truncated) -->
+                    {% if persona.analysis %}
+                    <p class="text-[11px] text-text-muted leading-snug">{{ persona.analysis[:150] }}{% if persona.analysis|length > 150 %}&hellip;{% endif %}</p>
+                    {% endif %}
+
+                    <!-- Read more button (opens modal with full analysis + all evidence) -->
+                    {% if persona.analysis|length > 150 or (persona.evidence_cited and persona.evidence_cited|length > 3) %}
+                    <button type="button"
+                        onclick='openAgentModal({{ persona.name | tojson | safe }}, {{ persona.analysis | tojson | safe }}, {{ (persona.evidence_cited or []) | tojson | safe }}, {{ persona.confidence | default(0) | tojson | safe }})'
+                        class="mt-1.5 text-[11px] text-accent hover:underline font-medium">
+                        View full analysis →
+                    </button>
+                    {% endif %}
+                {% endif %}
+            </div>
+            {% if persona.completed_at %}
+            <p class="text-[10px] text-text-muted/60 mt-2" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
             {% endif %}
         </div>
     </div>
     {% endfor %}
 </div>
 
-<!-- Sankey container: D3 visualization with three views (Source.md §13.3, §15) -->
-<div id="sankey-container" class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
-    <div class="flex items-center justify-between mb-4">
-        <h3 class="text-sm font-semibold text-text-primary">Communication Layer</h3>
-        <!-- Chip group toggle: Process | Network | Math -->
-        <div class="flex gap-1" role="group" aria-label="Visualization view selector">
-            <button data-sankey-view="process"
-                    class="px-2.5 py-1 text-xs rounded bg-blue-50 text-blue-600 border border-blue-200"
-                    aria-pressed="true"
-                    tabindex="0">Process</button>
-            <button data-sankey-view="network"
-                    class="px-2.5 py-1 text-xs rounded bg-zinc-100 text-text-muted hover:bg-zinc-200"
-                    aria-pressed="false"
-                    tabindex="0">Network</button>
-            <button data-sankey-view="math"
-                    class="px-2.5 py-1 text-xs rounded bg-zinc-100 text-text-muted hover:bg-zinc-200"
-                    aria-pressed="false"
-                    tabindex="0">Math</button>
+<!-- Communication Layer -->
+<div id="comm-layer" class="card card-elevated mb-8 reveal" data-stagger>
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-purple-500"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Communication Layer</h3>
+        </div>
+        <div class="flex gap-1 bg-surface-sunken/50 rounded-xl p-0.5" role="group" aria-label="Visualization view selector">
+            <button type="button" data-comm-view="process"
+                    class="px-3 py-1.5 text-xs rounded-xl bg-accent-soft text-accent font-medium transition-colors"
+                    aria-pressed="true">Process</button>
+            <button type="button" data-comm-view="signals"
+                    class="px-3 py-1.5 text-xs rounded-xl text-text-muted hover:bg-surface-sunken transition-colors font-medium"
+                    aria-pressed="false">Signals</button>
+            <button type="button" data-comm-view="conviction"
+                    class="px-3 py-1.5 text-xs rounded-xl text-text-muted hover:bg-surface-sunken transition-colors font-medium"
+                    aria-pressed="false">Conviction</button>
         </div>
     </div>
 
-    <!-- Process view (default) -->
-    <div id="viz-process" class="h-64">
-        <div class="flex items-center justify-center h-full text-sm text-text-muted">
-            Loading pipeline stages...
+    <!-- Process tab: 5-step pipeline timeline -->
+    <div id="viz-process" class="space-y-2 py-2">
+        <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="data_fetch">
+            <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
+            <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Data Fetch</span>
+            <div class="flex-1 h-1 bg-surface-sunken rounded-full overflow-hidden">
+                <div class="h-full bg-accent rounded-full transition-all duration-500" data-step-bar style="width:0%"></div>
+            </div>
+            <span class="text-xs font-mono text-text-muted w-10 sm:w-12 text-right shrink-0" data-step-time></span>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="agents_running">
+            <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
+            <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Agent Analysis</span>
+            <div class="flex-1 h-1 bg-surface-sunken rounded-full overflow-hidden">
+                <div class="h-full bg-accent rounded-full transition-all duration-500" data-step-bar style="width:0%"></div>
+            </div>
+            <span class="text-xs font-mono text-text-muted w-10 sm:w-12 text-right shrink-0" data-step-time></span>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="crucible">
+            <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
+            <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Crucible</span>
+            <div class="flex-1 h-1 bg-surface-sunken rounded-full overflow-hidden">
+                <div class="h-full bg-accent rounded-full transition-all duration-500" data-step-bar style="width:0%"></div>
+            </div>
+            <span class="text-xs font-mono text-text-muted w-10 sm:w-12 text-right shrink-0" data-step-time></span>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="arbitration">
+            <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
+            <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Arbitration</span>
+            <div class="flex-1 h-1 bg-surface-sunken rounded-full overflow-hidden">
+                <div class="h-full bg-accent rounded-full transition-all duration-500" data-step-bar style="width:0%"></div>
+            </div>
+            <span class="text-xs font-mono text-text-muted w-10 sm:w-12 text-right shrink-0" data-step-time></span>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="decision">
+            <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
+            <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Decision</span>
+            <div class="flex-1 h-1 bg-surface-sunken rounded-full overflow-hidden">
+                <div class="h-full bg-accent rounded-full transition-all duration-500" data-step-bar style="width:0%"></div>
+            </div>
+            <span class="text-xs font-mono text-text-muted w-10 sm:w-12 text-right shrink-0" data-step-time></span>
         </div>
     </div>
 
-    <!-- Network view (D3 Sankey) -->
-    <div id="viz-network" class="h-64 hidden">
-        <div class="flex items-center justify-center h-full text-sm text-text-muted">
-            Loading Sankey diagram...
+    <!-- Signals tab: per-agent vote table -->
+    <div id="viz-signals" class="hidden">
+        <div id="signals-empty" class="flex items-center justify-center py-12 text-sm text-text-muted">
+            Run a cycle to see agent signals.
+        </div>
+        <div id="signals-table" class="hidden">
+            <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
+            <div class="grid grid-cols-[1fr_80px_80px_70px_50px] gap-x-3 gap-y-0 text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 pb-1.5 border-b border-border-subtle mb-1 min-w-[400px]">
+                <span>Persona</span><span class="text-center">Bullish</span><span class="text-center">Bearish</span><span class="text-center">Vote</span><span class="text-right">Evid</span>
+            </div>
+            <div id="signals-rows" class="space-y-0.5 min-w-[400px]"></div>
+            </div>
         </div>
     </div>
 
-    <!-- Math view -->
-    <div id="viz-math" class="h-64 hidden overflow-y-auto">
-        <div class="flex items-center justify-center h-full text-sm text-text-muted">
-            Loading math breakdown...
+    <!-- Conviction tab: formula breakdown -->
+    <div id="viz-conviction" class="hidden py-2">
+        <div id="conviction-empty" class="flex items-center justify-center py-12 text-sm text-text-muted">
+            Run a cycle to see conviction breakdown.
+        </div>
+        <div id="conviction-blocks" class="hidden space-y-2">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="p-3 bg-surface-sunken/50 rounded-xl">
+                    <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Direction</p>
+                    <p class="text-lg font-mono font-bold text-text-primary" id="cv-direction">—</p>
+                    <p class="text-[10px] text-text-muted mt-0.5">avg p_up − p_down</p>
+                </div>
+                <div class="p-3 bg-surface-sunken/50 rounded-xl">
+                    <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Maturity</p>
+                    <p class="text-lg font-mono font-bold text-text-primary" id="cv-maturity">—</p>
+                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-maturity-sub">bootstrap factor</p>
+                </div>
+                <div class="p-3 bg-surface-sunken/50 rounded-xl">
+                    <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Crucible</p>
+                    <p class="text-lg font-mono font-bold" id="cv-crucible">—</p>
+                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-crucible-sub">1 − severity</p>
+                </div>
+                <div class="p-3 rounded-xl border-2 border-accent/30">
+                    <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Conviction</p>
+                    <p class="text-lg font-mono font-bold" id="cv-conviction">—</p>
+                    <p class="text-[10px] font-semibold mt-0.5" id="cv-verdict">—</p>
+                </div>
+            </div>
+            <div class="px-2 pt-1 border-t border-border-subtle">
+                <p class="text-[10px] text-text-muted font-mono">Threshold: HOLD ≥ 0.10 · BUY ≥ 0.30 · STRONG_BUY ≥ 0.60</p>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- Bottom section: decision summary + cycle log -->
-<div class="grid grid-cols-3 gap-6">
-    <!-- Decision summary rail -->
-    <div class="col-span-2 bg-surface-elevated border border-border rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-text-primary mb-4">Decision Summary</h3>
-        <p class="text-sm text-text-muted text-center py-8">No decisions this cycle</p>
-    </div>
-
-    <!-- Cycle log strip -->
-    <div class="bg-surface-elevated border border-border rounded-lg p-6">
-        <h3 class="text-sm font-semibold text-text-primary mb-2">Cycle Log</h3>
-        {% if cycle_log %}
-        <div class="space-y-1 max-h-32 overflow-y-auto">
-            {% for entry in cycle_log %}
-            <div class="text-xs font-mono text-text-secondary">{{ entry }}</div>
-            {% endfor %}
+<!-- Cycle Log (live SSE feed) -->
+<div class="card card-elevated mb-8 reveal" data-stagger>
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Cycle Log</h3>
         </div>
-        {% else %}
-        <p class="text-sm text-text-muted">No cycle history</p>
-        {% endif %}
+        <button type="button" id="cycle-log-clear"
+                class="text-[10px] text-text-muted hover:text-text-primary transition-colors font-medium px-2 py-1 rounded-lg hover:bg-surface-sunken">
+            Clear
+        </button>
+    </div>
+    <div id="cycle-log-feed" class="max-h-48 overflow-y-auto space-y-0.5">
+        <div id="cycle-log-empty" class="flex items-center justify-center py-6 text-xs text-text-muted">
+            Waiting for cycle activity…
+        </div>
     </div>
 </div>
 
-<!-- Load sankey module (Source.md §13.3 Sankey) -->
-<script src="/static/sankey.js"></script>
+<!-- Bottom section: decision summary -->
+<div class="card card-elevated reveal" data-stagger>
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+        <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision Summary</h3>
+    </div>
+    {% if decision_summary %}
+    <div class="space-y-2">
+        {% for d in decision_summary %}
+        <a href="/memo/{{ d.ticker }}"
+           class="flex items-center gap-3 p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group"
+           data-stagger>
+            <span class="font-mono font-semibold text-sm text-text-primary">{{ d.ticker }}</span>
+            <span class="px-2.5 py-0.5 text-xs rounded-xl font-medium
+                         {{ 'bg-positive-soft text-positive' if d.verdict == 'STRONG_BUY' else '' }}
+                         {{ 'bg-accent-soft text-accent' if d.verdict == 'BUY' else '' }}
+                         {{ 'bg-crucible-soft text-crucible' if d.verdict == 'HOLD' else '' }}
+                         {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
+                {{ d.verdict }}
+            </span>
+            <span class="text-xs text-text-muted font-mono">Conviction: {{ "%.0f"|format([d.conviction * 100, 0]|max) if d.conviction else '0' }}%</span>
+            {% if d.decided_at %}
+            <span class="text-[10px] text-text-muted font-mono" data-time-ago="{{ d.decided_at }}">{{ d.decided_at }}</span>
+            {% endif %}
+            <a href="/memo/{{ d.ticker }}" class="text-[10px] text-accent hover:underline font-medium ml-auto">→ memo</a>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-text-muted text-center py-8">No decisions this cycle</p>
+    {% endif %}
+</div>
+
 <script>
-// Queue drag-reorder (Source.md §16.5)
+// ─── Agent completion stagger queue ──────────────────────────────────────────
+// Agents run in parallel and fire complete events in a burst.
+// This queue staggers the DOM updates so each card visibly transitions separately.
+var _agentUpdateQueue = [];
+var _agentUpdateTimer = null;
+var AGENT_STAGGER_MS = 120;
+
+// Debounced sankey refresh — collapses 7 parallel agent.complete calls into 1 fetch
+var _sankeyRefreshTimer = null;
+function _debouncedRefreshSignals() {
+    if (_sankeyRefreshTimer) clearTimeout(_sankeyRefreshTimer);
+    _sankeyRefreshTimer = setTimeout(function() {
+        _sankeyRefreshTimer = null;
+        fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
+            _renderSignals(d.personas || []);
+        }).catch(function() {});
+    }, 350);
+}
+
+function _queueAgentUpdate(fn) {
+    _agentUpdateQueue.push(fn);
+    if (!_agentUpdateTimer) {
+        _drainAgentQueue();
+    }
+}
+
+function _drainAgentQueue() {
+    if (_agentUpdateQueue.length === 0) {
+        _agentUpdateTimer = null;
+        return;
+    }
+    var fn = _agentUpdateQueue.shift();
+    try { fn(); } catch(e) {}
+    _agentUpdateTimer = setTimeout(_drainAgentQueue, AGENT_STAGGER_MS);
+}
+
+// ─── Result Cards ─────────────────────────────────────────────────────────────
+var _completedCards = [];      // [{ticker, verdict, conviction, ev_pct, target_usd, crucible, signals}]
+var _currentCardIdx = 0;
+var _pendingSignals = {};      // ticker → [{name, p_up, p_down}]
+var _pendingCrucible = {};     // ticker → {severity, thesis_survives}
+
+function _verdictStyle(verdict) {
+    var map = {
+        "STRONG_BUY": {bg: "bg-positive-soft", text: "text-positive"},
+        "BUY":        {bg: "bg-accent-soft",   text: "text-accent"},
+        "HOLD":       {bg: "bg-amber-400/10",  text: "text-amber-400"},
+        "SKIP":       {bg: "bg-negative-soft", text: "text-negative"},
+    };
+    return map[verdict] || {bg: "bg-surface-sunken", text: "text-text-muted"};
+}
+
+function _buildResultCard(result) {
+    var v = _verdictStyle(result.verdict);
+    var convPct = Math.round((result.conviction || 0) * 100);
+    var convWidth = Math.min(convPct, 100);
+    var convColor = convPct >= 60 ? "bg-positive" : convPct >= 30 ? "bg-accent" : convPct >= 10 ? "bg-amber-400" : "bg-negative";
+
+    // Agent vote summary
+    var bulls = 0, bears = 0, neutrals = 0;
+    (result.signals || []).forEach(function(s) {
+        var diff = (s.p_up || 0) - (s.p_down || 0);
+        if (diff > 0.1) bulls++;
+        else if (diff < -0.1) bears++;
+        else neutrals++;
+    });
+    var totalAgents = bulls + bears + neutrals;
+
+    // Crucible badge
+    var crucibleHtml = "";
+    if (result.crucible && result.crucible.severity !== undefined) {
+        var sevPct = Math.round(result.crucible.severity * 100);
+        var crucColor = result.crucible.thesis_survives ? "text-positive" : "text-negative";
+        crucibleHtml = '<div class="flex items-center gap-1.5 mt-2">' +
+            '<span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Crucible</span>' +
+            '<span class="text-[10px] font-mono ' + crucColor + '">' + sevPct + '% severity — ' +
+            (result.crucible.thesis_survives ? "survives ✓" : "rejected ✗") + '</span></div>';
+    }
+
+    // EV / size
+    var statsHtml = "";
+    if (result.ev_pct !== undefined && result.ev_pct !== null) {
+        var evColor = result.ev_pct >= 0 ? "text-positive" : "text-negative";
+        statsHtml += '<span class="text-[10px] font-mono ' + evColor + '">EV ' +
+            (result.ev_pct >= 0 ? "+" : "") + (result.ev_pct * 100).toFixed(1) + '%</span>';
+    }
+    if (result.target_usd) {
+        statsHtml += '<span class="text-[10px] font-mono text-text-muted">$' +
+            result.target_usd.toLocaleString() + '</span>';
+    }
+
+    var card = document.createElement("div");
+    card.className = "result-card shrink-0 w-72 card card-elevated p-4 relative flex flex-col gap-2";
+    card.setAttribute("data-card-ticker", result.ticker);
+    card.innerHTML =
+        '<button type="button" onclick="resultCardDismiss(\'' + result.ticker + '\')" ' +
+        'class="absolute top-2 right-2 text-text-muted hover:text-negative transition-colors text-base leading-none w-6 h-6 flex items-center justify-center rounded-lg hover:bg-surface-sunken">&times;</button>' +
+
+        '<div class="flex items-center gap-2 pr-6">' +
+            '<span class="font-mono font-bold text-base text-text-primary">' + escapeHtml(result.ticker) + '</span>' +
+            '<span class="px-2 py-0.5 text-[10px] rounded-lg font-semibold ' + v.bg + ' ' + v.text + '">' + escapeHtml(result.verdict) + '</span>' +
+        '</div>' +
+
+        '<div class="space-y-1">' +
+            '<div class="flex items-center justify-between">' +
+                '<span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Conviction</span>' +
+                '<span class="text-[10px] font-mono font-bold ' + convColor.replace('bg-', 'text-') + '">' + convPct + '%</span>' +
+            '</div>' +
+            '<div class="h-1.5 bg-surface-sunken rounded-full overflow-hidden">' +
+                '<div class="h-full ' + convColor + ' rounded-full transition-all duration-500" style="width:' + convWidth + '%"></div>' +
+            '</div>' +
+        '</div>' +
+
+        (totalAgents > 0 ?
+        '<div class="flex items-center gap-2">' +
+            '<span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold shrink-0">Agents</span>' +
+            '<div class="flex gap-1">' +
+                (bulls > 0 ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-positive-soft text-positive font-mono">' + bulls + ' bull</span>' : '') +
+                (neutrals > 0 ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-surface-sunken text-text-muted font-mono">' + neutrals + ' neutral</span>' : '') +
+                (bears > 0 ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-negative-soft text-negative font-mono">' + bears + ' bear</span>' : '') +
+            '</div>' +
+        '</div>' : '') +
+
+        (statsHtml ? '<div class="flex gap-3 items-center">' + statsHtml + '</div>' : '') +
+
+        crucibleHtml +
+
+        '<a href="/memo/' + escapeHtml(result.ticker) + '" ' +
+        'class="mt-1 text-[11px] text-accent hover:underline font-medium self-start">→ View memo</a>';
+
+    return card;
+}
+
+function _resultCardsRender() {
+    var section = document.getElementById("result-cards-section");
+    var track = document.getElementById("result-cards-track");
+    var counter = document.getElementById("result-cards-counter");
+    var prev = document.getElementById("result-card-prev");
+    var next = document.getElementById("result-card-next");
+    if (!section || !track) return;
+
+    if (_completedCards.length === 0) {
+        section.classList.add("hidden");
+        return;
+    }
+    section.classList.remove("hidden");
+
+    // Clamp index
+    _currentCardIdx = Math.max(0, Math.min(_currentCardIdx, _completedCards.length - 1));
+
+    // Rebuild track — newest first (reversed order)
+    track.innerHTML = "";
+    var reversed = _completedCards.slice().reverse();
+    reversed.forEach(function(result) {
+        track.appendChild(_buildResultCard(result));
+    });
+
+    // Slide to current card (index is in reversed space)
+    var viewport = document.getElementById("result-cards-viewport");
+    var cardW = viewport ? (viewport.offsetWidth < 480 ? viewport.offsetWidth : 288) + 16 : 304;
+    var revIdx = reversed.length - 1 - _currentCardIdx;
+    track.style.transform = "translateX(-" + (revIdx * cardW) + "px)";
+
+    // Counter
+    if (counter) counter.textContent = (_currentCardIdx + 1) + " / " + _completedCards.length;
+
+    // Nav button state
+    if (prev) prev.disabled = _currentCardIdx === 0;
+    if (next) next.disabled = _currentCardIdx >= _completedCards.length - 1;
+}
+
+function resultCardNav(dir) {
+    _currentCardIdx = Math.max(0, Math.min(_currentCardIdx + dir, _completedCards.length - 1));
+    _resultCardsRender();
+}
+
+function resultCardDismiss(ticker) {
+    _completedCards = _completedCards.filter(function(c) { return c.ticker !== ticker; });
+    if (_currentCardIdx >= _completedCards.length) _currentCardIdx = Math.max(0, _completedCards.length - 1);
+    _resultCardsRender();
+}
+
+function resultCardsClearAll() {
+    _completedCards = [];
+    _currentCardIdx = 0;
+    _resultCardsRender();
+}
+
+function _pushResultCard(data) {
+    // Remove duplicate if ticker already has a card
+    _completedCards = _completedCards.filter(function(c) { return c.ticker !== data.ticker; });
+    _completedCards.push({
+        ticker: data.ticker,
+        verdict: data.verdict || "SKIP",
+        conviction: data.conviction || 0,
+        ev_pct: data.ev_pct,
+        target_usd: data.target_usd,
+        signals: _pendingSignals[data.ticker] || [],
+        crucible: _pendingCrucible[data.ticker] || null,
+    });
+    // Show newest card
+    _currentCardIdx = _completedCards.length - 1;
+    _resultCardsRender();
+}
+
 var _draggedTicker = null;
 
 function queueDragStart(e) {
@@ -181,16 +576,14 @@ function queueDrop(e) {
     e.preventDefault();
     var target = e.target.getAttribute("data-ticker");
     if (!_draggedTicker || !target || _draggedTicker === target) return;
-    // Reorder in DOM
     var list = document.getElementById("queue-list");
     var items = Array.from(list.children);
     var draggedEl = items.find(function(el) { return el.getAttribute("data-ticker") === _draggedTicker; });
     var targetEl = items.find(function(el) { return el.getAttribute("data-ticker") === target; });
     if (draggedEl && targetEl) {
         list.insertBefore(draggedEl, targetEl);
-        // Persist new order
         var newOrder = Array.from(list.children).map(function(el) { return el.getAttribute("data-ticker"); });
-        fetch("/api/queue/reorder", {
+        fetch("/pipeline/queue/reorder", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({order: newOrder})
@@ -208,15 +601,620 @@ function promoteQueueHead() {
     var first = list.querySelector("[data-ticker]");
     if (!first) return;
     var ticker = first.getAttribute("data-ticker");
-    showToast(ticker + " promoted to next cycle head", "success", 2000);
+    fetch("/pipeline/queue/promote", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"}
+    }).then(function(resp) { return resp.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            showToast(ticker + " promoted to next cycle head", "success", 2000);
+        } else {
+            showToast("Promote failed", "error", 3000);
+        }
+    }).catch(function() {
+        showToast("Promote failed", "error", 3000);
+    });
 }
 
-// Initialize sankey visualization on page load
-document.addEventListener("DOMContentLoaded", function () {
-    if (typeof PMACS_SANKEY !== "undefined") {
-        PMACS_SANKEY.init();
+function openAgentModal(personaName, analysis, evidence, confidence) {
+    var title = personaName + " — Full Analysis";
+    var confPct = Math.round((confidence || 0) * 100);
+    var html = '';
+    if (confPct > 0) {
+        html += '<p class="text-xs text-text-muted mb-4 font-mono">Confidence: ' + confPct + '%</p>';
     }
+    if (evidence && evidence.length > 0) {
+        html += '<h4 class="text-xs font-semibold text-text-primary uppercase tracking-wider mb-2">Evidence Cited <span class="text-text-muted font-normal normal-case">(most recent first)</span></h4>';
+        html += '<ol class="space-y-1.5 mb-5">';
+        evidence.forEach(function(ev, i) {
+            html += '<li class="flex gap-2 text-xs text-text-secondary leading-snug">' +
+                '<span class="text-accent font-mono shrink-0 font-bold">' + (i + 1) + '.</span>' +
+                '<span>' + ev.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span></li>';
+        });
+        html += '</ol>';
+    }
+    if (analysis) {
+        html += '<h4 class="text-xs font-semibold text-text-primary uppercase tracking-wider mb-2">Analysis</h4>';
+        var escaped = analysis.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        html += '<p class="text-sm text-text-secondary leading-relaxed whitespace-pre-wrap">' + escaped + '</p>';
+    }
+    // Reuse or create the read-more modal but inject HTML directly
+    var modal = document.getElementById("read-more-modal");
+    if (!modal) {
+        openReadMoreModal(title, "");
+        modal = document.getElementById("read-more-modal");
+    }
+    if (modal) {
+        document.getElementById("read-more-modal-title").textContent = title;
+        document.getElementById("read-more-modal-content").innerHTML = html || '<p class="text-text-muted">No data available.</p>';
+        modal.classList.remove("hidden");
+        modal.focus();
+    }
+}
+
+function removeFromQueue(ticker, event) {
+    if (event) { event.stopPropagation(); event.preventDefault(); }
+    fetch("/pipeline/queue/remove", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ticker: ticker})
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) {
+            var list = document.getElementById("queue-list");
+            var chip = list && list.querySelector('[data-ticker="' + ticker + '"]');
+            if (chip) chip.remove();
+            if (list && !list.querySelector("[data-ticker]")) {
+                var empty = document.createElement("span");
+                empty.id = "queue-empty-label";
+                empty.className = "text-sm text-text-muted";
+                empty.textContent = "Empty";
+                list.appendChild(empty);
+            }
+            if (typeof showToast === "function") showToast(ticker + " removed from queue", "success", 1500);
+        } else {
+            if (typeof showToast === "function") showToast("Remove failed: " + (data.error || "unknown"), "error", 3000);
+        }
+    }).catch(function() {
+        if (typeof showToast === "function") showToast("Remove failed", "error", 3000);
+    });
+}
+
+function addTickerToQueue(event) {
+    event.preventDefault();
+    var input = document.getElementById("add-ticker-input");
+    var ticker = (input.value || "").trim().toUpperCase();
+    if (!ticker) return;
+    fetch("/pipeline/queue/add", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ticker: ticker, priority_band: 3})
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) {
+            input.value = "";
+            var list = document.getElementById("queue-list");
+            var emptyLabel = document.getElementById("queue-empty-label");
+            if (emptyLabel) emptyLabel.remove();
+            var chip = document.createElement("span");
+            chip.className = "inline-flex items-center gap-1 px-3 py-1.5 text-xs font-mono bg-surface-sunken/50 rounded-xl font-medium";
+            chip.setAttribute("draggable", "true");
+            chip.setAttribute("data-ticker", data.ticker);
+            chip.addEventListener("dragstart", queueDragStart);
+            chip.addEventListener("dragover", queueDragOver);
+            chip.addEventListener("drop", queueDrop);
+            chip.textContent = data.ticker;
+            var rmBtn = document.createElement("button");
+            rmBtn.type = "button";
+            rmBtn.className = "ml-0.5 text-text-muted hover:text-negative transition-colors leading-none";
+            rmBtn.title = "Remove from queue";
+            rmBtn.textContent = "\u00d7";
+            rmBtn.addEventListener("click", function(e) { removeFromQueue(data.ticker, e); });
+            chip.appendChild(rmBtn);
+            list.appendChild(chip);
+        } else {
+            alert("Error: " + (data.error || "Could not add ticker"));
+        }
+    }).catch(function() { alert("Request failed"); });
+}
+
+// ─── Communication Layer tab switching ───────────────────────────────────────
+function _commSwitchTab(view) {
+    ["process", "signals", "conviction"].forEach(function(v) {
+        var panel = document.getElementById("viz-" + v);
+        var btn = document.querySelector('[data-comm-view="' + v + '"]');
+        if (!panel || !btn) return;
+        var active = v === view;
+        panel.classList.toggle("hidden", !active);
+        btn.className = active
+            ? "px-3 py-1.5 text-xs rounded-xl bg-accent-soft text-accent font-medium transition-colors"
+            : "px-3 py-1.5 text-xs rounded-xl text-text-muted hover:bg-surface-sunken transition-colors font-medium";
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+}
+
+// ─── Process step helpers ─────────────────────────────────────────────────────
+var _stepStartTimes = {};
+function _stepSetStatus(stepId, status, timingMs) {
+    var row = document.querySelector('[data-pipeline-step="' + stepId + '"]');
+    if (!row) return;
+    var dot = row.querySelector("[data-step-dot]");
+    var bar = row.querySelector("[data-step-bar]");
+    var timeEl = row.querySelector("[data-step-time]");
+    if (status === "running") {
+        dot.className = "w-2 h-2 rounded-full bg-accent anim-breathing shrink-0";
+        bar.style.width = "50%";
+        bar.className = "h-full bg-accent rounded-full transition-all duration-500";
+        _stepStartTimes[stepId] = Date.now();
+    } else if (status === "done") {
+        dot.className = "w-2 h-2 rounded-full bg-positive shrink-0";
+        bar.style.width = "100%";
+        bar.className = "h-full bg-positive rounded-full transition-all duration-500";
+        if (timingMs !== undefined) {
+            timeEl.textContent = (timingMs / 1000).toFixed(1) + "s";
+        } else if (_stepStartTimes[stepId]) {
+            timeEl.textContent = ((Date.now() - _stepStartTimes[stepId]) / 1000).toFixed(1) + "s";
+        }
+    } else {
+        dot.className = "w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0";
+        bar.style.width = "0%";
+        bar.className = "h-full bg-accent rounded-full transition-all duration-500";
+    }
+}
+
+function _resetProcessSteps() {
+    ["data_fetch","agents_running","crucible","arbitration","decision"].forEach(function(s) {
+        _stepSetStatus(s, "pending");
+    });
+    _stepStartTimes = {};
+}
+
+// ─── Signals tab ──────────────────────────────────────────────────────────────
+function _renderSignals(personas) {
+    var empty = document.getElementById("signals-empty");
+    var table = document.getElementById("signals-table");
+    var rows = document.getElementById("signals-rows");
+    if (!personas || personas.length === 0 || !personas.some(function(p) { return p.p_up !== null; })) {
+        if (empty) empty.classList.remove("hidden");
+        if (table) table.classList.add("hidden");
+        return;
+    }
+    if (empty) empty.classList.add("hidden");
+    if (table) table.classList.remove("hidden");
+    if (!rows) return;
+    rows.innerHTML = "";
+    personas.forEach(function(p) {
+        if (p.p_up === null) return;
+        var pUp = p.p_up || 0;
+        var pDown = p.p_down || 0;
+        var vote = pUp - pDown > 0.1 ? "bullish" : pDown - pUp > 0.1 ? "bearish" : "neutral";
+        var voteColor = vote === "bullish" ? "text-positive" : vote === "bearish" ? "text-negative" : "text-text-muted";
+        var evCount = p.evidence_count || "—";
+        var row = document.createElement("div");
+        row.className = "grid grid-cols-[1fr_80px_80px_70px_50px] gap-x-3 items-center px-2 py-1.5 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+        row.innerHTML =
+            '<span class="text-xs font-medium text-text-primary truncate">' + escapeHtml(p.name) + '</span>' +
+            '<div class="flex items-center gap-1">' +
+              '<div class="flex-1 h-1.5 bg-surface-sunken rounded-full overflow-hidden"><div class="h-full bg-positive rounded-full" style="width:' + Math.round(pUp*100) + '%"></div></div>' +
+              '<span class="text-[10px] font-mono text-positive w-7 text-right shrink-0">' + Math.round(pUp*100) + '%</span>' +
+            '</div>' +
+            '<div class="flex items-center gap-1">' +
+              '<div class="flex-1 h-1.5 bg-surface-sunken rounded-full overflow-hidden"><div class="h-full bg-negative rounded-full" style="width:' + Math.round(pDown*100) + '%"></div></div>' +
+              '<span class="text-[10px] font-mono text-negative w-7 text-right shrink-0">' + Math.round(pDown*100) + '%</span>' +
+            '</div>' +
+            '<span class="text-[10px] font-semibold ' + voteColor + '">' + vote + '</span>' +
+            '<span class="text-[10px] font-mono text-text-muted text-right">' + evCount + '</span>';
+        rows.appendChild(row);
+    });
+}
+
+// ─── Conviction tab ───────────────────────────────────────────────────────────
+function _renderConviction(arb, crucible) {
+    var empty = document.getElementById("conviction-empty");
+    var blocks = document.getElementById("conviction-blocks");
+    if (!arb) {
+        if (empty) empty.classList.remove("hidden");
+        if (blocks) blocks.classList.add("hidden");
+        return;
+    }
+    if (empty) empty.classList.add("hidden");
+    if (blocks) blocks.classList.remove("hidden");
+
+    var direction = arb.direction !== undefined ? arb.direction : (arb.p_up - arb.p_down);
+    var severity = crucible ? (crucible.severity || 0) : 0;
+    var crucibleFactor = Math.max(0, 1 - severity);
+    var maturity = 1.0; // default when no cycle count available
+    var conviction = Math.abs(direction) * maturity * crucibleFactor;
+
+    var verdict = conviction >= 0.6 ? "STRONG_BUY" : conviction >= 0.3 ? "BUY" : conviction >= 0.1 ? "HOLD" : "SKIP";
+    var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
+    var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
+
+    var dirEl = document.getElementById("cv-direction");
+    var matEl = document.getElementById("cv-maturity");
+    var crucEl = document.getElementById("cv-crucible");
+    var crucSubEl = document.getElementById("cv-crucible-sub");
+    var convEl = document.getElementById("cv-conviction");
+    var verdictEl = document.getElementById("cv-verdict");
+
+    if (dirEl) dirEl.textContent = direction >= 0 ? "+" + direction.toFixed(2) : direction.toFixed(2);
+    if (matEl) matEl.textContent = maturity.toFixed(2);
+    if (crucEl) {
+        crucEl.textContent = crucibleFactor.toFixed(2);
+        crucEl.className = "text-lg font-mono font-bold " + (crucibleFactor >= 0.5 ? "text-positive" : "text-negative");
+    }
+    if (crucSubEl && crucible) {
+        var survives = crucible.thesis_survives;
+        crucSubEl.textContent = "1 − " + Math.round(severity * 100) + "% severity" + (survives ? " ✓" : " ✗");
+    }
+    if (convEl) {
+        convEl.textContent = conviction.toFixed(3);
+        convEl.className = "text-lg font-mono font-bold " + convColor;
+    }
+    if (verdictEl) {
+        verdictEl.textContent = "→ " + verdict;
+        verdictEl.className = "text-[10px] font-semibold mt-0.5 " + verdictColor;
+    }
+}
+
+// ─── Cycle Log (SSE feed) ─────────────────────────────────────────────────────
+var _cycleLogEntries = [];
+var _CYCLE_LOG_MAX = 50;
+
+var _LOG_TYPE_COLOR = {
+    "cycle.opened":       "bg-accent-soft text-accent",
+    "cycle.closed":       "bg-positive-soft text-positive",
+    "ticker_progress":    "bg-surface-sunken text-text-muted",
+    "agent.complete":     "bg-positive-soft text-positive",
+    "crucible.complete":  "bg-crucible-soft text-crucible",
+    "decision.arbitrated":"bg-accent-soft text-accent",
+    "decision.final":     "bg-positive-soft text-positive",
+};
+
+function _cycleLogAdd(eventType, description) {
+    var now = new Date();
+    var ts = now.toTimeString().slice(0, 8);
+    _cycleLogEntries.unshift({ts: ts, type: eventType, desc: description});
+    if (_cycleLogEntries.length > _CYCLE_LOG_MAX) _cycleLogEntries.pop();
+
+    var feed = document.getElementById("cycle-log-feed");
+    if (!feed) return;
+    var empty = document.getElementById("cycle-log-empty");
+    if (empty) empty.classList.add("hidden");
+
+    // Trim excess DOM rows (keep MAX entries, not counting the placeholder)
+    var domRows = Array.from(feed.children).filter(function(ch) { return ch.id !== "cycle-log-empty"; });
+    while (domRows.length >= _CYCLE_LOG_MAX) { domRows[domRows.length - 1].remove(); domRows.pop(); }
+
+    // Prepend newest entry at top
+    var typeColor = _LOG_TYPE_COLOR[eventType] || "bg-surface-sunken text-text-muted";
+    var row = document.createElement("div");
+    row.className = "flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+    row.innerHTML =
+        '<span class="text-[10px] font-mono text-text-muted shrink-0 mt-0.5">' + escapeHtml(ts) + '</span>' +
+        '<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ' + typeColor + '">' + escapeHtml(eventType) + '</span>' +
+        '<span class="text-[11px] text-text-secondary leading-snug">' + escapeHtml(description) + '</span>';
+    var firstChild = feed.querySelector(":not(#cycle-log-empty)");
+    feed.insertBefore(row, firstChild || null);
+}
+
+function _cycleLogRender() {
+    // Full rebuild — only called when log is externally cleared.
+    var feed = document.getElementById("cycle-log-feed");
+    var empty = document.getElementById("cycle-log-empty");
+    if (!feed) return;
+    Array.from(feed.children).forEach(function(ch) { if (ch.id !== "cycle-log-empty") ch.remove(); });
+    if (_cycleLogEntries.length === 0) {
+        if (empty) empty.classList.remove("hidden");
+        return;
+    }
+    if (empty) empty.classList.add("hidden");
+    // Render newest-first (already unshifted order)
+    _cycleLogEntries.forEach(function(entry) {
+        var typeColor = _LOG_TYPE_COLOR[entry.type] || "bg-surface-sunken text-text-muted";
+        var row = document.createElement("div");
+        row.className = "flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+        row.innerHTML =
+            '<span class="text-[10px] font-mono text-text-muted shrink-0 mt-0.5">' + escapeHtml(entry.ts) + '</span>' +
+            '<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ' + typeColor + '">' + escapeHtml(entry.type) + '</span>' +
+            '<span class="text-[11px] text-text-secondary leading-snug">' + escapeHtml(entry.desc) + '</span>';
+        feed.appendChild(row);
+    });
+}
+
+function _initAgentsPageUI() {
+    if (typeof PMACS_ANIM !== "undefined") {
+        PMACS_ANIM.initScrollReveal();
+        PMACS_ANIM.staggerEntrance('[data-stagger]', { delay: 60 });
+    }
+
+    // Tab buttons — use onclick= assignment so re-init never stacks handlers
+    document.querySelectorAll("[data-comm-view]").forEach(function(btn) {
+        btn.onclick = function() { _commSwitchTab(btn.getAttribute("data-comm-view")); };
+    });
+
+    // Cycle log clear — use onclick= to prevent stacking on HTMX re-init
+    var clearBtn = document.getElementById("cycle-log-clear");
+    if (clearBtn) {
+        clearBtn.onclick = function() {
+            _cycleLogEntries = [];
+            _cycleLogRender();
+        };
+    }
+
+    // Fetch sankey-data to populate Signals + Conviction (runs on load AND HTMX nav)
+    fetch("/agents/sankey-data")
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.is_running) {
+                var banner = document.getElementById("no-cycle-banner");
+                if (banner) banner.style.display = "none";
+            }
+            _renderSignals(d.personas || []);
+            _renderConviction(d.arbitration_result, d.crucible_result);
+            if (d.stages) {
+                var stageToStep = {
+                    "evidence": "data_fetch",
+                    "personas": "agents_running",
+                    "crucible": "crucible",
+                    "arbitration": "arbitration",
+                    "verdict": "decision",
+                };
+                d.stages.forEach(function(stage) {
+                    var stepId = stageToStep[stage.id];
+                    if (stepId) _stepSetStatus(stepId, stage.status === "complete" ? "done" : stage.status === "running" ? "running" : "pending");
+                });
+            }
+        })
+        .catch(function() {});
+}
+
+// Run on initial load and on HTMX navigation back to /agents
+document.addEventListener("DOMContentLoaded", _initAgentsPageUI);
+document.addEventListener("htmx:afterSettle", function(e) {
+    if (window.location.pathname === "/agents") { _initAgentsPageUI(); }
 });
+
+// Register SSE handlers once only (guard against HTMX re-execution accumulation)
+if (!window._agentsSSERegistered && typeof onSSE === "function") {
+    window._agentsSSERegistered = true;
+    if (typeof onSSE === "function") {
+        onSSE("cycle", function (data) {
+            if (data.event_type === "ticker_progress") {
+                var tickerEl = document.getElementById("current-ticker");
+                if (tickerEl && data.ticker) {
+                    tickerEl.textContent = data.ticker;
+                    tickerEl.className = "font-mono text-xl font-bold text-accent";
+                }
+                // Update process step
+                if (data.step) {
+                    _stepSetStatus(data.step, "running");
+                    // Mark prior steps done
+                    var order = ["data_fetch","agents_running","crucible","arbitration","decision"];
+                    var idx = order.indexOf(data.step);
+                    for (var i = 0; i < idx; i++) { _stepSetStatus(order[i], "done"); }
+                }
+                if (data.step === "data_fetch") {
+                    _resetProcessSteps();
+                    _stepSetStatus("data_fetch", "running");
+                    document.querySelectorAll("[data-analysis-text]").forEach(function(el) {
+                        el.innerHTML = "";
+                        el.style.maxHeight = "0";
+                    });
+                }
+                _cycleLogAdd("ticker_progress", (data.ticker || "") + " → " + (data.step || ""));
+            }
+            if (data.event_type === "cycle.opened") {
+                _resetProcessSteps();
+                _pendingSignals = {};
+                _pendingCrucible = {};
+                _cycleLogAdd("cycle.opened", "Cycle started" + (data.cycle_id ? " " + data.cycle_id : ""));
+                var banner = document.getElementById("no-cycle-banner");
+                if (banner) banner.style.display = "none";
+            }
+            if (data.event_type === "cycle.closed" || data.event === "cycle_complete") {
+                _stepSetStatus("decision", "done");
+                _cycleLogAdd("cycle.closed", "Cycle complete");
+                var banner = document.getElementById("no-cycle-banner");
+                if (banner) banner.style.display = "";
+                // Refresh signals + conviction from server
+                setTimeout(function() {
+                    fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
+                        _renderSignals(d.personas || []);
+                        _renderConviction(d.arbitration_result, d.crucible_result);
+                    }).catch(function() {});
+                }, 800);
+            }
+            if (data.event_type === "decision.arbitrated") {
+                _stepSetStatus("arbitration", "done");
+                _stepSetStatus("decision", "running");
+                _cycleLogAdd("decision.arbitrated", data.ticker || "");
+                if (data.arbitration_result || data.direction !== undefined) {
+                    _renderConviction(data.arbitration_result || data, null);
+                }
+            }
+            if (data.event_type === "decision.final") {
+                _stepSetStatus("decision", "done");
+                var desc = (data.ticker || "") + " → " + (data.verdict || "") + (data.conviction ? " (" + Math.round(data.conviction*100) + "%)" : "");
+                _cycleLogAdd("decision.final", desc);
+                if (data.ticker) _pushResultCard(data);
+            }
+            if (data.event_type === "agent.queued" || data.event === "cycle_start") {
+                var banner = document.getElementById("no-cycle-banner");
+                if (banner) banner.style.display = "none";
+            }
+        });
+
+        onSSE("agent", function (data) {
+            if (!data.persona) return;
+            var card = document.querySelector('[data-persona="' + data.persona + '"]');
+            if (!card) return;
+
+            var badge = card.querySelector("[data-status-badge]");
+            var bar = card.querySelector("[data-progress-bar]");
+            var analysisEl = card.querySelector("[data-analysis-text]");
+
+            var status = data.event_type === "agent.complete" ? "complete" :
+                         data.event_type === "agent.queued" ? "queued" :
+                         data.event_type === "crucible.complete" ? "complete" : "running";
+
+            // agent.complete badge/bar updates are handled inside the stagger queue below.
+            // crucible.complete and running/queued states update immediately.
+            if (data.event_type !== "agent.complete") {
+                if (badge) {
+                    badge.textContent = status;
+                    badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium " +
+                        (status === "complete" ? "bg-positive-soft text-positive" :
+                         status === "running" ? "bg-accent-soft text-accent" :
+                         status === "error" ? "bg-negative-soft text-negative" :
+                         "bg-surface-sunken text-text-muted");
+                }
+                if (bar && status === "running") {
+                    bar.classList.remove("indeterminate");
+                    bar.style.width = (data.progress || 50) + "%";
+                } else if (bar && status === "complete") {
+                    bar.classList.remove("indeterminate", "status-running");
+                    bar.classList.add("status-complete");
+                    bar.style.width = "100%";
+                }
+            }
+
+            // Confidence + latency badges only apply to non-agent.complete events here
+            // (agent.complete renders these inside the stagger block below)
+            if (data.event_type !== "agent.complete" && badge && data.scores && data.scores.confidence !== undefined) {
+                var confBadge = card.querySelector("[data-confidence-badge]");
+                if (!confBadge) {
+                    confBadge = document.createElement("span");
+                    confBadge.className = "text-[10px] font-mono text-text-muted";
+                    confBadge.setAttribute("data-confidence-badge", "");
+                    badge.parentNode.insertBefore(confBadge, badge);
+                }
+                confBadge.textContent = Math.round((data.scores.confidence || 0) * 100) + "% conf";
+            }
+
+            // Collect per-ticker agent signals for result card
+            if (data.event_type === "agent.complete" && data.ticker && data.scores) {
+                if (!_pendingSignals[data.ticker]) _pendingSignals[data.ticker] = [];
+                _pendingSignals[data.ticker].push({
+                    name: data.persona || "",
+                    p_up: data.scores.p_up || 0,
+                    p_down: data.scores.p_down || 0,
+                });
+            }
+
+            if (data.event_type === "agent.complete" && analysisEl) {
+                // Stagger DOM updates so each card visibly transitions separately
+                // even when agents complete in a burst (parallel execution).
+                (function(_card, _data) {
+                    _queueAgentUpdate(function() {
+                        var _badge = _card.querySelector("[data-status-badge]");
+                        var _bar = _card.querySelector("[data-progress-bar]");
+                        var _analysisEl = _card.querySelector("[data-analysis-text]");
+                        if (_badge) {
+                            _badge.textContent = "complete";
+                            _badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive";
+                        }
+                        if (_bar) {
+                            _bar.classList.remove("indeterminate", "status-running");
+                            _bar.classList.add("status-complete");
+                            _bar.style.width = "100%";
+                        }
+                        if (!_analysisEl) return;
+                        var pUp = (_data.scores && _data.scores.p_up) || 0;
+                        var pDown = (_data.scores && _data.scores.p_down) || 0;
+                        var pFlat = Math.max(0, 1 - pUp - pDown);
+                        var html = "";
+                        if (_data.key_signal) {
+                            html += '<p class="text-xs font-semibold text-text-primary mb-1.5 leading-snug">' + escapeHtml(_data.key_signal) + '</p>';
+                        }
+                        if (_data.scores) {
+                            html += '<div class="flex gap-0.5 w-full h-2.5 rounded-md overflow-hidden mb-1">' +
+                                '<div class="bg-positive" style="width:' + pUp * 100 + '%"></div>' +
+                                '<div class="bg-border-strong" style="width:' + pFlat * 100 + '%"></div>' +
+                                '<div class="bg-negative" style="width:' + pDown * 100 + '%"></div>' +
+                                '</div>';
+                            html += '<div class="flex gap-3 text-xs font-mono mb-2.5">' +
+                                '<span class="text-positive font-medium">&uarr;' + Math.round(pUp * 100) + '%</span>' +
+                                '<span class="text-text-muted">&rarr;' + Math.round(pFlat * 100) + '%</span>' +
+                                '<span class="text-negative font-medium">&darr;' + Math.round(pDown * 100) + '%</span>' +
+                                '</div>';
+                        }
+                        var evidence = _data.evidence_cited || [];
+                        if (evidence.length > 0) {
+                            html += '<ul class="space-y-1 mb-2" data-evidence-list>';
+                            evidence.slice(0, 3).forEach(function(ev) {
+                                html += '<li class="flex gap-1.5 text-[11px] text-text-secondary leading-snug">' +
+                                    '<span class="text-accent shrink-0 mt-0.5 font-bold">&middot;</span>' +
+                                    '<span>' + escapeHtml(String(ev)) + '</span></li>';
+                            });
+                            html += '</ul>';
+                        }
+                        if (_data.analysis) {
+                            var shortAnalysis = _data.analysis.length > 150 ? _data.analysis.substring(0, 150) + "\u2026" : _data.analysis;
+                            html += '<p class="text-[11px] text-text-muted leading-snug">' + escapeHtml(shortAnalysis) + '</p>';
+                        }
+                        if ((_data.analysis && _data.analysis.length > 150) || evidence.length > 3) {
+                            var _modalPersona = escapeHtml(_data.persona || "Agent");
+                            var _modalAnalysis = escapeHtml(_data.analysis || "");
+                            var _modalEvidence = JSON.stringify(evidence);
+                            var _modalConfidence = ((_data.scores && _data.scores.confidence) || 0);
+                            html += '<button type="button" ' +
+                                'data-persona="' + _modalPersona + '" ' +
+                                'data-analysis="' + _modalAnalysis + '" ' +
+                                'data-evidence="' + escapeHtml(_modalEvidence) + '" ' +
+                                'data-confidence="' + _modalConfidence + '" ' +
+                                'onclick="openAgentModal(this.dataset.persona, this.dataset.analysis, JSON.parse(this.dataset.evidence), Number(this.dataset.confidence))" ' +
+                                'class="mt-1.5 text-[11px] text-accent hover:underline font-medium">View full analysis &rarr;</button>';
+                        }
+                        _analysisEl.innerHTML = html;
+                        _analysisEl.style.maxHeight = "400px";
+
+                        var voteStr = pUp - pDown > 0.1 ? "bullish" : pDown - pUp > 0.1 ? "bearish" : "neutral";
+                        _cycleLogAdd("agent.complete", (_data.persona || "") + " → " + voteStr +
+                            (_data.latency_ms ? " (" + (_data.latency_ms/1000).toFixed(1) + "s)" : ""));
+
+                        _debouncedRefreshSignals();
+                    });
+                })(card, data);
+            }
+
+            // Collect crucible result for the card
+            if (data.event_type === "crucible.complete" && data.ticker) {
+                _pendingCrucible[data.ticker] = {
+                    severity: data.severity || 0,
+                    thesis_survives: data.thesis_survives,
+                };
+            }
+
+            if (data.event_type === "crucible.complete" && analysisEl) {
+                var severityPct = Math.round((data.severity || 0) * 100);
+                var survColor = data.thesis_survives ? "text-positive" : "text-negative";
+                var html = '<p class="font-medium ' + survColor + '">Severity: ' + severityPct + '% — ' +
+                    (data.thesis_survives ? "Thesis survives" : "Thesis rejected") + '</p>';
+                if (data.summary) {
+                    html += '<p class="text-text-muted mt-1">' + escapeHtml(data.summary) + '</p>';
+                }
+                if (data.attacks && data.attacks.length > 0) {
+                    html += '<ul class="mt-1 space-y-0.5">';
+                    data.attacks.forEach(function(atk) {
+                        var atkText = typeof atk === "string" ? atk : (atk.description || atk.attack || JSON.stringify(atk));
+                        html += '<li class="text-negative text-[11px] leading-snug">- ' + escapeHtml(atkText.substring(0, 120)) + '</li>';
+                    });
+                    html += '</ul>';
+                }
+                analysisEl.innerHTML = html;
+                analysisEl.style.maxHeight = "300px";
+
+                _stepSetStatus("crucible", "done");
+                _cycleLogAdd("crucible.complete", "Severity " + severityPct + "% — " + (data.thesis_survives ? "survives" : "rejected"));
+                _renderConviction(null, {severity: data.severity || 0, thesis_survives: data.thesis_survives});
+            }
+
+            if (data.event_type === "agent.complete" || data.event_type === "crucible.complete") {
+                card.classList.add("persona-result-fade");
+                setTimeout(function () { card.classList.remove("persona-result-fade"); }, 500);
+            }
+        });
+    }
+}
 </script>
 {% endif %}
 {% endblock %}

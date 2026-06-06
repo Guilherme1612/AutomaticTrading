@@ -1,7 +1,13 @@
-"""Hash-chained audit log — append-only, immutable, verified (Architecture.md §5.1)."""
+"""Hash-chained audit log — append-only, immutable, verified (Architecture.md §5.1).
+
+Supports size-based rotation: when audit.log exceeds MAX_LOG_BYTES, it is
+rotated to audit.log.{n} and a fresh file is started. The hash chain
+continues across rotations (prev_sha carries over).
+"""
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import os
 from datetime import datetime, timezone
@@ -9,6 +15,10 @@ from pathlib import Path
 
 from pmacs.data.canonical import canonical_json
 from pmacs.constants import AUDIT_GENESIS_PREV_SHA
+
+# Rotation settings
+MAX_LOG_BYTES: int = 50 * 1024 * 1024  # 50 MB
+MAX_ROTATED_FILES: int = 10
 
 
 class AuditWriter:
@@ -45,8 +55,44 @@ class AuditWriter:
 
     def _open(self):
         if self._fd is None:
+            self._maybe_rotate()
             self._fd = open(self._path, "a")
         return self._fd
+
+    def _maybe_rotate(self) -> None:
+        """Rotate log file if it exceeds MAX_LOG_BYTES."""
+        if not self._path.exists():
+            return
+        try:
+            size = self._path.stat().st_size
+        except OSError:
+            return
+        if size < MAX_LOG_BYTES:
+            return
+
+        # Rotate: audit.log -> audit.log.1.gz, shift existing rotated files
+        for i in range(MAX_ROTATED_FILES - 1, 0, -1):
+            src = self._path.parent / f"{self._path.name}.{i}.gz"
+            dst = self._path.parent / f"{self._path.name}.{i + 1}.gz"
+            if src.exists():
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+
+        # Close any open FD before rotation to prevent data loss
+        if self._fd is not None:
+            self._fd.close()
+            self._fd = None
+
+        # Compress current log to .1.gz
+        rotated = self._path.parent / f"{self._path.name}.1.gz"
+        with open(self._path, "rb") as f_in:
+            with gzip.open(rotated, "wb") as f_out:
+                f_out.write(f_in.read())
+
+        # Truncate current log (keep file, reset content)
+        self._path.write_text("")
+        # prev_sha carries over — chain continues across rotations
 
     def append(self, event_type: str, payload: dict, cycle_id: str = "") -> str:
         """Append an event to the audit log. Returns this entry's SHA256."""

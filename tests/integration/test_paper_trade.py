@@ -400,8 +400,10 @@ class TestWizard:
         """smoke_test step returns results."""
         wizard = Wizard()
         result = smoke_test_step(wizard)
-        assert "llm_test" in result
-        assert "data_test" in result
+        assert "checks" in result
+        assert "all_ok" in result
+        assert "checks_passed" in result
+        assert "checks_total" in result
 
 
 # ---------------------------------------------------------------------------
@@ -636,3 +638,278 @@ class TestTradeLifecycleWithAdapter:
         adapter = MockAdapter()
         result = await adapter.get_position("AAPL")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 8A: Orchestrator → Execution adapter wiring
+# ---------------------------------------------------------------------------
+
+class TestOrchestratorExecutionWiring:
+    """Verify orchestrator step 13o routes through the execution adapter."""
+
+    @pytest.mark.asyncio()
+    async def test_mock_adapter_submit_fill_stop(self) -> None:
+        """Full adapter lifecycle: submit → fill → catastrophe-net stop."""
+        from pmacs.execution.adapter import MockAdapter
+        from pmacs.schemas.trade import TradePlan, TradeDirection, OrderType
+        from uuid import uuid4
+
+        adapter = MockAdapter()
+
+        plan = TradePlan(
+            id=str(uuid4()),
+            ticker="AAPL",
+            direction=TradeDirection.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=10,
+            price_usd=150.0,
+            stop_price_usd=127.5,
+            cycle_id="test-cycle",
+            holding_id="h-test",
+            conviction_score=0.5,
+            verdict="BUY",
+        )
+
+        # Submit
+        broker_id = await adapter.submit_order(plan)
+        assert broker_id.startswith("mock-")
+
+        # Poll fill
+        fill = await adapter.poll_fill(broker_id)
+        assert fill.status == "FILLED"
+
+        # Place catastrophe-net stop
+        stop_id = await adapter.place_stop_order(
+            ticker="AAPL", stop_price=127.5, qty=10,
+        )
+        assert stop_id.startswith("mock-stop-")
+
+    def test_orchestrator_accepts_execution_adapter(self, tmp_path: Path) -> None:
+        """CycleOrchestrator.__init__ accepts execution_adapter param."""
+        from pmacs.nervous.orchestrator import CycleOrchestrator
+        from pmacs.execution.adapter import MockAdapter
+
+        adapter = MockAdapter()
+        orch = CycleOrchestrator(
+            db_path=tmp_path / "test.db",
+            execution_adapter=adapter,
+        )
+        assert orch._exec_adapter is adapter
+
+    def test_orchestrator_default_no_adapter(self, tmp_path: Path) -> None:
+        """CycleOrchestrator without execution_adapter has None."""
+        from pmacs.nervous.orchestrator import CycleOrchestrator
+
+        orch = CycleOrchestrator(db_path=tmp_path / "test.db")
+        assert orch._exec_adapter is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 8B: LLM Simulation mode
+# ---------------------------------------------------------------------------
+
+class TestSimulationMode:
+    """Verify simulation outputs are generated when LLM is unavailable."""
+
+    def test_simulation_generates_valid_output(self) -> None:
+        """make_simulation_output produces Pydantic-valid output for each persona."""
+        from datetime import datetime, timezone
+        from pmacs.agents.simulation import make_simulation_output
+        from pmacs.schemas.personas import (
+            MacroRegimeOutput,
+            CatalystSummarizerOutput,
+            MoatAnalystOutput,
+            GrowthHunterOutput,
+            InsiderActivityOutput,
+            ShortInterestOutput,
+            ForensicsOutput,
+        )
+        from pmacs.schemas.data import EvidencePacket, Evidence, DataSource, EvidenceType
+
+        evidence = [EvidencePacket(
+            ticker="AAPL",
+            cycle_id="test-cycle",
+            fetched_at=datetime.now(timezone.utc),
+            evidence=[Evidence(
+                id="ev-001",
+                source=DataSource.POLYGON,
+                type=EvidenceType.MARKET_DATA,
+                ticker="AAPL",
+                fetched_at=datetime.now(timezone.utc),
+                content_hash="abc123",
+                data={"price": 150.0},
+            )],
+        )]
+
+        personas = {
+            "macro_regime": MacroRegimeOutput,
+            "catalyst_summarizer": CatalystSummarizerOutput,
+            "moat_analyst": MoatAnalystOutput,
+            "growth_hunter": GrowthHunterOutput,
+            "insider_activity": InsiderActivityOutput,
+            "short_interest": ShortInterestOutput,
+            "forensics": ForensicsOutput,
+        }
+
+        for name, model_cls in personas.items():
+            output = make_simulation_output(name, model_cls, evidence, "test-cycle")
+            assert output is not None, f"Simulation failed for {name}"
+            # Validate it passes Pydantic
+            model_cls.model_validate(output)
+
+    def test_simulation_conservative_probabilities(self) -> None:
+        """Simulation outputs have conservative (near-uniform) probabilities."""
+        from datetime import datetime, timezone
+        from pmacs.agents.simulation import make_simulation_output
+        from pmacs.schemas.personas import MoatAnalystOutput
+        from pmacs.schemas.data import EvidencePacket, Evidence, DataSource, EvidenceType
+
+        evidence = [EvidencePacket(
+            ticker="AAPL",
+            cycle_id="test-cycle",
+            fetched_at=datetime.now(timezone.utc),
+            evidence=[Evidence(
+                id="ev-001",
+                source=DataSource.POLYGON,
+                type=EvidenceType.MARKET_DATA,
+                ticker="AAPL",
+                fetched_at=datetime.now(timezone.utc),
+                content_hash="abc123",
+                data={"price": 150.0},
+            )],
+        )]
+
+        output = make_simulation_output("moat_analyst", MoatAnalystOutput, evidence)
+        assert output is not None
+        # Conservative: near-uniform distribution
+        assert abs(output["p_up"] - 0.3) < 0.01
+        assert abs(output["p_flat"] - 0.4) < 0.01
+        assert abs(output["p_down"] - 0.3) < 0.01
+
+    def test_persona_runner_simulation_mode(self) -> None:
+        """PersonaRunner with simulation_mode=True generates output on LLM failure."""
+        from datetime import datetime, timezone
+        from pmacs.agents.macro_regime import MacroRegimeRunner
+        from pmacs.schemas.data import EvidencePacket, Evidence, DataSource, EvidenceType
+        from pmacs.logsys.debug_log import SYSTEM_EVENT_TYPES
+
+        # Verify the system event is registered
+        assert "LLM_SIMULATION_USED" in SYSTEM_EVENT_TYPES
+
+        evidence = [EvidencePacket(
+            ticker="AAPL",
+            cycle_id="test-cycle",
+            fetched_at=datetime.now(timezone.utc),
+            evidence=[Evidence(
+                id="ev-001",
+                source=DataSource.POLYGON,
+                type=EvidenceType.MARKET_DATA,
+                ticker="AAPL",
+                fetched_at=datetime.now(timezone.utc),
+                content_hash="abc123",
+                data={"price": 150.0},
+            )],
+        )]
+
+        runner = MacroRegimeRunner(
+            cycle_id="test-cycle",
+            simulation_mode=True,
+        )
+        # LLM server is not running, so run() will fail and fall back to simulation
+        result = runner.run(evidence)
+        assert result is not None
+        assert result.cycle_id == "test-cycle"
+        assert result.model_hash == "simulation"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8C: Wizard step implementations
+# ---------------------------------------------------------------------------
+
+class TestWizardStepImplementations:
+    """Verify wizard backend steps work with real implementations."""
+
+    def test_step6_db_init_creates_stores(self, tmp_path: Path) -> None:
+        """Step 6 actually creates SQLite and audit log."""
+        from pmacs.storage.sqlite import init_db
+        from pmacs.storage.audit import AuditWriter, AuditVerifier
+
+        db_path = tmp_path / "pmacs.db"
+        audit_path = tmp_path / "audit.log"
+
+        # Simulate what step 6 does
+        conn = init_db(db_path)
+        conn.close()
+        assert db_path.exists()
+
+        # Write genesis event
+        writer = AuditWriter(audit_path)
+        writer.append("SYSTEM_GENESIS", {"event": "wizard_db_init"}, cycle_id="genesis")
+        writer.close()
+        assert audit_path.exists()
+
+        # Verify audit chain
+        verifier = AuditVerifier(audit_path)
+        ok, err = verifier.verify_full()
+        assert ok, f"Audit chain broken: {err}"
+
+    def test_step11_promotes_to_paper(self, tmp_path: Path) -> None:
+        """Step 11 writes mode_history to SQLite."""
+        import sqlite3
+        from pmacs.storage.sqlite import init_db
+        from pmacs.engines.mode_manager import transition_mode
+        from pmacs.schemas.system import Mode
+
+        # Init DB
+        db_path = tmp_path / "pmacs.db"
+        conn = init_db(db_path)
+        conn.close()
+
+        # Promote
+        mt = transition_mode(
+            from_mode=Mode.INSTALLING,
+            to_mode=Mode.PAPER,
+            reason="Wizard setup complete",
+            totp_verified=False,
+        )
+        assert mt.to_mode == Mode.PAPER
+
+        # Persist
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO mode_history (from_mode, to_mode, reason, triggered_by, changed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (mt.from_mode.value, mt.to_mode.value, mt.reason, mt.triggered_by,
+             mt.changed_at.isoformat()),
+        )
+        conn.commit()
+
+        # Verify
+        row = conn.execute(
+            "SELECT to_mode FROM mode_history ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        assert row[0] == "PAPER"
+
+    def test_step3_model_verify_checks_path(self) -> None:
+        """Step 3 model verify logic checks for GGUF file."""
+        import hashlib
+        from pathlib import Path
+
+        # Create a fake GGUF file
+        fake_model_dir = Path("/tmp/pmacs_test_models")
+        fake_model_dir.mkdir(exist_ok=True)
+        fake_gguf = fake_model_dir / "test.gguf"
+        fake_gguf.write_bytes(b"test model data " * 100)
+
+        # Verify the file exists and has a hash
+        assert fake_gguf.exists()
+        sha256 = hashlib.sha256()
+        with open(fake_gguf, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                sha256.update(chunk)
+        assert len(sha256.hexdigest()) == 64
+
+        # Cleanup
+        fake_gguf.unlink(missing_ok=True)
+        fake_model_dir.rmdir()

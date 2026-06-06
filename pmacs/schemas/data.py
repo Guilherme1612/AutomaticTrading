@@ -23,6 +23,8 @@ class DataSource(str, Enum):
     FRED = "fred"
     ECB = "ecb"
     FUNDAMENTALS = "fundamentals"
+    TECHNICAL = "technical"
+    YAHOO = "yahoo"
 
 
 class EvidenceType(str, Enum):

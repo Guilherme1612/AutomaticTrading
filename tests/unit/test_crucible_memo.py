@@ -305,18 +305,19 @@ class TestMemoWriterVerdictValidation:
         })
         assert output.verdict_line.startswith("STRONG_BUY")
 
-    def test_empty_key_evidence_rejected(self):
-        """key_evidence must have at least 1 item."""
-        with pytest.raises(ValidationError):
-            MemoWriterOutput.model_validate({
-                "ticker": "AAPL",
-                "verdict_line": "BUY -- strong case.",
-                "thesis_summary": "Good thesis.",
-                "key_evidence": [],
-                "key_risks": [],
-                "conviction": 0.7,
-                "p_up": 0.6,
-                "p_flat": 0.2,
-                "p_down": 0.2,
-                "dissenting_personas": [],
-            })
+    def test_empty_key_evidence_allowed(self):
+        """key_evidence defaults to empty list; empty is allowed for graceful degradation
+        when the LLM fails to produce evidence (sanity validator handles enforcement)."""
+        output = MemoWriterOutput.model_validate({
+            "ticker": "AAPL",
+            "verdict_line": "BUY -- strong case.",
+            "thesis_summary": "Good thesis.",
+            "key_evidence": [],
+            "key_risks": [],
+            "conviction": 0.7,
+            "p_up": 0.6,
+            "p_flat": 0.2,
+            "p_down": 0.2,
+            "dissenting_personas": [],
+        })
+        assert output.key_evidence == []

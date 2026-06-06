@@ -1,0 +1,88 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - banner [ref=e3]:
+    - generic "PMACS" [ref=e4]
+    - generic "Current mode:" [ref=e5]
+    - status [ref=e6]: "Idle. Last cycle: --"
+    - button "Kill switch" [ref=e7] [cursor=pointer]: Kill Switch
+  - navigation "Main navigation" [ref=e8]:
+    - list [ref=e9]:
+      - listitem [ref=e10]:
+        - 'link "Dashboard Shortcut: Command 1" [ref=e11] [cursor=pointer]':
+          - /url: /
+          - generic [ref=e12]: Dashboard
+          - 'generic "Shortcut: Command 1" [ref=e13]': ⌘1
+      - listitem [ref=e14]:
+        - 'link "Agents Shortcut: Command 2" [ref=e15] [cursor=pointer]':
+          - /url: /agents
+          - generic [ref=e16]: Agents
+          - 'generic "Shortcut: Command 2" [ref=e17]': ⌘2
+      - listitem [ref=e18]:
+        - 'link "Pipeline Shortcut: Command 3" [ref=e19] [cursor=pointer]':
+          - /url: /pipeline
+          - generic [ref=e20]: Pipeline
+          - 'generic "Shortcut: Command 3" [ref=e21]': ⌘3
+      - listitem [ref=e22]:
+        - 'link "Universe Shortcut: Command 4" [ref=e23] [cursor=pointer]':
+          - /url: /universe
+          - generic [ref=e24]: Universe
+          - 'generic "Shortcut: Command 4" [ref=e25]': ⌘4
+      - listitem [ref=e26]:
+        - 'link "Cortex Shortcut: Command 5" [ref=e27] [cursor=pointer]':
+          - /url: /cortex
+          - generic [ref=e28]: Cortex
+          - 'generic "Shortcut: Command 5" [ref=e29]': ⌘5
+      - listitem [ref=e30]:
+        - 'link "Debug Shortcut: Command 6" [ref=e31] [cursor=pointer]':
+          - /url: /debug
+          - generic [ref=e32]: Debug
+          - 'generic "Shortcut: Command 6" [ref=e33]': ⌘6
+      - listitem [ref=e34]:
+        - 'link "Settings Shortcut: Command 7" [ref=e35] [cursor=pointer]':
+          - /url: /settings
+          - generic [ref=e36]: Settings
+          - 'generic "Shortcut: Command 7" [ref=e37]': ⌘7
+    - button "Collapse sidebar" [ref=e38] [cursor=pointer]:
+      - img [ref=e39]
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - generic "System online" [ref=e43]
+        - generic [ref=e44]: Operator
+      - button "Open command palette (Cmd-K)" [ref=e45] [cursor=pointer]: ⌘K Search...
+  - main [ref=e46]:
+    - link "Pipeline" [ref=e48] [cursor=pointer]:
+      - /url: /pipeline
+      - img [ref=e49]
+      - text: Pipeline
+    - generic [ref=e52]:
+      - generic [ref=e54]:
+        - heading "NU" [level=1] [ref=e55]
+        - generic [ref=e56]: BUY
+      - generic [ref=e57]:
+        - paragraph [ref=e58]: Current Price
+        - paragraph [ref=e59]: $12.98
+        - paragraph [ref=e60]: "Entry: $12.98 | Conviction: 65%"
+    - generic [ref=e61]:
+      - heading "Investment Thesis" [level=2] [ref=e62]
+      - generic [ref=e63]: "BUY NU @ $12.98 | Conviction: 65% [AI] P(up)=60% P(down)=40% | EV-positive Growth: Nu Holdings (NU) continues to expand its high-margin banking and credit products across Brazil, Mexico, and Colombia, with revenue growing over 50% year-over-year in recent quarters and net income turning consistently positive. The company's scalable digital platform and low-cost structure allow it to capture market share from traditional banks while improving return on equity, supporting sustained double-digit earnings growth. Catalyst: Near-term catalysts include continued acceleration in credit card and personal loan origination, expansion of Nu's insurance and investment products, and potential positive surprises from Mexico operations as the country's digital banking adoption rises. Additionally, any easing of Brazilian interest rates could lower funding costs and boost net interest margins, providing a tailwind for earnings. Moat: Nu's moat is built on its massive, highly engaged user base of over 100 million customers, low customer acquisition costs via viral referral growth, and a proprietary technology stack that enables rapid product iteration and operational efficiency. Its brand trust and regulatory licenses in multiple Latin American markets create high switching costs for users, making it difficult for traditional banks or fintech competitors to replicate its scale and unit economics. Risk: Key risks include macroeconomic volatility in Brazil (high inflation, currency depreciation, or political instability) that could increase credit defaults and slow growth. Regulatory changes in Brazil or Mexico targeting fintech lending or interest rate caps could compress margins. Additionally, Nu's valuation at ~30x forward earnings leaves limited room for error if growth decelerates or competition intensifies."
+    - generic [ref=e64]:
+      - heading "Decision History" [level=2] [ref=e65]
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - generic [ref=e68]: 1 hour ago
+          - generic [ref=e69]: SKIP
+          - generic [ref=e70]: 0%
+        - generic [ref=e71]:
+          - generic [ref=e72]: 3 hours ago
+          - generic [ref=e73]: HOLD
+          - generic [ref=e74]: 0%
+        - generic [ref=e75]:
+          - generic [ref=e76]: 3 hours ago
+          - generic [ref=e77]: BUY
+          - generic [ref=e78]: 0%
+  - status
+  - generic:
+    - generic:
+      - img
+      - generic: Loading...

@@ -16,11 +16,11 @@ from pmacs.logsys import log_debug
 
 _EMBEDDING_DIM = 768  # bge-base-en-v1.5 dimension (Architecture.md §8.7)
 
-# Lazy singletons
+# Lazy singletons — import availability is global, connection is per-instance
 _qdrant_client: Any = None
 _sentence_model: Any = None
-_qdrant_available: bool | None = None
-_transformers_available: bool | None = None
+_qdrant_import_available: bool | None = None
+_transformers_import_available: bool | None = None
 
 
 class QdrantAdapter:
@@ -30,12 +30,33 @@ class QdrantAdapter:
     All use 768-dim vectors from BAAI/bge-base-en-v1.5.
     """
 
-    COLLECTIONS = ["theses", "memos_persona", "memos_aggregated", "evidence_chunks", "lessons"]
+    COLLECTIONS = [
+        "theses",
+        "memos_persona",
+        "memos_aggregated",
+        "evidence_chunks",
+        "lessons",
+        "episodic",
+    ]
 
-    def __init__(self, url: str = "http://127.0.0.1:6333"):
+    def __init__(
+        self,
+        url: str | None = None,
+        path: str | None = None,
+    ):
+        """Initialize Qdrant adapter.
+
+        Args:
+            url: Qdrant server HTTP URL (e.g. "http://127.0.0.1:6333").
+                 If None and path is None, falls back to in-memory.
+            path: Persistent embedded mode path (no server needed).
+                  Mutually exclusive with url — if both are set, path wins.
+        """
         self.url = url
+        self._path = path
         self._client: Any = None
         self._collections_created = False
+        self._connection_failed: bool = False  # per-instance failure tracking
 
     # ------------------------------------------------------------------
     # Connection management
@@ -43,18 +64,22 @@ class QdrantAdapter:
 
     def _ensure_client(self) -> bool:
         """Try to connect to Qdrant. Returns True if connected."""
-        global _qdrant_client, _qdrant_available
+        global _qdrant_client, _qdrant_import_available
 
-        if _qdrant_available is False:
+        # Import availability is global (package either installed or not)
+        if _qdrant_import_available is False:
+            return False
+        # Connection failure is per-instance (different url/path may work)
+        if self._connection_failed:
             return False
         if self._client is not None:
             return True
 
         try:
             from qdrant_client import QdrantClient  # type: ignore[import-untyped]
-            _qdrant_available = True
+            _qdrant_import_available = True
         except ImportError:
-            _qdrant_available = False
+            _qdrant_import_available = False
             log_debug(
                 "QDRANT_UNAVAILABLE",
                 payload={"reason": "qdrant-client not installed"},
@@ -64,7 +89,15 @@ class QdrantAdapter:
             return False
 
         try:
-            self._client = QdrantClient(url=self.url)
+            # Embedded persistent mode (no server needed)
+            if self._path is not None:
+                self._client = QdrantClient(path=str(self._path))
+            # HTTP/S mode (remote or local Docker server)
+            elif self.url is not None:
+                self._client = QdrantClient(url=self.url)
+            # Fallback: in-memory (data lost on restart)
+            else:
+                self._client = QdrantClient(":memory:")
             # Quick health check
             self._client.get_collections()
             return True
@@ -77,6 +110,7 @@ class QdrantAdapter:
                 msg=f"Qdrant connection failed: {exc}",
             )
             self._client = None
+            self._connection_failed = True  # per-instance, not global
             return False
 
     def _ensure_model(self) -> bool:
@@ -208,14 +242,14 @@ class QdrantAdapter:
             return []
 
         try:
-            hits = self._client.search(
+            hits = self._client.query_points(
                 collection_name=collection,
-                query_vector=vector,
+                query=vector,
                 limit=limit,
             )
             return [
                 {"id": str(hit.id), "score": hit.score, "payload": hit.payload or {}}
-                for hit in hits
+                for hit in hits.points
             ]
         except Exception as exc:
             log_debug(
@@ -248,6 +282,53 @@ class QdrantAdapter:
                 msg=f"Qdrant retrieve failed: {exc}",
             )
             return []
+
+    def count(self, collection: str) -> int:
+        """Return the number of points in a collection."""
+        if not self._ensure_client():
+            return 0
+
+        try:
+            info = self._client.get_collection(collection_name=collection)
+            return info.points_count if info else 0
+        except Exception as exc:
+            log_debug(
+                "QDRANT_COUNT_FAILED",
+                payload={"error": str(exc), "collection": collection},
+                level="WARN",
+                error_code="QDRANT_QUERY_FAILED",
+                msg=f"Qdrant count failed: {exc}",
+            )
+            return 0
+
+    def delete(self, collection: str, ids: list[str]) -> None:
+        """Delete points by ID from a collection."""
+        if not self._ensure_client():
+            return
+
+        log_debug(
+            "QDRANT_DELETE",
+            payload={"collection": collection, "count": len(ids)},
+            level="INFO",
+            msg=f"Qdrant delete: {collection}/{len(ids)} points",
+        )
+
+        try:
+            from qdrant_client.models import PointIdsList
+
+            uuid_ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, id_)) for id_ in ids]
+            self._client.delete(
+                collection_name=collection,
+                points_selector=PointIdsList(points=uuid_ids),
+            )
+        except Exception as exc:
+            log_debug(
+                "QDRANT_DELETE_FAILED",
+                payload={"error": str(exc), "collection": collection},
+                level="WARN",
+                error_code="QDRANT_DELETE_FAILED",
+                msg=f"Qdrant delete failed: {exc}",
+            )
 
     def get_embedding(self, text: str) -> list[float]:
         """Generate embedding for text using bge-base-en-v1.5.
@@ -292,3 +373,12 @@ class QdrantAdapter:
         """Convenience: generate embedding from text and search."""
         vector = self.get_embedding(text)
         return self.search(collection, vector, limit=limit)
+
+    def close(self) -> None:
+        """Close the Qdrant client connection if open."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None

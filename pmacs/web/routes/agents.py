@@ -148,8 +148,12 @@ async def agents_page(request: Request):
 async def agents_sankey_data(request: Request):
     """Return JSON data for the Communication Layer tabs (Signals, Conviction, Process).
 
+    Query params:
+        ticker: Optional. Return data for a specific ticker from the last cycle.
+                If omitted, returns the most recent ticker's data.
+
     Returns: personas (with p_up/p_down per agent), arbitration_result,
-    crucible_result, stages (for Process timeline), is_running.
+    crucible_result, stages (for Process timeline), is_running, available_tickers.
     """
     from pmacs.web.routes.pipeline import (
         _last_cycle_agent_results,
@@ -159,6 +163,7 @@ async def agents_sankey_data(request: Request):
     )
 
     cfg = get_config()
+    requested_ticker = request.query_params.get("ticker", "").upper().strip()
 
     db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
@@ -171,13 +176,16 @@ async def agents_sankey_data(request: Request):
     finally:
         db.close()
 
-    # Pick the most recent ticker that has agent results
+    # Pick the requested or most recent ticker that has agent results
     last_ticker = None
     last_results: list[dict] = []
     last_crucible: dict = {}
     last_arb: dict = {}
     if _last_cycle_agent_results:
-        last_ticker = list(_last_cycle_agent_results.keys())[-1]
+        if requested_ticker and requested_ticker in _last_cycle_agent_results:
+            last_ticker = requested_ticker
+        else:
+            last_ticker = list(_last_cycle_agent_results.keys())[-1]
         last_results = _last_cycle_agent_results[last_ticker]
         last_crucible = _last_cycle_crucible_results.get(last_ticker, {})
         last_arb = _last_cycle_arbitration.get(last_ticker, {})
@@ -302,4 +310,5 @@ async def agents_sankey_data(request: Request):
         "weights": {},
         "flows": flows,
         "stages": stages,
+        "available_tickers": list(_last_cycle_agent_results.keys()) if _last_cycle_agent_results else [],
     })

@@ -1765,6 +1765,50 @@ async def cycle_start(req: CycleStartRequest):
         return JSONResponse({"ok": False, "error": "Failed to start cycle"}, status_code=503)
 
 
+class SoloRunRequest(BaseModel):
+    ticker: str
+
+
+@router.post("/api/solo/run")
+async def solo_run(req: SoloRunRequest):
+    """Run a one-time solo analysis for any ticker (research mode).
+
+    No TOTP required — read-only data fetching and LLM analysis.
+    Paper trades may still be created for BUY/STRONG_BUY verdicts.
+    Results stream via SSE in real-time and persist in DB.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    ticker = req.ticker.upper().strip()
+    if not ticker or len(ticker) > 10 or not ticker.isalpha():
+        return JSONResponse({"ok": False, "error": "Invalid ticker (1-10 letters)"}, status_code=400)
+
+    cfg = get_config()
+    cycle_id = f"SOLO-{ticker}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+
+    try:
+        from pmacs.storage.sqlite import get_connection
+
+        db = get_connection(cfg.sqlite_path)
+        try:
+            db.execute(
+                "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?)",
+                (cycle_id, datetime.now(timezone.utc).isoformat(), "RUNNING", "solo_research", "PAPER"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        asyncio.create_task(_run_demo_cycle(cycle_id, [ticker]))
+
+        return JSONResponse({"ok": True, "cycle_id": cycle_id, "ticker": ticker, "message": f"Solo analysis started for {ticker}"})
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Solo run failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Failed to start solo analysis"}, status_code=503)
+
+
 @router.post("/api/cycle/smoke-test")
 async def cycle_smoke_test():
     """First-use smoke-test cycle — no TOTP required (Source.md §12 Step 10).

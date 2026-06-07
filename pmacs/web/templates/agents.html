@@ -25,6 +25,30 @@
 </div>
 {% endif %}
 
+<!-- Solo Research Runner -->
+<div class="card card-elevated mb-8 reveal" data-stagger>
+    <div class="flex items-center gap-2 mb-3">
+        <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Research</h3>
+        <span class="text-[10px] text-text-muted">Analyze any ticker</span>
+    </div>
+    <div class="flex items-center gap-2">
+        <input id="solo-ticker-input" type="text" placeholder="e.g. AAPL, TSLA, NVDA"
+               class="flex-1 px-3 py-2 text-sm font-mono bg-surface-sunken border border-border-subtle rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
+               maxlength="10" autocomplete="off" spellcheck="false">
+        <button type="button" id="solo-run-btn"
+                onclick="runSoloAnalysis()"
+                class="px-4 py-2 text-sm font-medium bg-accent text-white rounded-xl hover:opacity-90 transition-opacity whitespace-nowrap">
+            Analyze
+        </button>
+    </div>
+    <div id="solo-status" class="hidden mt-2">
+        <p class="text-xs text-text-muted" id="solo-status-text">Preparing...</p>
+    </div>
+</div>
+
 <!-- Queue info + link to Pipeline -->
 <div class="flex flex-wrap items-center justify-between gap-2 mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2">
@@ -75,6 +99,17 @@
         {% else %}
         <span id="current-ticker" class="text-sm text-text-muted">No ticker queued</span>
         {% endif %}
+    </div>
+</div>
+
+<!-- Ticker History Pills (review completed tickers) -->
+<div id="ticker-history-bar" class="hidden mb-6 reveal" data-stagger>
+    <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-[10px] text-text-muted font-semibold uppercase tracking-wider">History</span>
+        <div id="ticker-history-pills" class="flex gap-1.5 flex-wrap"></div>
+        <button type="button" id="ticker-history-live-btn"
+                class="px-2.5 py-1 text-[10px] rounded-lg font-mono font-medium bg-accent-soft text-accent transition-colors"
+                onclick="switchToLiveView()">Live</button>
     </div>
 </div>
 
@@ -395,6 +430,9 @@ var _completedCards = [];      // [{ticker, verdict, conviction, ev_pct, target_
 var _currentCardIdx = 0;
 var _pendingSignals = {};      // ticker → [{name, p_up, p_down}]
 var _pendingCrucible = {};     // ticker → {severity, thesis_survives}
+var _tickerHistory = {};       // ticker → {agentResults, signals, crucible, arbitration, verdict, conviction}
+var _activeHistoryTicker = null;  // null = live view, string = viewing historical ticker
+var _MAX_HISTORY = 20;
 
 function _verdictStyle(verdict) {
     var map = {
@@ -855,6 +893,190 @@ function _renderConviction(arb, crucible) {
     }
 }
 
+// ─── Ticker History Pills ──────────────────────────────────────────────────
+function _renderTickerHistoryPills() {
+    var bar = document.getElementById("ticker-history-bar");
+    var pillsContainer = document.getElementById("ticker-history-pills");
+    if (!bar || !pillsContainer) return;
+
+    var tickers = Object.keys(_tickerHistory);
+    if (tickers.length === 0) {
+        bar.classList.add("hidden");
+        return;
+    }
+    bar.classList.remove("hidden");
+
+    pillsContainer.innerHTML = "";
+    tickers.forEach(function(ticker) {
+        var entry = _tickerHistory[ticker];
+        var verdict = entry.verdict || "pending";
+        var isActive = (_activeHistoryTicker === ticker);
+        var v = _verdictStyle(verdict);
+
+        var pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "px-2.5 py-1 text-[10px] rounded-lg font-mono font-medium transition-colors " +
+            (isActive ? v.bg + " " + v.text : "bg-surface-sunken text-text-muted hover:bg-border-subtle");
+        pill.textContent = ticker;
+        pill.setAttribute("data-history-ticker", ticker);
+        pill.onclick = function() { switchToHistoryTicker(ticker); };
+        pillsContainer.appendChild(pill);
+    });
+
+    // Update live button active state
+    var liveBtn = document.getElementById("ticker-history-live-btn");
+    if (liveBtn) {
+        liveBtn.className = _activeHistoryTicker === null
+            ? "px-2.5 py-1 text-[10px] rounded-lg font-mono font-medium bg-accent-soft text-accent transition-colors"
+            : "px-2.5 py-1 text-[10px] rounded-lg font-mono font-medium bg-surface-sunken text-text-muted hover:bg-border-subtle transition-colors";
+    }
+}
+
+function switchToHistoryTicker(ticker) {
+    _activeHistoryTicker = ticker;
+    _renderTickerHistoryPills();
+    var entry = _tickerHistory[ticker];
+    if (!entry) return;
+
+    // Restore persona cards from history
+    Object.keys(entry.agentResults).forEach(function(persona) {
+        var card = document.querySelector('[data-persona="' + persona + '"]');
+        if (card) _applyAgentResultToCard(card, entry.agentResults[persona]);
+    });
+
+    // Restore signals tab
+    if (entry.signals && entry.signals.length > 0) {
+        var personas = entry.signals.map(function(s) {
+            return { name: s.name, p_up: s.p_up, p_down: s.p_down, status: "complete" };
+        });
+        _renderSignals(personas);
+    }
+
+    // Restore conviction tab
+    if (entry.arbitration) _renderConviction(entry.arbitration, entry.crucible);
+
+    // Reset process steps to all-done for historical view
+    ["data_fetch","agents_running","crucible","arbitration","decision"].forEach(function(s) {
+        _stepSetStatus(s, "done");
+    });
+}
+
+function switchToLiveView() {
+    _activeHistoryTicker = null;
+    fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
+        _renderSignals(d.personas || []);
+        _renderConviction(d.arbitration_result, d.crucible_result);
+        if (d.stages) {
+            d.stages.forEach(function(stage) {
+                _stepSetStatus(stage.id, stage.status === "complete" ? "done" : stage.status === "running" ? "running" : "pending");
+            });
+        }
+    }).catch(function() {});
+    _renderTickerHistoryPills();
+}
+
+function _applyAgentResultToCard(card, data) {
+    var badge = card.querySelector("[data-status-badge]");
+    var bar = card.querySelector("[data-progress-bar]");
+    var analysisEl = card.querySelector("[data-analysis-text]");
+
+    if (badge) {
+        badge.textContent = "complete";
+        badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive";
+    }
+    if (bar) {
+        bar.classList.remove("indeterminate", "status-running");
+        bar.classList.add("status-complete");
+        bar.style.width = "100%";
+    }
+    if (!analysisEl) return;
+
+    var pUp = (data.scores && data.scores.p_up) || 0;
+    var pDown = (data.scores && data.scores.p_down) || 0;
+    var pFlat = Math.max(0, 1 - pUp - pDown);
+    var html = "";
+    if (data.key_signal) {
+        html += '<p class="text-xs font-semibold text-text-primary mb-1.5 leading-snug">' + escapeHtml(data.key_signal) + '</p>';
+    }
+    if (data.scores) {
+        html += '<div class="flex gap-0.5 w-full h-2.5 rounded-md overflow-hidden mb-1">' +
+            '<div class="bg-positive" style="width:' + (pUp * 100) + '%"></div>' +
+            '<div class="bg-border-strong" style="width:' + (pFlat * 100) + '%"></div>' +
+            '<div class="bg-negative" style="width:' + (pDown * 100) + '%"></div></div>';
+        html += '<div class="flex gap-3 text-xs font-mono mb-2.5">' +
+            '<span class="text-positive font-medium">&uarr;' + Math.round(pUp * 100) + '%</span>' +
+            '<span class="text-text-muted">&rarr;' + Math.round(pFlat * 100) + '%</span>' +
+            '<span class="text-negative font-medium">&darr;' + Math.round(pDown * 100) + '%</span></div>';
+    }
+    var evidence = data.evidence_cited || [];
+    if (evidence.length > 0) {
+        html += '<ul class="space-y-1 mb-2" data-evidence-list>';
+        evidence.slice(0, 3).forEach(function(ev) {
+            html += '<li class="flex gap-1.5 text-[11px] text-text-secondary leading-snug">' +
+                '<span class="text-accent shrink-0 mt-0.5 font-bold">&middot;</span>' +
+                '<span>' + escapeHtml(String(ev)) + '</span></li>';
+        });
+        html += '</ul>';
+    }
+    if (data.analysis) {
+        var short = data.analysis.length > 150 ? data.analysis.substring(0, 150) + "\u2026" : data.analysis;
+        html += '<p class="text-[11px] text-text-muted leading-snug">' + escapeHtml(short) + '</p>';
+    }
+    analysisEl.innerHTML = html;
+    analysisEl.style.maxHeight = "400px";
+}
+
+// ─── Solo Research Runner ──────────────────────────────────────────────────
+function runSoloAnalysis() {
+    var input = document.getElementById("solo-ticker-input");
+    var btn = document.getElementById("solo-run-btn");
+    var statusDiv = document.getElementById("solo-status");
+    var statusText = document.getElementById("solo-status-text");
+    if (!input) return;
+
+    var ticker = (input.value || "").trim().toUpperCase();
+    if (!ticker || !/^[A-Z]{1,10}$/.test(ticker)) {
+        if (typeof showToast === "function") showToast("Enter a valid ticker (1-10 letters)", "warning");
+        return;
+    }
+
+    if (btn) { btn.disabled = true; btn.classList.add("opacity-60", "cursor-not-allowed"); btn.textContent = "Running..."; }
+    if (statusDiv) statusDiv.classList.remove("hidden");
+    if (statusText) statusText.textContent = "Analyzing " + ticker + "... ~20 seconds.";
+    input.disabled = true;
+
+    _activeHistoryTicker = null;
+    _renderTickerHistoryPills();
+
+    fetch("/api/solo/run", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ticker: ticker})
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            if (typeof showToast === "function") showToast("Solo analysis started for " + ticker, "info");
+            var banner = document.getElementById("no-cycle-banner");
+            if (banner) banner.style.display = "none";
+        } else {
+            if (typeof showToast === "function") showToast("Failed: " + (data.error || "Unknown"), "error");
+            _resetSoloUI();
+        }
+    }).catch(function(err) {
+        if (typeof showToast === "function") showToast("Error: " + err.message, "error");
+        _resetSoloUI();
+    });
+}
+
+function _resetSoloUI() {
+    var input = document.getElementById("solo-ticker-input");
+    var btn = document.getElementById("solo-run-btn");
+    var statusDiv = document.getElementById("solo-status");
+    if (input) input.disabled = false;
+    if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); btn.textContent = "Analyze"; }
+    if (statusDiv) statusDiv.classList.add("hidden");
+}
+
 // ─── Cycle Log (SSE feed) ─────────────────────────────────────────────────────
 var _cycleLogEntries = [];
 var _CYCLE_LOG_MAX = 50;
@@ -940,6 +1162,14 @@ function _initAgentsPageUI() {
         };
     }
 
+    // Solo runner Enter key
+    var soloInput = document.getElementById("solo-ticker-input");
+    if (soloInput) {
+        soloInput.onkeydown = function(e) {
+            if (e.key === "Enter") { e.preventDefault(); runSoloAnalysis(); }
+        };
+    }
+
     // Fetch sankey-data to populate Signals + Conviction (runs on load AND HTMX nav)
     fetch("/agents/sankey-data")
         .then(function(r) { return r.json(); })
@@ -993,12 +1223,14 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                     for (var i = 0; i < idx; i++) { _stepSetStatus(order[i], "done"); }
                 }
                 if (data.step === "data_fetch") {
+                    _activeHistoryTicker = null;
                     _resetProcessSteps();
                     _stepSetStatus("data_fetch", "running");
                     document.querySelectorAll("[data-analysis-text]").forEach(function(el) {
                         el.innerHTML = "";
                         el.style.maxHeight = "0";
                     });
+                    _renderTickerHistoryPills();
                 }
                 _cycleLogAdd("ticker_progress", (data.ticker || "") + " → " + (data.step || ""));
             }
@@ -1006,6 +1238,7 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _resetProcessSteps();
                 _pendingSignals = {};
                 _pendingCrucible = {};
+                _activeHistoryTicker = null;
                 _cycleLogAdd("cycle.opened", "Cycle started" + (data.cycle_id ? " " + data.cycle_id : ""));
                 var banner = document.getElementById("no-cycle-banner");
                 if (banner) banner.style.display = "none";
@@ -1015,6 +1248,7 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _cycleLogAdd("cycle.closed", "Cycle complete");
                 var banner = document.getElementById("no-cycle-banner");
                 if (banner) banner.style.display = "";
+                _resetSoloUI();
                 // Refresh signals + conviction from server
                 setTimeout(function() {
                     fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
@@ -1030,12 +1264,29 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 if (data.arbitration_result || data.direction !== undefined) {
                     _renderConviction(data.arbitration_result || data, null);
                 }
+                // Save into ticker history
+                if (data.ticker) {
+                    if (!_tickerHistory[data.ticker]) _tickerHistory[data.ticker] = {agentResults: {}, signals: [], crucible: null, arbitration: null, verdict: null, conviction: 0};
+                    _tickerHistory[data.ticker].arbitration = {
+                        p_up: data.p_up,
+                        p_down: data.p_down,
+                        direction: data.direction,
+                        agents_used: data.agents_used,
+                    };
+                }
             }
             if (data.event_type === "decision.final") {
                 _stepSetStatus("decision", "done");
                 var desc = (data.ticker || "") + " → " + (data.verdict || "") + (data.conviction ? " (" + Math.round(data.conviction*100) + "%)" : "");
                 _cycleLogAdd("decision.final", desc);
-                if (data.ticker) _pushResultCard(data);
+                if (data.ticker) {
+                    _pushResultCard(data);
+                    // Save into ticker history
+                    if (!_tickerHistory[data.ticker]) _tickerHistory[data.ticker] = {agentResults: {}, signals: [], crucible: null, arbitration: null, verdict: null, conviction: 0};
+                    _tickerHistory[data.ticker].verdict = data.verdict;
+                    _tickerHistory[data.ticker].conviction = data.conviction || 0;
+                    _renderTickerHistoryPills();
+                }
             }
             if (data.event_type === "agent.queued" || data.event === "cycle_start") {
                 var banner = document.getElementById("no-cycle-banner");
@@ -1098,6 +1349,16 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                     p_up: data.scores.p_up || 0,
                     p_down: data.scores.p_down || 0,
                 });
+                // Save into ticker history
+                if (!_tickerHistory[data.ticker]) _tickerHistory[data.ticker] = {agentResults: {}, signals: [], crucible: null, arbitration: null, verdict: null, conviction: 0};
+                _tickerHistory[data.ticker].agentResults[data.persona] = {
+                    persona: data.persona,
+                    scores: data.scores,
+                    analysis: data.analysis,
+                    key_signal: data.key_signal,
+                    evidence_cited: data.evidence_cited,
+                };
+                _tickerHistory[data.ticker].signals = _pendingSignals[data.ticker] || [];
             }
 
             if (data.event_type === "agent.complete" && analysisEl) {
@@ -1181,6 +1442,14 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _pendingCrucible[data.ticker] = {
                     severity: data.severity || 0,
                     thesis_survives: data.thesis_survives,
+                };
+                // Save into ticker history
+                if (!_tickerHistory[data.ticker]) _tickerHistory[data.ticker] = {agentResults: {}, signals: [], crucible: null, arbitration: null, verdict: null, conviction: 0};
+                _tickerHistory[data.ticker].crucible = {
+                    severity: data.severity || 0,
+                    thesis_survives: data.thesis_survives,
+                    summary: data.summary,
+                    attacks: data.attacks,
                 };
             }
 

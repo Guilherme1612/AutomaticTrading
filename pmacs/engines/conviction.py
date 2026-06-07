@@ -42,7 +42,11 @@ def compute_conviction(
         # should have aborted before reaching here.
         maturity_factor = max(0.25, min(arb.matured_sources_used / 4.0, 1.0))
 
-    crucible_factor = max(0.0, 1.0 - crucible_severity)
+    # Crucible amplification: high severity is MORE punitive than linear.
+    # severity^0.7 makes severity 0.66 → effective 0.735 (factor 0.265 vs linear 0.34).
+    # Models the reality that agents often miss what crucible catches.
+    amplified_severity = crucible_severity ** 0.7
+    crucible_factor = max(0.0, 1.0 - amplified_severity)
     # Clamp ev_factor to [0, 1]: negative EV means no edge; we suppress conviction
     # to 0 rather than inverting it (which would produce a false BUY for bearish setups).
     ev_factor = max(0.0, min(ev_multiple / 1.5, 1.0))

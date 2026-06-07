@@ -24,8 +24,10 @@ EVIDENCE PROTOCOL:
 3. ONLY IF no Form 4 evidence is present: you may note general patterns from company knowledge,
    but MUST mark all as [EST - Form 4 data not in evidence, verify SEC registry].
    Do NOT cite specific transaction amounts, dates, or share counts from knowledge alone.
-4. Default lean when truly unknown: slight positive (p_up: 0.38, p_flat: 0.33, p_down: 0.29)
-   rationale: absence of insider selling is weakly positive for most quality growth companies.
+4. Default lean when truly unknown: NEUTRAL (p_up: 0.33, p_flat: 0.34, p_down: 0.33)
+   rationale: without Form 4 data, insider activity signal is pure guesswork. Emit truly neutral
+   probabilities so arbitration does not anchor conviction based on fabricated directional lean.
+   Mark signal as INSUFFICIENT_DATA.
 
 Your p_up/p_flat/p_down reflects INSIDER ACTIVITY SIGNAL ONLY.
 

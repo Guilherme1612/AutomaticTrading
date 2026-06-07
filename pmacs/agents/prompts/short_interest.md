@@ -21,8 +21,10 @@ EVIDENCE PROTOCOL:
 3. ONLY IF no FINRA evidence is present: use sector-level knowledge as a rough proxy,
    but mark as [EST - FINRA data not in evidence]. Do NOT cite specific percentages.
    Sector defaults: high-growth software ~5-12%, biotech ~15-25%, profitable large-cap ~1-5%.
-4. Default when truly unknown: NORMAL lean (p_up: 0.37, p_flat: 0.33, p_down: 0.30)
-   rationale: gatekeeper-selected universe tickers are unlikely to be extreme shorts.
+4. Default when truly unknown: NEUTRAL (p_up: 0.33, p_flat: 0.34, p_down: 0.33)
+   rationale: without FINRA data, short interest signal is pure guesswork. Emit truly neutral
+   probabilities so arbitration does not anchor conviction based on fabricated directional lean.
+   Mark signal as INSUFFICIENT_DATA.
 
 SIGNAL DIRECTION:
 - HIGH_SUSTAINED or SPIKE_UP → bearish lean (p_down > 0.45)

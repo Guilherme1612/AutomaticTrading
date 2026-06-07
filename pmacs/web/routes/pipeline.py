@@ -983,7 +983,14 @@ def _compute_verdict(arb: dict, crucible_severity: float, is_bootstrap: bool = T
     # maturity proxy. Use 1.0 (not 0.50 floor) so genuine majority consensus can
     # cross BUY. Matches conviction.py bootstrap fix.
     maturity = 1.0 if is_bootstrap else max(0.25, min(arb["confidence"], 1.0))
-    crucible_factor = max(0.0, 1.0 - crucible_severity)
+
+    # Crucible amplification: high severity is MORE punitive than linear.
+    # severity^0.7 makes severity 0.66 → effective 0.735 (factor 0.265 vs linear 0.34).
+    # This models the reality that agents often miss what crucible catches (dilution,
+    # extreme valuations, accounting red flags) and crucible is the primary safety layer.
+    amplified_severity = crucible_severity ** 0.7
+    crucible_factor = max(0.0, 1.0 - amplified_severity)
+
     # ev_factor: scaled from direction. No floor — if direction is 0 or negative,
     # ev_factor is 0 and conviction collapses to 0. The old max(ev_factor, 0.1)
     # floor was wrong: it gave 10% EV credit even to zero-edge or negative-edge
@@ -993,14 +1000,29 @@ def _compute_verdict(arb: dict, crucible_severity: float, is_bootstrap: bool = T
     conviction = direction * maturity * crucible_factor * ev_factor
     conviction = max(-1.0, min(1.0, conviction))
 
-    if conviction >= 0.6:
-        verdict = "STRONG_BUY"
-    elif conviction >= 0.3:
-        verdict = "BUY"
-    elif conviction >= 0.1:
-        verdict = "HOLD"
+    # Bootstrap paper mode: lower thresholds to allow position entry during paper
+    # trading. Standard thresholds (0.6/0.3/0.1) are too high for bootstrap where
+    # crucible amplification + no calibration data suppresses conviction heavily.
+    # Paper positions are low-risk (virtual capital) and generate needed trade data
+    # for Sharpe/drawdown/win-rate calculations required for mode promotion.
+    if is_bootstrap:
+        if conviction >= 0.40:
+            verdict = "STRONG_BUY"
+        elif conviction >= 0.15:
+            verdict = "BUY"
+        elif conviction >= 0.05:
+            verdict = "HOLD"
+        else:
+            verdict = "SKIP"
     else:
-        verdict = "SKIP"
+        if conviction >= 0.6:
+            verdict = "STRONG_BUY"
+        elif conviction >= 0.3:
+            verdict = "BUY"
+        elif conviction >= 0.1:
+            verdict = "HOLD"
+        else:
+            verdict = "SKIP"
 
     return verdict, round(conviction, 4)
 
@@ -1079,7 +1101,13 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
         f"15. verdict_line (string): One-line verdict summary, max 150 chars.\n\n"
         f"CRITICAL: The fair_value must be a realistic per-share price estimate based on your analysis. "
         f"If the stock is at ${price:.2f} and you think it's undervalued, fair_value should be higher. "
-        f"If overvalued, lower. Be specific and defensible with your number."
+        f"If overvalued, lower. Be specific and defensible with your number.\n\n"
+        f"FORENSICS FAIR VALUE GATE: If the crucible severity is ≥ 0.50, or if any agent flagged "
+        f"earnings manipulation, accounting irregularities, or operating_margin vs net_margin divergence "
+        f"(e.g., operating margin -70% but net margin +93%), you MUST clamp the valuation_range.high "
+        f"to no more than 10% above the current price (${price:.2f}). The fair_value itself should be "
+        f"at or below the base case — do not let a speculative bull case inflate fair value when "
+        f"the financials are questionable. When in doubt, anchor to valuation_range.low."
     )
 
     try:
@@ -1492,10 +1520,16 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                 try:
                     dec_db = get_connection(cfg.sqlite_path)
                     try:
+                        # Ensure price column exists (lazy migration)
+                        try:
+                            dec_db.execute("ALTER TABLE decisions ADD COLUMN price_usd REAL")
+                            dec_db.commit()
+                        except Exception:
+                            pass
                         dec_db.execute(
-                            "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, thesis_summary, decided_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (cycle_id, ticker, verdict, conviction, memo, _decided_at),
+                            "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, thesis_summary, decided_at, price_usd) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (cycle_id, ticker, verdict, conviction, memo, _decided_at, price),
                         )
                         dec_db.commit()
                     finally:

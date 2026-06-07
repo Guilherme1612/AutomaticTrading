@@ -90,8 +90,12 @@
             </p>
             <div class="flex items-center gap-4 mt-1">
                 <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Cycles Run</p>
-                    <p class="text-sm font-mono font-bold text-text-primary">{{ cycle_count | default(0) }}</p>
+                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Cycles</p>
+                    <p class="text-sm font-mono font-bold text-text-primary">{{ total_cycles | default(0) }}</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Completed</p>
+                    <p class="text-sm font-mono text-text-muted">{{ completed_cycles | default(0) }}</p>
                 </div>
                 <div class="text-center">
                     <p class="text-[10px] text-text-muted uppercase tracking-wider">Target</p>
@@ -99,7 +103,7 @@
                 </div>
                 <div class="text-center">
                     <p class="text-[10px] text-text-muted uppercase tracking-wider">Progress</p>
-                    <p class="text-sm font-mono text-accent">{{ ((cycle_count | default(0)) / 50 * 100) | int }}%</p>
+                    <p class="text-sm font-mono text-accent">{{ ((completed_cycles | default(0)) / 50 * 100) | int }}%</p>
                 </div>
             </div>
         </div>

@@ -89,15 +89,29 @@ ANALYSIS FIELD RULE: 2-3 crisp sentences. Include at least 1 specific number fro
   Cite evidence_ids inline: "10-Q filed {today_date} shows revenue guidance raised (edgar_X_filings)."
 
 PROBABILITY CALIBRATION — use the full scale:
-  0.33/0.33 = truly neutral (no catalyst or pure binary coin-flip)
-  p_up ≥ 0.70: Strong catalyst — upcoming event with clear positive setup + low expectations
-  p_up 0.55-0.69: Moderate catalyst — positive events imminent but risk exists
-  p_up 0.40-0.54: Neutral — no clear catalyst or binary risk event (equal up/down)
-  p_down 0.55-0.69: Negative catalyst — regulatory risk, guidance cut risk, high expectations
-  p_down ≥ 0.70: Clear negative — binary risk event with downside probability >> upside
-  Only exceed p_up 0.60 if you have multiple confirming signals AND low market expectations.
-  Only exceed p_down 0.55 if the negative catalyst is specific and evidence-backed.
-If a company has a clear upcoming positive catalyst with good setup, use p_up ≥ 0.68.
+  DEFAULT IS NEUTRAL (0.33/0.33/0.34). You must provide EVIDENCE-BACKED justification
+  for any deviation from neutral. Narrative potential alone ("AI market growing", "GLP-1 opportunity")
+  does NOT justify p_up > 0.40 without a specific, dated, quantifiable catalyst.
+
+  0.33/0.33/0.34 = neutral baseline (no specific catalyst, or balanced up/down risk)
+  p_up ≥ 0.70: ONLY for upcoming event with confirmed date, low expectations, AND multiple
+    confirming signals (e.g., estimate revisions RISING + beat history >80% + specific date within 30d)
+  p_up 0.55-0.69: Requires at least 2 confirming signals WITH evidence citations.
+    A single catalyst without confirmation = neutral at best.
+  p_up 0.40-0.54: Mild positive lean — requires at least 1 specific catalyst with evidence citation.
+    No evidence citation = stay at 0.33/0.33/0.34.
+  p_down 0.55-0.69: Negative catalyst — requires specific evidence (guidance cut, regulatory action)
+  p_down ≥ 0.70: Clear negative — binary risk event with evidence
+
+  ANTI-PERMA-BULL RULES:
+  - Narrative catalysts ("AI tailwind", "sector growth") WITHOUT specific events = NEUTRAL (0.33)
+  - Catalysts without a specific expected date OR quantifiable impact estimate = NEUTRAL (0.33)
+  - If the company missed estimates last quarter, do NOT assume they will beat next quarter
+    without explicit evidence of estimate revision trend improvement
+  - A catalyst "existing" is not sufficient — what is the PROBABILITY it materializes positively?
+    Apply historical hit rates: earnings beats ~65%, FDA approvals ~50%, M&A close ~70%
+  - When in doubt, default to neutral. False negatives (missed catalyst) cost less than
+    false positives (bullish on nothing). The arbitration system relies on your calibration accuracy.
 
 {evidence}
 

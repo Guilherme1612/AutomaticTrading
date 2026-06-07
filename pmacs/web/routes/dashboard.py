@@ -115,6 +115,14 @@ async def dashboard_page(request: Request):
                 cycle_count = int(cycle_row[0]) if cycle_row else 0
             except Exception:
                 cycle_count = 0
+            # Count total decisions across all cycles (includes partial/failed)
+            try:
+                dec_row = db.execute("SELECT COUNT(DISTINCT cycle_id) FROM decisions").fetchone()
+                decision_cycles = int(dec_row[0]) if dec_row else 0
+            except Exception:
+                decision_cycles = 0
+            # Use the larger of cycles table vs distinct decision cycles
+            total_cycles = max(cycle_count, decision_cycles)
             try:
                 queue_rows = db.execute("SELECT ticker FROM queue ORDER BY priority_band ASC").fetchall()
                 queue_tickers = [r[0] for r in queue_rows] if queue_rows else []
@@ -199,6 +207,8 @@ async def dashboard_page(request: Request):
                 },
                 "pre_first_cycle": len(decisions) == 0 and len(holdings) == 0 and not smoke_done,
                 "cycle_count": cycle_count,
+                "total_cycles": total_cycles,
+                "completed_cycles": cycle_count,
                 "queue_tickers": queue_tickers,
                 "cost_state": _get_cost_state_for_dashboard(cfg),
                 "last_cycle": decisions[0]["opened_at"] if decisions else "--",

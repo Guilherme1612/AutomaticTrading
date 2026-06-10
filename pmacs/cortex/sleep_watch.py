@@ -11,7 +11,9 @@ Per Source.md §22: "close lid mid-cycle, resume on wake" depends on this.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +100,7 @@ def _find_incomplete_cycle(
     if not p.exists():
         return None
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         # Find cycles with idempotency ops that are not CLOSED
         row = conn.execute(

@@ -358,7 +358,6 @@ def arbitrate(
     # Re-normalize to correct floating-point drift (sum may deviate from 1.0)
     _prob_total = p_up + p_flat + p_down
     if abs(_prob_total - 1.0) > 0.01:
-        from pmacs.logsys import log_debug
         log_debug(
             "ARBITRATION_PROB_DRIFT",
             payload={"prob_sum": round(_prob_total, 4), "p_up": round(p_up, 3),

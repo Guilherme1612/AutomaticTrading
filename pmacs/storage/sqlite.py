@@ -6,6 +6,26 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Default busy-wait timeout (ms) for WAL lock contention between the 8
+# PMACS processes.  Without this, concurrent writers get SQLITE_BUSY
+# immediately (default 0 ms) and silently drop writes.
+_BUSY_TIMEOUT_MS = 5000
+
+
+def connect(path: str | Path, *, read_only: bool = False) -> sqlite3.Connection:
+    """Open a SQLite connection with PMACS defaults (busy_timeout, WAL).
+
+    All production code should use this instead of raw sqlite3.connect().
+    """
+    path_str = str(path)
+    if read_only:
+        uri = f"file:{path_str}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+    else:
+        conn = sqlite3.connect(path_str)
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+    return conn
+
 SCHEMA_SQL = """
 -- Cycles
 CREATE TABLE IF NOT EXISTS cycles (
@@ -229,7 +249,8 @@ CREATE TABLE IF NOT EXISTS scan_records (
     verdict TEXT NOT NULL,
     conviction_score REAL,
     direction TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    price_usd REAL
 );
 
 -- Lessons (Phase 9 step 23)
@@ -456,6 +477,7 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
     conn.commit()
@@ -466,12 +488,6 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 def get_connection(path: str | Path, read_only: bool = False) -> sqlite3.Connection:
     """Get a connection to the SQLite database.
 
-    Args:
-        path: Path to the SQLite database file.
-        read_only: If True, open in read-only mode (for dashboard).
+    Thin wrapper around :func:`connect` for backward compatibility.
     """
-    path = Path(path)
-    if read_only:
-        uri = f"file:{path}?mode=ro"
-        return sqlite3.connect(uri, uri=True)
-    return sqlite3.connect(str(path))
+    return connect(path, read_only=read_only)

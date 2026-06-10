@@ -5,7 +5,9 @@ query performance on the SQLite tables defined in pmacs.storage.sqlite.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from pathlib import Path
 
 # All indexes that should exist on the PMACS SQLite database.
@@ -53,7 +55,7 @@ def create_indexes(db_path: str | Path) -> list[str]:
         return []
 
     created: list[str] = []
-    conn = sqlite3.connect(str(path))
+    conn = _sql_connect(path)
     try:
         for idx_name, idx_sql in INDEX_DEFINITIONS:
             conn.execute(idx_sql)
@@ -78,7 +80,7 @@ def verify_indexes(db_path: str | Path) -> dict[str, bool]:
     if not path.exists():
         return {name: False for name, _ in INDEX_DEFINITIONS}
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         existing = {
             row[0]

@@ -39,6 +39,8 @@ class MemoWriterRunner(PersonaRunner):
         verdict: object | None = None,
         conviction_score: float | None = None,
         crucible_severity: float | None = None,
+        crucible_attacks: list | None = None,
+        forensics_quality: str | None = None,
         persona_outputs: list | None = None,
     ) -> None:
         """Inject the full analytical synthesis so the memo has real numbers.
@@ -70,6 +72,28 @@ class MemoWriterRunner(PersonaRunner):
         if crucible_severity is not None:
             lines.append(f"\n## Crucible")
             lines.append(f"severity={crucible_severity:.3f}")
+            # FIX-3: Include crucible attack details so the memo reflects
+            # what the adversarial layer found (agents don't see this).
+            if crucible_attacks:
+                lines.append("### Crucible Attacks (adversarial findings)")
+                for i, attack in enumerate(crucible_attacks[:5], 1):
+                    if isinstance(attack, dict):
+                        label = attack.get("attack_type", attack.get("type", f"Attack {i}"))
+                        detail = attack.get("reasoning", attack.get("detail", ""))
+                        lines.append(f"  {i}. [{label}] {detail}")
+                    elif isinstance(attack, str):
+                        lines.append(f"  {i}. {attack}")
+                lines.append("IMPORTANT: Address these attacks in key_risks. Fair value must account for crucible findings.")
+
+        # IMP-3: Forensics fair value gate
+        if forensics_quality and forensics_quality in ("MATERIAL_CONCERNS", "SEVERE_RISK"):
+            lines.append(f"\n## Forensics Alert: {forensics_quality}")
+            lines.append(
+                "FAIR VALUE GATE: Forensics flagged material accounting concerns. "
+                "You MUST clamp fair_value_estimate to the BEAR CASE only. "
+                "Do NOT use bull-case or base-case valuations when earnings quality "
+                "is questionable. Explain this constraint in key_risks."
+            )
 
         if persona_outputs:
             lines.append("\n## Persona Signals")

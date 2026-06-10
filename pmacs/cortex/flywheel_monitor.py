@@ -14,6 +14,7 @@ from pmacs.engines.flywheel_health import (
 )
 from pmacs.logsys import log_debug
 from pmacs.schemas.flywheel import FlywheelHealthSnapshot
+from pmacs.storage.sqlite import connect as _sql_connect
 
 # Default thresholds when config not available
 _DEFAULT_MAX_BRIER = 0.30
@@ -54,9 +55,7 @@ class FlywheelMonitor:
         active_mutations = 0
         if self._db_path and self._db_path.exists():
             try:
-                import sqlite3
-
-                with sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+                with _sql_connect(self._db_path, read_only=True) as conn:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM mutation_proposals "
                         "WHERE status IN ('RUNNING_AB', 'READY_FOR_REVIEW')"
@@ -75,9 +74,7 @@ class FlywheelMonitor:
         cycles_since = 0
         if self._db_path and self._db_path.exists():
             try:
-                import sqlite3
-
-                with sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+                with _sql_connect(self._db_path, read_only=True) as conn:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM cycles "
                         "WHERE state = 'CLOSED' AND calibrated = 1"

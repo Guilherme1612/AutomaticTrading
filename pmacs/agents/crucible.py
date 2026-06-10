@@ -53,8 +53,13 @@ class CrucibleRunner(PersonaRunner):
         if episodic_context:
             context_block = f"\n## Episodic Context\n{episodic_context}"
 
+        from datetime import date
+        today = date.today().isoformat()
+
         return template.replace(
             "{evidence}", evidence_text
         ).replace(
             "{episodic_context}", context_block
+        ).replace(
+            "{today_date}", today
         )

@@ -1180,10 +1180,7 @@ details[open] summary::before {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    /* Memo agent signals: 1 col */
-    .grid.grid-cols-1.sm\:grid-cols-2.lg\:grid-cols-3 {
-        grid-template-columns: 1fr;
-    }
+    /* Memo agent signals: 1 col — only below sm breakpoint (639px); sm:grid-cols-2 fires at 640px+ */
 
     /* Memo competitive position: stack */
     .grid.grid-cols-1.sm\:grid-cols-2.gap-4:has(.moat_type) {
@@ -1217,6 +1214,13 @@ details[open] summary::before {
     .card .flex.flex-wrap.items-center.justify-between.gap-4 {
         flex-direction: column;
         align-items: flex-start;
+    }
+}
+
+/* Below sm breakpoint only (639px) — keep agent-signals/memo grids single col on phones */
+@media (max-width: 639px) {
+    .grid.grid-cols-1.sm\:grid-cols-2.xl\:grid-cols-3 {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -1401,11 +1405,6 @@ textarea:focus-visible {
         padding: 12px;
     }
 
-    /* Agents grid: single column on mobile */
-    .grid.grid-cols-1 {
-        grid-template-columns: repeat(1, minmax(0, 1fr));
-    }
-
     /* All tables: allow horizontal scroll via wrapper */
     .overflow-x-auto {
         -webkit-overflow-scrolling: touch;
@@ -1417,8 +1416,7 @@ textarea:focus-visible {
         padding: 6px 10px;
     }
 
-    /* Sankey / viz: limit height */
-    #viz-process,
+    /* Sankey / viz: limit height (not viz-process — it has 5 fixed steps that need full height) */
     #viz-network,
     #viz-math {
         height: 180px;
@@ -1476,4 +1474,77 @@ textarea:focus-visible {
         flex-wrap: wrap;
         gap: 8px;
     }
+}
+
+/* ─── Agent Card Enhanced Transitions ──────────────────────────────────── */
+
+/* Persona card state transitions — smooth border + shadow on status change */
+[data-persona] {
+    transition: border-color 0.4s var(--ease-out-expo),
+                box-shadow 0.4s var(--ease-out-expo),
+                transform 0.2s var(--ease-out-expo);
+}
+
+[data-persona]:has([data-status-badge]) .persona-progress-fill {
+    transition: width 0.6s var(--ease-out-expo), background 0.3s ease;
+}
+
+/* Subtle lift on running state */
+[data-persona].card-accent-blue {
+    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.08),
+                0 0 0 1px rgba(59, 130, 246, 0.1);
+}
+
+/* Completion glow pulse */
+@keyframes complete-glow {
+    0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.2); }
+    50% { box-shadow: 0 0 16px 4px rgba(34, 197, 94, 0.12); }
+    100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+.persona-complete-glow {
+    animation: complete-glow 0.8s var(--ease-out-expo);
+}
+
+/* Number value change flash */
+@keyframes value-update {
+    0% { color: var(--accent); transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.value-updated {
+    animation: value-update 0.4s var(--ease-out-expo);
+}
+
+/* Process step row transitions */
+[data-pipeline-step] {
+    transition: background-color 0.3s ease, transform 0.15s ease;
+}
+
+[data-pipeline-step]:has(.bg-accent.anim-breathing) {
+    background-color: rgba(59, 130, 246, 0.04);
+}
+
+[data-pipeline-step]:has(.bg-positive) {
+    background-color: rgba(34, 197, 94, 0.03);
+}
+
+/* Result card entrance */
+@keyframes card-slide-in {
+    from { opacity: 0; transform: translateX(24px) scale(0.96); }
+    to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+.result-card {
+    animation: card-slide-in 0.35s var(--ease-out-expo);
+}
+
+/* Communication layer tab content transition */
+#viz-process, #viz-signals, #viz-conviction {
+    animation: fade-in 0.2s ease-out;
+}
+
+/* Smooth probability bar transitions */
+.bg-positive, .bg-negative, .bg-border-strong {
+    transition: width 0.6s var(--ease-out-expo);
 }

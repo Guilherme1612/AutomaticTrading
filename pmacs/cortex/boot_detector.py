@@ -7,7 +7,9 @@ writes an audit event.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +43,7 @@ def _get_last_closed_gap_hours(db_path: Path, now: datetime) -> float | None:
     if not db_path.exists():
         return None
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         row = conn.execute(
             """SELECT closed_at FROM cycles

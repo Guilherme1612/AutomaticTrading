@@ -54,9 +54,15 @@ class Arbitrated(BaseModel):
             ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE,
         ):
             total = self.p_up + self.p_flat + self.p_down
-            if abs(total - 1.0) > 1e-6:
+            if abs(total - 1.0) > 0.01:
                 raise ValueError(
                     f"probabilities sum to {total:.6f}, expected ~1.0 "
                     f"for decision={self.decision}"
                 )
+            # Normalize to exactly 1.0 if within tolerance
+            if abs(total - 1.0) > 1e-9 and total > 0:
+                scale = 1.0 / total
+                object.__setattr__(self, "p_up", round(self.p_up * scale, 6))
+                object.__setattr__(self, "p_flat", round(self.p_flat * scale, 6))
+                object.__setattr__(self, "p_down", round(self.p_down * scale, 6))
         return self

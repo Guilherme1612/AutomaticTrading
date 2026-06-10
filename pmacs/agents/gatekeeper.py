@@ -16,7 +16,9 @@ Admittance checks (ordered; fail-fast):
 
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,7 +68,7 @@ def _is_halted_or_delisted(ticker: str, db_path: Path) -> bool:
     if not db_path.exists():
         return False
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sql_connect(db_path, read_only=True)
         try:
             cur = conn.execute(
                 "SELECT halted, delisted FROM universe WHERE ticker = ?",
@@ -88,7 +90,7 @@ def _count_active_positions(db_path: Path) -> int:
     if not db_path.exists():
         return 0
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sql_connect(db_path, read_only=True)
         try:
             cur = conn.execute(
                 "SELECT COUNT(*) FROM holdings WHERE state = 'ACTIVE'"
@@ -106,7 +108,7 @@ def _has_active_position(ticker: str, db_path: Path) -> bool:
     if not db_path.exists():
         return False
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sql_connect(db_path, read_only=True)
         try:
             cur = conn.execute(
                 "SELECT 1 FROM holdings WHERE ticker = ? AND state = 'ACTIVE'",
@@ -147,7 +149,7 @@ def _days_until_earnings(ticker: str, db_path: Path) -> int | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sql_connect(db_path, read_only=True)
         try:
             cur = conn.execute(
                 "SELECT next_earnings_date FROM universe WHERE ticker = ?",
@@ -181,7 +183,7 @@ def _market_cap_usd(ticker: str, db_path: Path) -> float | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sql_connect(db_path, read_only=True)
         try:
             cur = conn.execute(
                 "SELECT market_cap_usd FROM universe WHERE ticker = ?",

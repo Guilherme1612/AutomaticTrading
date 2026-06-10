@@ -223,6 +223,11 @@ function connectSSE() {
 
     if (sseRetryCount >= SSE_MAX_RETRIES) {
         showToast("SSE connection permanently lost. Reload the page.", "error", 0);
+        var sseStatus = document.getElementById("sse-status");
+        if (sseStatus) {
+            sseStatus.textContent = "Disconnected";
+            sseStatus.className = "text-[9px] text-negative font-mono";
+        }
         return;
     }
 
@@ -236,6 +241,12 @@ function connectSSE() {
 
         eventSource.onopen = function () {
             sseRetryCount = 0;
+            // IMP-8: Update SSE status indicator
+            var sseStatus = document.getElementById("sse-status");
+            if (sseStatus) {
+                sseStatus.textContent = "Connected";
+                sseStatus.className = "text-[9px] text-positive font-mono";
+            }
         };
 
         eventSource.onmessage = function (event) {
@@ -258,6 +269,12 @@ function connectSSE() {
         eventSource.onerror = function () {
             var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
             console.warn("SSE connection lost, reconnecting in", delay, "ms (attempt", sseRetryCount + 1, "/", SSE_MAX_RETRIES, ")");
+            // IMP-8: Update SSE status indicator
+            var sseStatus = document.getElementById("sse-status");
+            if (sseStatus) {
+                sseStatus.textContent = "Reconnecting...";
+                sseStatus.className = "text-[9px] text-warning font-mono";
+            }
             var es = eventSource;
             if (es) { es.close(); }
             sseRetryCount++;
@@ -685,7 +702,7 @@ function runCycleNow() {
             var bar = document.getElementById("cycle-progress-bar");
             if (bar) bar.classList.remove("hidden");
             var indicator = document.getElementById("cycle-indicator");
-            if (indicator) indicator.textContent = "Cycle running...";
+            if (indicator) _showCycleTicker("");
         } else {
             showToast("Failed: " + (data.error || "Unknown"), "error");
             // Re-enable button on failure
@@ -964,12 +981,15 @@ document.addEventListener("keydown", function (e) {
     }
 });
 
-// Bind search input
+// Bind search input with debounce
 document.addEventListener("DOMContentLoaded", function () {
     var input = document.getElementById("cmd-k-input");
     if (input) {
+        var _cmdKTimer = null;
         input.addEventListener("input", function (e) {
-            renderCmdKResults(e.target.value);
+            var val = e.target.value;
+            if (_cmdKTimer) clearTimeout(_cmdKTimer);
+            _cmdKTimer = setTimeout(function () { renderCmdKResults(val); }, 100);
         });
     }
 });
@@ -1503,22 +1523,33 @@ onSSE("system", function (data) {
 
 // Cycle events
 function _setCycleIndicator(html) {
-    var indicator = document.getElementById("cycle-indicator");
-    if (!indicator) return;
-    indicator.innerHTML = '<span class="inline-flex items-center gap-2"><span class="live-dot"></span>' + html + '</span>';
+    // Legacy: replaced by _showCycleTicker / _hideCycleTicker
+}
+
+function _showCycleTicker(ticker) {
+    var idle = document.getElementById("cycle-idle-label");
+    var running = document.getElementById("cycle-running-label");
+    var tickerEl = document.getElementById("cycle-running-ticker");
+    if (idle) idle.style.display = "none";
+    if (running) running.style.display = "";
+    if (tickerEl) tickerEl.textContent = ticker || "";
+}
+
+function _hideCycleTicker() {
+    var idle = document.getElementById("cycle-idle-label");
+    var running = document.getElementById("cycle-running-label");
+    if (idle) idle.style.display = "none";
+    if (running) running.style.display = "none";
 }
 
 onSSE("cycle", function (data) {
     if (data.event_type === "cycle.opened" || data.event === "cycle_start") {
-        _setCycleIndicator("Running: " + (data.tickers ? data.tickers.length : 0) + " tickers — ETA " + escapeHtml(data.eta || "calculating..."));
+        _showCycleTicker(data.tickers ? data.tickers[0] : "");
         var bar = document.getElementById("cycle-progress-bar");
         if (bar) { bar.classList.remove("hidden"); bar.style.width = "0%"; }
     }
     if (data.event_type === "cycle.closed" || data.event === "cycle_complete") {
-        var timeLabel = data.completed_at ? timeAgo(data.completed_at) : "just now";
-        _setCycleIndicator('Idle. Last cycle: <span id="cycle-indicator-time"' +
-            (data.completed_at ? ' data-time-ago="' + escapeHtml(data.completed_at) + '"' : '') +
-            '>' + timeLabel + '</span>');
+        _hideCycleTicker();
         var bar = document.getElementById("cycle-progress-bar");
         if (bar) bar.classList.add("hidden");
         showToast("Cycle complete: " + (data.tickers_processed || 0) + " tickers processed", "info");
@@ -1552,7 +1583,7 @@ onSSE("cycle", function (data) {
         var progress = data.progress || "";
         var match = progress.match(/(\d+)\/(\d+)/);
         var pctStr = match ? " (" + Math.round((parseInt(match[1]) / parseInt(match[2])) * 100) + "%)" : (progress ? " (" + progress + ")" : "");
-        _setCycleIndicator("Processing: " + (data.ticker || "") + pctStr);
+        _showCycleTicker(data.ticker || "");
         if (match) {
             var pct = Math.round((parseInt(match[1]) / parseInt(match[2])) * 100);
             var bar = document.getElementById("cycle-progress-bar");
@@ -1610,36 +1641,52 @@ onSSE("decision", function (data) {
     }
 });
 
-// Agent events
+// Agent events — batched DOM updates to avoid cascading repaints
+var _agentEventQueue = [];
+var _agentBatchScheduled = false;
+
+function _flushAgentBatch() {
+    _agentBatchScheduled = false;
+    var queue = _agentEventQueue.splice(0);
+    if (!queue.length) return;
+    // Apply all queued updates in a single animation frame
+    queue.forEach(function (data) {
+        var card = document.querySelector('[data-persona="' + (data.persona || "").toLowerCase() + '"]');
+        if (!card) return;
+        var badge = card.querySelector("[data-status-badge]");
+        var progressBar = card.querySelector("[data-progress-bar]");
+        var statusText = card.querySelector("[data-status-text]");
+
+        if (data.event_type === "agent.queued") {
+            if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
+            if (statusText) { statusText.textContent = "Queued for " + (data.ticker || ""); }
+        }
+        if (data.event_type === "agent.running") {
+            if (badge) { badge.textContent = "running"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-accent-soft text-accent"; }
+            if (progressBar) { progressBar.style.width = "30%"; progressBar.className = "persona-progress-fill status-running"; }
+            if (statusText) { statusText.textContent = "Analyzing " + (data.ticker || "") + "..."; }
+        }
+        if (data.event_type === "agent.complete") {
+            if (badge) { badge.textContent = "complete"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive"; }
+            if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-complete"; }
+            if (statusText) { statusText.textContent = "Complete"; }
+        }
+        if (data.event_type === "agent.failed") {
+            if (badge) { badge.textContent = "error"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-negative-soft text-negative"; }
+            if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-error"; }
+            if (statusText) { statusText.textContent = "Failed: " + (data.reason || "unknown"); }
+        }
+    });
+}
+
 onSSE("agent", function (data) {
     // agents.html has its own richer handler with design-system classes.
     // Skip card DOM updates on /agents to avoid class conflicts.
     if (window.location.pathname !== "/agents") {
-        var card = document.querySelector('[data-persona="' + (data.persona || "").toLowerCase() + '"]');
-        if (card) {
-            var badge = card.querySelector("[data-status-badge]");
-            var progressBar = card.querySelector("[data-progress-bar]");
-            var statusText = card.querySelector("[data-status-text]");
-
-            if (data.event_type === "agent.queued") {
-                if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
-                if (statusText) { statusText.textContent = "Queued for " + (data.ticker || ""); }
-            }
-            if (data.event_type === "agent.running") {
-                if (badge) { badge.textContent = "running"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-accent-soft text-accent"; }
-                if (progressBar) { progressBar.style.width = "30%"; progressBar.className = "persona-progress-fill status-running"; }
-                if (statusText) { statusText.textContent = "Analyzing " + (data.ticker || "") + "..."; }
-            }
-            if (data.event_type === "agent.complete") {
-                if (badge) { badge.textContent = "complete"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive"; }
-                if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-complete"; }
-                if (statusText) { statusText.textContent = "Complete"; }
-            }
-            if (data.event_type === "agent.failed") {
-                if (badge) { badge.textContent = "error"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-negative-soft text-negative"; }
-                if (progressBar) { progressBar.style.width = "100%"; progressBar.className = "persona-progress-fill status-error"; }
-                if (statusText) { statusText.textContent = "Failed: " + (data.reason || "unknown"); }
-            }
+        _agentEventQueue.push(data);
+        if (!_agentBatchScheduled) {
+            _agentBatchScheduled = true;
+            requestAnimationFrame(_flushAgentBatch);
         }
     }
     if (data.event_type) {
@@ -1763,26 +1810,26 @@ function refreshAllSparklines(window, clickedBtn) {
         clickedBtn.classList.add("bg-blue-50", "text-blue-600");
     }
 
-    // Fetch and update each sparkline metric
+    // Fetch all sparkline metrics in parallel
     var metrics = document.querySelectorAll("[data-sparkline-metric]");
+    var fetches = [];
     metrics.forEach(function (el) {
         var metric = el.getAttribute("data-sparkline-metric");
-        fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(window))
-            .then(function (resp) {
-                if (!resp.ok) return null;
-                return resp.json();
-            })
-            .then(function (points) {
-                if (!points || points.length < 2) {
-                    el.innerHTML = '<div class="w-full h-10 flex items-center justify-center">' +
-                        '<span class="text-xs text-text-muted">No data yet</span></div>';
-                    return;
-                }
-                el.innerHTML = renderSparklineSVG(points);
-            })
-            .catch(function () {
-                // Leave existing sparkline unchanged on fetch failure
-            });
+        var p = fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(window))
+            .then(function (resp) { return resp.ok ? resp.json() : null; })
+            .then(function (points) { return { el: el, points: points }; })
+            .catch(function () { return { el: el, points: null }; });
+        fetches.push(p);
+    });
+    Promise.all(fetches).then(function (results) {
+        results.forEach(function (r) {
+            if (!r.points || r.points.length < 2) {
+                r.el.innerHTML = '<div class="w-full h-10 flex items-center justify-center">' +
+                    '<span class="text-xs text-text-muted">No data yet</span></div>';
+                return;
+            }
+            r.el.innerHTML = renderSparklineSVG(r.points);
+        });
     });
 }
 

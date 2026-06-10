@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pmacs.web.templating import templates
 from pmacs.web.config import get_config
 from pmacs.web import data as data_layer
+from pmacs.storage.sqlite import connect as _sql_connect
 
 router = APIRouter()
 
@@ -16,11 +17,10 @@ def _check_backend_type() -> str:
     """Check if the system is configured for cloud or local inference."""
     try:
         from pmacs.config import data_dir
-        import sqlite3
         db = data_dir() / "pmacs.db"
         if not db.exists():
             return "local"
-        conn = sqlite3.connect(str(db))
+        conn = _sql_connect(db)
         row = conn.execute(
             "SELECT value FROM wizard_state WHERE key = ?", ("backend_type",)
         ).fetchone()
@@ -220,6 +220,7 @@ async def dashboard_page(request: Request):
             name="dashboard.html",
             context={
                 "page": "dashboard",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("dashboard", exc),
             },
         )

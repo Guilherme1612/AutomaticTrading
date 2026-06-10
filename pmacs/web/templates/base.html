@@ -4,78 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PMACS - {% block title %}Dashboard{% endblock %}</title>
-    <script src="/static/vendor/tailwind.min.js"></script>
+    <link rel="stylesheet" href="/static/dist/tailwind.css?v=2">
     <script src="/static/vendor/htmx.min.js"></script>
     <script src="/static/vendor/d3.min.js"></script>
     <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
-    <link rel="stylesheet" href="/static/style.css">
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        'surface': 'var(--surface)',
-                        'surface-elevated': 'var(--surface-elevated)',
-                        'surface-sunken': 'var(--surface-sunken)',
-                        'surface-overlay': 'var(--surface-overlay)',
-                        'surface-glass': 'var(--surface-glass)',
-                        'border-default': 'var(--border)',
-                        'border-subtle': 'var(--border-subtle)',
-                        'border-strong': 'var(--border-strong)',
-                        'text-primary': 'var(--text-primary)',
-                        'text-secondary': 'var(--text-secondary)',
-                        'text-muted': 'var(--text-muted)',
-                        'accent': 'var(--accent)',
-                        'accent-soft': 'var(--accent-soft)',
-                        'accent-ring': 'var(--accent-ring)',
-                        'positive': 'var(--positive)',
-                        'positive-soft': 'var(--positive-soft)',
-                        'negative': 'var(--negative)',
-                        'negative-soft': 'var(--negative-soft)',
-                        'warning': 'var(--warning)',
-                        'strong-buy': 'var(--strong-buy)',
-                        'crucible': 'var(--crucible)',
-                        'crucible-soft': 'var(--crucible-soft)',
-                        'viz-blue': 'var(--viz-blue)',
-                        'viz-emerald': 'var(--viz-emerald)',
-                        'viz-amber': 'var(--viz-amber)',
-                        'viz-rose': 'var(--viz-rose)',
-                        'viz-violet': 'var(--viz-violet)',
-                        'viz-slate': 'var(--viz-slate)',
-                    },
-                    fontFamily: {
-                        sans: ['Inter', 'system-ui', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
-                    },
-                    fontSize: {
-                        'caption': ['12px', { lineHeight: '16px' }],
-                        'body': ['14px', { lineHeight: '20px' }],
-                        'subhead': ['16px', { lineHeight: '24px' }],
-                        'head': ['20px', { lineHeight: '28px' }],
-                        'page-title': ['28px', { lineHeight: '36px' }],
-                        'display': ['36px', { lineHeight: '44px' }],
-                    },
-                    spacing: {
-                        'page-gutter': '32px',
-                        'card-pad': '24px',
-                        'section-gap': '16px',
-                        'table-row': '12px',
-                    },
-                    screens: {
-                        // Standard Tailwind breakpoints preserved; only additions here
-                        'xs': '480px',
-                        // sm: 640px, md: 768px, lg: 1024px, xl: 1280px, 2xl: 1536px (defaults)
-                        'dash-md': '1440px',
-                    },
-                    borderRadius: {
-                        'xl': '16px',
-                        '2xl': '20px',
-                    },
-                },
-            },
-        }
-    </script>
+    <link rel="stylesheet" href="/static/style.css?v=4">
     <style>
         /* Light mode tokens — Source.md §13.1 + extended design system */
         :root {
@@ -195,10 +128,13 @@
                   aria-label="Current mode: {{ mode }}">{{ mode }}</span>
         </div>
         <div id="cycle-indicator" class="flex-1 text-center text-sm text-text-muted hidden sm:block" role="status" aria-live="polite">
-            <span class="inline-flex items-center gap-2">
+            <span id="cycle-idle-label" class="inline-flex items-center gap-2" style="display:none">
                 <span class="live-dot"></span>
-                Idle. Last cycle: <span id="cycle-indicator-time"
-                    {% if last_cycle and last_cycle != '--' %}data-time-ago="{{ last_cycle }}"{% endif %}>{% if last_cycle and last_cycle != '--' %}{{ last_cycle }}{% else %}--{% endif %}</span>
+                Idle
+            </span>
+            <span id="cycle-running-label" class="inline-flex items-center gap-2" style="display:none">
+                <span class="live-dot anim-breathing"></span>
+                Running: <span id="cycle-running-ticker" class="font-mono font-semibold text-accent"></span>
             </span>
         </div>
         <button id="theme-toggle"
@@ -379,8 +315,13 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span class="text-xs text-text-muted font-medium">Loading...</span>
+            <span class="text-xs text-text-muted font-medium">Syncing...</span>
         </div>
+    </div>
+
+    <!-- SSE connection status — persistent bottom-right indicator -->
+    <div class="fixed bottom-2 right-3 z-10">
+        <span id="sse-status" class="text-[9px] text-text-muted font-mono">Connecting...</span>
     </div>
 
     <script src="/static/app.js?v=6"></script>

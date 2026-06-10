@@ -8,9 +8,9 @@
     <p class="text-text-secondary text-sm mb-8">Verifying API connectivity for each data source.</p>
 
     <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6">
-        {% set critical_sources = ["polygon", "edgar", "alpaca"] %}
-        {% set important_sources = ["finnhub", "fred"] %}
-        {% set nice_sources = ["openfda", "finra", "form4", "ir_pages", "press", "fomc", "ecb"] %}
+        {% set critical_sources = ["polygon", "edgar"] %}
+        {% set important_sources = ["fred"] %}
+        {% set nice_sources = ["alpaca", "finnhub", "openfda", "finra", "form4", "ir_pages", "press", "fomc", "ecb"] %}
 
         {% macro source_row(name, criticality, result) %}
         <div class="flex items-center justify-between p-3 rounded border border-border

@@ -9,7 +9,9 @@ State persisted in SQLite `kill_switch` singleton table.
 from __future__ import annotations
 
 import enum
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,7 +93,7 @@ def _get_db(db_path: str | Path) -> sqlite3.Connection:
     """Open SQLite connection and ensure kill_switch table exists."""
     p = Path(db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = _sql_connect(p)
     conn.execute("PRAGMA journal_mode=WAL")
     _ensure_table(conn)
     return conn
@@ -530,7 +532,7 @@ def _check_rolling_loss(db_path: str | Path) -> TriggerResult:
     from pmacs.constants import KILL_SWITCH_ROLLING_5D_LOSS_PCT
 
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             # Get current value
             current_row = conn.execute(
@@ -598,7 +600,7 @@ def _check_daily_mtm_loss(db_path: str | Path) -> TriggerResult:
     from pmacs.constants import KILL_SWITCH_DAILY_LOSS_PCT
 
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             row = conn.execute(
                 """SELECT total_value_usd FROM paper_account
@@ -729,7 +731,7 @@ def _check_budget_daily(
     try:
         from pmacs.billing.budget_enforcer import DEFAULT_DAILY_HARD_CAP, _get_period_total
 
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "today")
         finally:
@@ -756,7 +758,7 @@ def _check_budget_monthly(
     try:
         from pmacs.billing.budget_enforcer import DEFAULT_MONTHLY_HARD_CAP, _get_period_total
 
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "this_month")
         finally:

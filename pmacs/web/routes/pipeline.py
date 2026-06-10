@@ -64,7 +64,7 @@ async def pipeline_page(request: Request):
             try:
                 rows = db.execute(
                     """SELECT d.ticker, d.verdict, d.conviction_score, d.thesis_summary, d.decided_at,
-                              d.priority_band
+                              d.priority_band, d.price_usd
                        FROM decisions d
                        ORDER BY d.decided_at DESC
                        LIMIT 200"""
@@ -74,22 +74,33 @@ async def pipeline_page(request: Request):
                     t = r[0]
                     if t not in recent_thesis:
                         raw_thesis = r[3] or ""
-                        # thesis_summary is stored as JSON — extract readable thesis/raw_text
+                        # Parse thesis JSON for richer data
+                        thesis_data = {}
+                        display_thesis = raw_thesis
                         if raw_thesis.startswith("{"):
                             try:
                                 _parsed = _json_pipeline.loads(raw_thesis)
-                                raw_thesis = (_parsed.get("thesis")
-                                              or _parsed.get("raw_text")
-                                              or _parsed.get("verdict_line")
-                                              or raw_thesis)
+                                thesis_data = _parsed
+                                display_thesis = (_parsed.get("thesis")
+                                                  or _parsed.get("raw_text")
+                                                  or _parsed.get("verdict_line")
+                                                  or raw_thesis)
                             except Exception:
                                 pass
                         recent_thesis[t] = {
                             "verdict": r[1] or "SKIP",
                             "conviction": r[2] or 0.0,
-                            "thesis": raw_thesis,
+                            "thesis": display_thesis,
                             "timestamp": r[4] or "",
                             "priority": r[5],
+                            "price_usd": r[6],
+                            "fair_value": thesis_data.get("fair_value"),
+                            "valuation_range": thesis_data.get("valuation_range", {}),
+                            "agent_signals": thesis_data.get("agent_signals", []),
+                            "crucible_severity": thesis_data.get("crucible_severity"),
+                            "crucible_survives": thesis_data.get("crucible_thesis_survives"),
+                            "financial_snapshot": thesis_data.get("financial_snapshot", {}),
+                            "verdict_line": thesis_data.get("verdict_line", ""),
                         }
             except Exception:
                 pass
@@ -112,7 +123,18 @@ async def pipeline_page(request: Request):
                 "thesis": holding_thesis if holding_thesis else extra.get("thesis", ""),
                 "timestamp": extra.get("timestamp", ""),
                 "priority": _band_int_to_label(extra.get("priority")),
+                "fair_value": extra.get("fair_value"),
+                "valuation_range": extra.get("valuation_range", {}),
+                "agent_signals": extra.get("agent_signals", []),
+                "crucible_severity": extra.get("crucible_severity"),
+                "crucible_survives": extra.get("crucible_survives"),
+                "financial_snapshot": extra.get("financial_snapshot", {}),
+                "verdict_line": extra.get("verdict_line", ""),
+                "price_usd": extra.get("price_usd"),
             }
+            # Skip no-data cards (0% conviction + no thesis = infrastructure failure)
+            if card["conviction"] == 0.0 and not card["thesis"]:
+                continue
             if verdict in verdict_cards:
                 verdict_cards[verdict].append(card)
 
@@ -127,7 +149,18 @@ async def pipeline_page(request: Request):
                 "thesis": info.get("thesis", ""),
                 "timestamp": info.get("timestamp", ""),
                 "priority": _band_int_to_label(info.get("priority")),
+                "fair_value": info.get("fair_value"),
+                "valuation_range": info.get("valuation_range", {}),
+                "agent_signals": info.get("agent_signals", []),
+                "crucible_severity": info.get("crucible_severity"),
+                "crucible_survives": info.get("crucible_survives"),
+                "financial_snapshot": info.get("financial_snapshot", {}),
+                "verdict_line": info.get("verdict_line", ""),
+                "price_usd": info.get("price_usd"),
             }
+            # Skip no-data cards (0% conviction + no thesis = infrastructure failure)
+            if card["conviction"] == 0.0 and not card["thesis"]:
+                continue
             if verdict in verdict_cards:
                 verdict_cards[verdict].append(card)
 
@@ -177,6 +210,7 @@ async def pipeline_page(request: Request):
             name="pipeline.html",
             context={
                 "page": "pipeline",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("pipeline", exc),
             },
         )
@@ -325,14 +359,27 @@ _last_cycle_crucible_results: dict[str, dict] = {}       # ticker → crucible_r
 _last_cycle_arbitration: dict[str, dict] = {}            # ticker → arbitration_result
 _last_cycle_id: str = ""
 
+# Current running cycle state — tracks which ticker is actively processing
+_current_cycle_tickers: list[str] = []      # ordered ticker list for this cycle
+_current_ticker_processing: str = ""         # ticker currently being analysed
+
+# Evidence cache — prevents re-fetching identical data on repeated solo runs.
+# Keyed by ticker, stores (timestamp, price, news, fundamentals). TTL = 600s (10 min).
+# This eliminates the #1 source of run-to-run variance: partial evidence from timeouts.
+_EVIDENCE_CACHE_TTL = 600  # seconds
+_evidence_cache: dict[str, tuple[float, float, list, str]] = {}  # ticker → (ts, price, news, fundamentals)
+
 
 def _clear_cycle_caches() -> None:
     """Reset in-memory cycle caches to prevent stale data leaking between cycles."""
     global _last_cycle_agent_results, _last_cycle_crucible_results, _last_cycle_arbitration, _last_cycle_id
+    global _current_cycle_tickers, _current_ticker_processing
     _last_cycle_agent_results = {}
     _last_cycle_crucible_results = {}
     _last_cycle_arbitration = {}
     _last_cycle_id = ""
+    _current_cycle_tickers = []
+    _current_ticker_processing = ""
 
 
 def _emit_event(stream: str, event_type: str, data: dict) -> None:
@@ -392,13 +439,25 @@ def _call_openrouter(prompt: str, max_tokens: int = 1024, temperature: float = 0
 
     import httpx
 
+    api_key = None
     try:
         import keyring
         api_key = keyring.get_password("pmacs.credentials", "pmacs.credentials.openrouter_api_key")
-        if not api_key:
-            raise RuntimeError("OpenRouter API key not found in keyring (pmacs.credentials.openrouter_api_key)")
     except ImportError:
-        raise RuntimeError("keyring module not installed — cannot retrieve API key")
+        pass  # Fall through to macOS Keychain fallback
+    if not api_key:
+        # Fallback: macOS Keychain via security(1) — no Python deps required
+        try:
+            from pmacs.storage.keychain import get_api_key as _keychain_get
+            api_key = _keychain_get("pmacs.credentials", "pmacs.credentials.openrouter_api_key")
+        except Exception:
+            pass
+    if not api_key:
+        raise RuntimeError(
+            "OpenRouter API key not found. Tried: Python keyring, macOS Keychain. "
+            "Run: security add-generic-password -s pmacs.credentials "
+            "-a pmacs.credentials.openrouter_api_key -w <YOUR_KEY>"
+        )
 
     try:
         from pathlib import Path
@@ -645,6 +704,30 @@ def _fetch_ticker_fundamentals(ticker: str) -> str:
         return ""
 
 
+def _fetch_evidence_router_data(ticker: str, cycle_id: str) -> str:
+    """Fetch evidence from the full evidence router pipeline (13 sources including EDGAR).
+
+    This adds SEC XBRL data (revenue, FCF, margins, cash flow) that the basic
+    Finnhub-only fundamentals fetch misses. Returns formatted text for agent prompts.
+    """
+    import logging
+    _log = logging.getLogger("pmacs.web.evidence_router")
+    try:
+        from pmacs.data.evidence_router import fetch_evidence_for_ticker
+        from pmacs.agents.base import PersonaRunner
+
+        packet = fetch_evidence_for_ticker(ticker, cycle_id)
+        if packet and packet.evidence:
+            text = PersonaRunner.format_evidence_for_prompt([packet])
+            if text.strip():
+                _log.info("[%s] Evidence router: %d evidence items from %d sources",
+                          ticker, len(packet.evidence), len({e.source for e in packet.evidence}))
+                return text
+    except Exception as exc:
+        _log.info("[%s] Evidence router failed (non-fatal): %s", ticker, exc)
+    return ""
+
+
 def _fetch_enrichment_data(ticker: str, api_key_finnhub: str = "") -> str:
     """Fetch Yahoo price targets + technical indicators to enrich fundamentals.
 
@@ -777,7 +860,45 @@ def _run_single_agent(persona: str, ticker: str, price: float, news: list[dict],
     if system_prompt:
         evidence_block = fundamentals if fundamentals else "(No financial data available — use [EST - not in evidence, verify] for any figures from knowledge)"
         system_prompt = system_prompt.replace("{evidence}", evidence_block)
-        system_prompt = system_prompt.replace("{episodic_context}", "")
+
+        # Inject episodic context — prior verdict + ticker knowledge facts
+        episodic_text = ""
+        try:
+            from pmacs.web.config import get_config
+            from pmacs.storage.sqlite import get_connection
+            from pmacs.agents.episodic_context import _TICKER_KNOWLEDGE
+            cfg = get_config()
+
+            # 1. Ticker knowledge — material facts not in live data feeds
+            ticker_facts = _TICKER_KNOWLEDGE.get(ticker, [])
+            if ticker_facts:
+                episodic_text += (
+                    "KNOWN MATERIAL FACTS (use [KNOWLEDGE] tag when citing):\n"
+                    + "\n".join(f"  - {fact}" for fact in ticker_facts)
+                    + "\n\n"
+                )
+
+            # 2. Prior analysis for thesis drift tracking
+            edb = get_connection(cfg.sqlite_path)
+            try:
+                prior = edb.execute(
+                    "SELECT verdict, conviction_score, thesis_summary, decided_at "
+                    "FROM decisions WHERE ticker = ? ORDER BY decided_at DESC LIMIT 1",
+                    (ticker,),
+                ).fetchone()
+                if prior:
+                    episodic_text += (
+                        f"PRIOR ANALYSIS ({prior[3]}):\n"
+                        f"  Verdict: {prior[0]}, Conviction: {prior[1]:.2f}\n"
+                        f"  Thesis: {(prior[2] or '')[:300]}\n"
+                        f"  Compare your current assessment to this prior. Note what changed."
+                    )
+            finally:
+                edb.close()
+        except Exception:
+            pass  # episodic context is best-effort
+
+        system_prompt = system_prompt.replace("{episodic_context}", episodic_text)
         system_prompt = system_prompt.replace("{today_date}", _dt.date.today().isoformat())
 
     # Build user message with ticker context + evidence + news
@@ -800,46 +921,67 @@ def _run_single_agent(persona: str, ticker: str, price: float, news: list[dict],
         f"  - key_signal: one-line summary of the strongest signal you found\n"
         f"  - confidence: your confidence in this analysis (0.0-1.0)\n"
         f"  - evidence_cited: list of specific data points with numbers from the evidence above. Most recent quarter first. Include at least 3 items.\n"
+        f"\nIMPORTANT RULES:\n"
+        f"  - If your persona's key data source is MISSING (e.g., no FINRA short interest, no Form 4 filings), "
+        f"set confidence below 0.30 and keep p_up/p_down close to 0.33 (neutral). "
+        f"Do NOT produce extreme probabilities from insufficient data.\n"
+        f"  - Base probabilities ONLY on the evidence provided. Do not speculate beyond the data.\n"
+        f"  - Be consistent: the same evidence should produce the same probabilities.\n"
         f"Probabilities must sum to 1.0."
         f"{evidence_section}"
         f"{news_text}"
     )
 
-    try:
-        raw = _call_openrouter(
-            prompt, max_tokens=5000, temperature=0.2,
-            system_prompt=system_prompt or None,
-        )
-        data = _parse_json_safe(raw)
-        if not data:
-            raise ValueError("Empty or invalid JSON response")
+    # Retry logic: attempt up to 2 times before falling back to uninformed defaults.
+    # Second attempt uses slightly higher temperature to avoid repeating the same
+    # parse failure. This reduces run-to-run variance caused by transient LLM errors.
+    _MAX_AGENT_ATTEMPTS = 2
+    _last_exc: Exception | None = None
+    for _attempt in range(_MAX_AGENT_ATTEMPTS):
+        try:
+            _temp = 0.01 + (_attempt * 0.05)  # 0.01 base (near-deterministic), 0.06 on retry
+            raw = _call_openrouter(
+                prompt, max_tokens=5000, temperature=_temp,
+                system_prompt=system_prompt or None,
+            )
+            data = _parse_json_safe(raw)
+            if not data:
+                raise ValueError("Empty or invalid JSON response")
 
-        p_up = float(data.get("p_up", 0.33))
-        p_down = float(data.get("p_down", 0.33))
-        p_flat = max(0.0, 1.0 - p_up - p_down)
+            p_up = float(data.get("p_up", 0.33))
+            p_down = float(data.get("p_down", 0.33))
+            p_flat = max(0.0, 1.0 - p_up - p_down)
 
-        return {
-            "persona": persona,
-            "p_up": min(1.0, max(0.0, p_up)),
-            "p_flat": min(1.0, max(0.0, p_flat)),
-            "p_down": min(1.0, max(0.0, p_down)),
-            "analysis": str(data.get("analysis", ""))[:1000],
-            "key_signal": str(data.get("key_signal", ""))[:200],
-            "confidence": float(data.get("confidence", 0.5)),
-            "evidence_cited": data.get("evidence_cited", []),
-            "error": None,
-        }
-    except Exception as exc:
-        _log.error("Agent %s failed for %s: %s", persona, ticker, exc)
-        return {
-            "persona": persona,
-            "p_up": 0.33, "p_flat": 0.34, "p_down": 0.33,
-            "analysis": f"Agent {persona} failed: {exc}",
-            "key_signal": "ANALYSIS_UNAVAILABLE",
-            "confidence": 0.0,
-            "evidence_cited": [],
-            "error": str(exc),
-        }
+            return {
+                "persona": persona,
+                "p_up": min(1.0, max(0.0, p_up)),
+                "p_flat": min(1.0, max(0.0, p_flat)),
+                "p_down": min(1.0, max(0.0, p_down)),
+                "analysis": str(data.get("analysis", ""))[:1000],
+                "key_signal": str(data.get("key_signal", ""))[:200],
+                "confidence": float(data.get("confidence", 0.5)),
+                "evidence_cited": data.get("evidence_cited", []),
+                "error": None,
+                "attempt_count": _attempt + 1,
+            }
+        except Exception as exc:
+            _last_exc = exc
+            if _attempt < _MAX_AGENT_ATTEMPTS - 1:
+                _log.warning("Agent %s attempt %d failed for %s: %s — retrying",
+                             persona, _attempt + 1, ticker, exc)
+            else:
+                _log.error("Agent %s failed for %s after %d attempts: %s",
+                           persona, ticker, _MAX_AGENT_ATTEMPTS, exc)
+
+    return {
+        "persona": persona,
+        "p_up": 0.33, "p_flat": 0.34, "p_down": 0.33,
+        "analysis": f"Agent {persona} failed after {_MAX_AGENT_ATTEMPTS} attempts: {_last_exc}",
+        "key_signal": "ANALYSIS_UNAVAILABLE",
+        "confidence": 0.0,
+        "evidence_cited": [],
+        "error": str(_last_exc),
+    }
 
 
 # --- Crucible review ---------------------------------------------------------
@@ -865,15 +1007,39 @@ def _run_crucible(ticker: str, price: float, agent_results: list[dict]) -> dict:
         for r in agent_results if not r.get("error")
     )
 
+    # Include ticker knowledge so Crucible attacks are informed, not superficial
+    knowledge_section = ""
+    try:
+        from pmacs.agents.episodic_context import _TICKER_KNOWLEDGE
+        facts = _TICKER_KNOWLEDGE.get(ticker, [])
+        if facts:
+            knowledge_section = (
+                "\n\nVerified material facts (attack the thesis given these are true — "
+                "do not attack these facts themselves):\n"
+                + "\n".join(f"  - {f}" for f in facts)
+            )
+    except Exception:
+        pass
+
     prompt = (
         f"Review the following investment thesis for {ticker} @ ${price:.2f}.\n\n"
-        f"Agent analyses:\n{agent_summary}\n\n"
-        f"Find the weakest points. Respond with JSON:\n"
-        f"  - severity: 0.0-1.0 (how badly the thesis is damaged)\n"
-        f"  - attacks: list of 1-5 specific criticisms\n"
+        f"Agent analyses:\n{agent_summary}"
+        f"{knowledge_section}\n\n"
+        f"Score each of the following 4 axes independently on 0.0-1.0 (higher = more damaged):\n"
+        f"  A. VALUATION ASSUMPTIONS — are the implied multiples/growth rates realistic?\n"
+        f"  B. MOAT DURABILITY — is the competitive advantage real and sustainable?\n"
+        f"  C. MANAGEMENT TRACK RECORD — do insiders have credibility and alignment?\n"
+        f"  D. COMPETITIVE THREATS — are there overlooked competitive or macro risks?\n\n"
+        f"Respond with JSON:\n"
+        f"  - severity: average of the 4 axis scores (0.0-1.0)\n"
+        f"  - attacks: list of objects, each with 'axis' (A/B/C/D label), 'score' (0.0-1.0), "
+        f"'attack' (specific criticism with evidence), 'evidence_cited' (data points used)\n"
         f"  - thesis_survives: true if the overall thesis holds despite attacks\n"
         f"  - summary: 2-3 sentence adversarial summary\n"
-        f"  - overlooked_risks: list of 1-3 risks the agents missed"
+        f"  - overlooked_risks: list of 1-3 risks the agents missed\n\n"
+        f"IMPORTANT: Base severity ONLY on evidence provided. Do not penalize for missing data "
+        f"that no one could reasonably have. Score each axis independently — a strong valuation "
+        f"attack should not inflate moat or management scores."
     )
 
     try:
@@ -925,9 +1091,29 @@ def _arbitrate(agent_results: list[dict]) -> dict:
         return {"p_up": 0.33, "p_down": 0.33, "p_flat": 0.34, "direction": 0.0,
                 "confidence": 0.0, "agents_used": 0, "veto_triggered": False, "veto_personas": []}
 
+    # Low-confidence neutralization: agents with confidence < 0.30 are operating on
+    # insufficient data. Blend their p_up/p_down toward neutral (0.33) proportionally
+    # to how low their confidence is. This prevents an uninformed agent from producing
+    # extreme signals (e.g. short_interest with no FINRA data outputting p_down=0.75)
+    # which can trigger veto thresholds and cause massive run-to-run variance.
+    _NEUTRAL_CONF_THRESHOLD = 0.30
+    for r in valid:
+        conf = r.get("confidence", 0.5)
+        if conf < _NEUTRAL_CONF_THRESHOLD:
+            blend = conf / _NEUTRAL_CONF_THRESHOLD  # 0.0 at conf=0, 1.0 at threshold
+            r["p_up"] = r["p_up"] * blend + 0.33 * (1.0 - blend)
+            r["p_down"] = r["p_down"] * blend + 0.33 * (1.0 - blend)
+            r["p_flat"] = max(0.0, 1.0 - r["p_up"] - r["p_down"])
+
+    # Confidence-weighted averaging: agents with INSUFFICIENT_DATA (low confidence)
+    # contribute less than agents with genuine analysis. Floor at 0.10 so no agent
+    # is fully ignored, but a conf=0.05 agent contributes 1/14th vs a conf=0.70 agent.
+    _CONF_FLOOR = 0.10
+    weights = [max(_CONF_FLOOR, r.get("confidence", 0.5)) for r in valid]
+    total_weight = sum(weights)
     n = len(valid)
-    avg_p_up = sum(r["p_up"] for r in valid) / n
-    avg_p_down = sum(r["p_down"] for r in valid) / n
+    avg_p_up = sum(r["p_up"] * w for r, w in zip(valid, weights)) / total_weight
+    avg_p_down = sum(r["p_down"] * w for r, w in zip(valid, weights)) / total_weight
     avg_p_flat = max(0.0, 1.0 - avg_p_up - avg_p_down)
 
     # Normalize to sum to 1.0
@@ -971,60 +1157,7 @@ def _arbitrate(agent_results: list[dict]) -> dict:
     }
 
 
-# --- Conviction + Verdict (reuse spec engines) ------------------------------
-
-def _compute_verdict(arb: dict, crucible_severity: float, is_bootstrap: bool = True) -> tuple[str, float]:
-    """Compute conviction score and verdict tier.
-
-    Returns (verdict, conviction_score).
-    """
-    direction = arb["direction"]
-    # Bootstrap: no calibration history exists, so consensus fraction is the right
-    # maturity proxy. Use 1.0 (not 0.50 floor) so genuine majority consensus can
-    # cross BUY. Matches conviction.py bootstrap fix.
-    maturity = 1.0 if is_bootstrap else max(0.25, min(arb["confidence"], 1.0))
-
-    # Crucible amplification: high severity is MORE punitive than linear.
-    # severity^0.7 makes severity 0.66 → effective 0.735 (factor 0.265 vs linear 0.34).
-    # This models the reality that agents often miss what crucible catches (dilution,
-    # extreme valuations, accounting red flags) and crucible is the primary safety layer.
-    amplified_severity = crucible_severity ** 0.7
-    crucible_factor = max(0.0, 1.0 - amplified_severity)
-
-    # ev_factor: scaled from direction. No floor — if direction is 0 or negative,
-    # ev_factor is 0 and conviction collapses to 0. The old max(ev_factor, 0.1)
-    # floor was wrong: it gave 10% EV credit even to zero-edge or negative-edge
-    # stocks, allowing direction * 0.1 to still produce positive conviction.
-    ev_factor = min(max(direction, 0) / 0.15, 1.0) if direction > 0 else 0.0
-
-    conviction = direction * maturity * crucible_factor * ev_factor
-    conviction = max(-1.0, min(1.0, conviction))
-
-    # Bootstrap paper mode: lower thresholds to allow position entry during paper
-    # trading. Standard thresholds (0.6/0.3/0.1) are too high for bootstrap where
-    # crucible amplification + no calibration data suppresses conviction heavily.
-    # Paper positions are low-risk (virtual capital) and generate needed trade data
-    # for Sharpe/drawdown/win-rate calculations required for mode promotion.
-    if is_bootstrap:
-        if conviction >= 0.40:
-            verdict = "STRONG_BUY"
-        elif conviction >= 0.15:
-            verdict = "BUY"
-        elif conviction >= 0.05:
-            verdict = "HOLD"
-        else:
-            verdict = "SKIP"
-    else:
-        if conviction >= 0.6:
-            verdict = "STRONG_BUY"
-        elif conviction >= 0.3:
-            verdict = "BUY"
-        elif conviction >= 0.1:
-            verdict = "HOLD"
-        else:
-            verdict = "SKIP"
-
-    return verdict, round(conviction, 4)
+# --- Conviction + Verdict: delegated to pmacs.engines.conviction -------------
 
 
 # --- Memo generation ---------------------------------------------------------
@@ -1063,7 +1196,8 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
     prompt = (
         f"You are writing a deep investment research memo for {ticker}, currently trading at ${price:.2f}.\n\n"
         f"System verdict: {verdict} | Conviction: {conviction:.0%}\n"
-        f"Arbitrated probabilities: P(up)={arb['p_up']:.0%} P(down)={arb['p_down']:.0%}\n\n"
+        f"Arbitrated probabilities: P(up)={arb['p_up']:.0%} P(down)={arb['p_down']:.0%}\n"
+        f"EV multiple: {arb.get('ev_multiple', 'N/A')} | Crucible severity: {crucible['severity']:.0%}\n\n"
         f"=== AGENT ANALYSES ===\n{agent_summary}\n\n"
         f"=== CRUCIBLE ADVERSARIAL REVIEW (severity={crucible['severity']:.0%}) ===\n"
         f"{crucible.get('summary', '')}\n"
@@ -1124,9 +1258,21 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
                 "raw_text": f"{verdict} {ticker} @ ${price:.2f} | Conviction: {conviction:.0%}",
             })
 
-        # Build structured memo data
+        # Build structured memo data — always use engine verdict, not LLM's
+        llm_verdict_line = data.get("verdict_line", "")
+        # Strip any LLM-generated verdict prefix and replace with engine verdict
+        # LLM might write "BUY — reason" when engine says SKIP
+        if llm_verdict_line:
+            # Remove leading verdict word if present
+            for v in ("STRONG_BUY", "BUY", "HOLD", "SKIP"):
+                if llm_verdict_line.upper().startswith(v):
+                    llm_verdict_line = llm_verdict_line[len(v):].lstrip(" —-–:")
+                    break
+            verdict_line = f"{verdict} — {llm_verdict_line}" if llm_verdict_line else f"{verdict} {ticker} @ ${price:.2f}"
+        else:
+            verdict_line = f"{verdict} {ticker} @ ${price:.2f}"
         memo_data = {
-            "verdict_line": data.get("verdict_line", f"{verdict} {ticker} @ ${price:.2f}"),
+            "verdict_line": verdict_line,
             "fair_value": data.get("fair_value"),
             "valuation_range": data.get("valuation_range", {}),
             "valuation_methodology": data.get("valuation_methodology", ""),
@@ -1207,10 +1353,15 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
 # --- Main cycle execution (real parallel agent pipeline) ----------------------
 
 
-def _run_all_agents_sync(ticker: str, price: float, news: list[dict], fundamentals: str = "") -> list[dict]:
-    """Run all 7 agents concurrently via ThreadPoolExecutor."""
+def _run_all_agents_sync(ticker: str, price: float, news: list[dict], fundamentals: str = "", cycle_id: str = "") -> list[dict]:
+    """Run all 7 agents concurrently via ThreadPoolExecutor.
+
+    Emits per-agent SSE events as each finishes (not batched) so the UI
+    updates progressively instead of in a burst.
+    """
     import concurrent.futures
     import logging
+    import time
 
     _log = logging.getLogger("pmacs.web.pipeline")
     results = []
@@ -1222,7 +1373,25 @@ def _run_all_agents_sync(ticker: str, price: float, news: list[dict], fundamenta
         for future in concurrent.futures.as_completed(futures):
             persona = futures[future]
             try:
-                results.append(future.result())
+                r = future.result()
+                results.append(r)
+                # Emit per-agent completion immediately (progressive UI update)
+                if cycle_id:
+                    _emit_event("agent", "agent.complete", {
+                        "cycle_id": cycle_id,
+                        "persona": r["persona"],
+                        "ticker": ticker,
+                        "scores": {
+                            "p_up": r["p_up"],
+                            "p_down": r["p_down"],
+                            "confidence": r["confidence"],
+                        },
+                        "analysis": r.get("analysis", ""),
+                        "key_signal": r.get("key_signal", ""),
+                        "evidence_cited": r.get("evidence_cited", []),
+                        "latency_ms": r.get("latency_ms", 0),
+                        "attempt_count": r.get("attempt_count", 1),
+                    })
             except Exception as exc:
                 _log.error("Agent %s raised: %s", persona, exc)
                 results.append({
@@ -1287,39 +1456,126 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
 
         async def _fetch_fundamentals_async(t: str) -> tuple[str, str]:
             try:
-                ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
-                # Enrich with Yahoo price targets + technical indicators
+                parts: list[str] = []
+                source_status: dict[str, bool] = {}
+
+                # 1. Full evidence router (EDGAR SEC XBRL + all 13 sources)
+                router_ev = await loop.run_in_executor(
+                    None, _fetch_evidence_router_data, t, cycle_id,
+                )
+                if router_ev:
+                    parts.append(router_ev)
+                    source_status["evidence_router"] = True
+                else:
+                    source_status["evidence_router"] = False
+
+                # 2. Basic Finnhub fundamentals (fast, supplement)
+                finnhub_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
+                if finnhub_ev:
+                    parts.append(finnhub_ev)
+                    source_status["finnhub"] = True
+                else:
+                    source_status["finnhub"] = False
+
+                # 3. Yahoo enrichment (price targets + technicals)
                 enrichment = await loop.run_in_executor(None, _fetch_enrichment_data, t)
                 if enrichment:
-                    ev = ev + "\n" + enrichment if ev else enrichment
-                return t, ev
+                    parts.append(enrichment)
+                    source_status["yahoo_enrichment"] = True
+                else:
+                    source_status["yahoo_enrichment"] = False
+
+                # Retry any failed sources once (reduces partial-evidence variance)
+                failed = [k for k, v in source_status.items() if not v]
+                if failed:
+                    _log.warning("[%s] Evidence sources failed on first attempt: %s — retrying", t, failed)
+                    for src in failed:
+                        try:
+                            if src == "evidence_router":
+                                retry_ev = await loop.run_in_executor(None, _fetch_evidence_router_data, t, cycle_id)
+                                if retry_ev:
+                                    parts.append(retry_ev)
+                                    _log.info("[%s] evidence_router succeeded on retry", t)
+                            elif src == "finnhub":
+                                retry_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
+                                if retry_ev:
+                                    parts.append(retry_ev)
+                                    _log.info("[%s] finnhub succeeded on retry", t)
+                            elif src == "yahoo_enrichment":
+                                retry_ev = await loop.run_in_executor(None, _fetch_enrichment_data, t)
+                                if retry_ev:
+                                    parts.append(retry_ev)
+                                    _log.info("[%s] yahoo_enrichment succeeded on retry", t)
+                        except Exception as retry_exc:
+                            _log.warning("[%s] %s retry also failed: %s", t, src, retry_exc)
+
+                # Log evidence completeness for diagnostics
+                total_chars = sum(len(p) for p in parts)
+                _log.info("[%s] Evidence completeness: %d/%d sources, %d chars total",
+                          t, sum(1 for v in source_status.values() if v) + len([f for f in failed if f not in source_status]),
+                          len(source_status), total_chars)
+
+                return t, "\n".join(parts)
             except Exception as exc:
                 _log.warning("Fundamentals fetch failed for %s: %s", t, exc)
                 return t, ""
 
-        # Fetch prices, news, and fundamentals simultaneously across all tickers
-        price_tasks = [_fetch_price_async(t) for t in tickers]
-        news_tasks = [_fetch_news_async(t) for t in tickers]
-        fund_tasks = [_fetch_fundamentals_async(t) for t in tickers]
-        all_results = await asyncio.gather(*price_tasks, *news_tasks, *fund_tasks)
+        # Check evidence cache — reuse if same ticker was fetched within TTL.
+        # This eliminates the biggest source of run-to-run variance: partial
+        # evidence from transient API timeouts or rate limits.
+        import time as _time_mod
+        _now = _time_mod.time()
+        cached_tickers: list[str] = []
+        uncached_tickers: list[str] = []
+        for t in tickers:
+            cached = _evidence_cache.get(t)
+            if cached and (_now - cached[0]) < _EVIDENCE_CACHE_TTL:
+                real_prices[t] = cached[1]
+                prefetched_news[t] = cached[2]
+                prefetched_fundamentals[t] = cached[3]
+                cached_tickers.append(t)
+                _log.info("[%s] Using cached evidence (age: %ds)", t, int(_now - cached[0]))
+            else:
+                uncached_tickers.append(t)
 
-        for t, p in all_results[:total]:
-            if p:
-                real_prices[t] = p
-                _log.info("Price for %s: $%.2f", t, p)
-        for t, n in all_results[total:total*2]:
-            prefetched_news[t] = n
-            _log.info("[%s] Pre-fetched %d news articles", t, len(n))
-        for t, ev in all_results[total*2:]:
-            prefetched_fundamentals[t] = ev
-            _log.info("[%s] Fundamentals: %d chars", t, len(ev))
+        if uncached_tickers:
+            # Fetch prices, news, and fundamentals simultaneously for uncached tickers
+            n_uncached = len(uncached_tickers)
+            price_tasks = [_fetch_price_async(t) for t in uncached_tickers]
+            news_tasks = [_fetch_news_async(t) for t in uncached_tickers]
+            fund_tasks = [_fetch_fundamentals_async(t) for t in uncached_tickers]
+            all_results = await asyncio.gather(*price_tasks, *news_tasks, *fund_tasks)
 
-        _log.info("Cycle %s: fetched %d/%d prices, %d/%d news, %d/%d fundamentals (parallel)",
+            for t, p in all_results[:n_uncached]:
+                if p:
+                    real_prices[t] = p
+                    _log.info("Price for %s: $%.2f", t, p)
+            for t, n in all_results[n_uncached:n_uncached*2]:
+                prefetched_news[t] = n
+                _log.info("[%s] Pre-fetched %d news articles", t, len(n))
+            for t, ev in all_results[n_uncached*2:]:
+                prefetched_fundamentals[t] = ev
+                _log.info("[%s] Fundamentals: %d chars", t, len(ev))
+
+            # Populate evidence cache for future re-runs
+            for t in uncached_tickers:
+                if t in real_prices:
+                    _evidence_cache[t] = (
+                        _now,
+                        real_prices.get(t, 0.0),
+                        prefetched_news.get(t, []),
+                        prefetched_fundamentals.get(t, ""),
+                    )
+
+        _log.info("Cycle %s: fetched %d/%d prices, %d/%d news, %d/%d fundamentals (cached=%d, fresh=%d)",
                   cycle_id[:12], len(real_prices), total, len(prefetched_news), total,
-                  sum(1 for v in prefetched_fundamentals.values() if v), total)
+                  sum(1 for v in prefetched_fundamentals.values() if v), total,
+                  len(cached_tickers), len(uncached_tickers))
 
         t_cycle_start = time.perf_counter()
         _clear_cycle_caches()
+        global _current_cycle_tickers, _current_ticker_processing
+        _current_cycle_tickers = list(tickers)
         _emit_event("cycle", "cycle.opened", {
             "cycle_id": cycle_id,
             "tickers": tickers,
@@ -1341,6 +1597,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
 
         for i, ticker in enumerate(tickers):
             try:
+                _current_ticker_processing = ticker
                 _emit_event("cycle", "ticker_progress", {
                     "cycle_id": cycle_id,
                     "ticker": ticker,
@@ -1380,6 +1637,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                 agent_results = await loop.run_in_executor(
                     None, _run_all_agents_sync, ticker, price, news,
                     prefetched_fundamentals.get(ticker, ""),
+                    cycle_id,  # enables progressive per-agent SSE events
                 )
                 agent_latency = int((time.monotonic() - t_agents_start) * 1000)
                 _log.info("[%s] 7 agents completed in %dms", ticker, agent_latency)
@@ -1395,24 +1653,8 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                     "step": "agents_done",
                 })
 
-                # Emit per-agent completion events with real scores + analysis text
-                _per_agent_latency_ms = agent_latency // len(_PERSONAS)
-                for r in agent_results:
-                    _emit_event("agent", "agent.complete", {
-                        "cycle_id": cycle_id,
-                        "persona": r["persona"],
-                        "ticker": ticker,
-                        "scores": {
-                            "p_up": r["p_up"],
-                            "p_down": r["p_down"],
-                            "confidence": r["confidence"],
-                        },
-                        "analysis": r.get("analysis", ""),
-                        "key_signal": r.get("key_signal", ""),
-                        "evidence_cited": r.get("evidence_cited", []),
-                        "latency_ms": r.get("latency_ms", _per_agent_latency_ms),
-                        "attempt_count": r.get("attempt_count", 1),
-                    })
+                # Per-agent SSE events already emitted progressively by
+                # _run_all_agents_sync as each agent finishes (no burst).
 
                 # --- Phase 3: Crucible adversarial review ---
                 _emit_event("cycle", "ticker_progress", {
@@ -1458,9 +1700,39 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                 _log.info("[%s] Arbitrated: p_up=%.2f p_down=%.2f direction=%.2f agents=%d",
                           ticker, arb["p_up"], arb["p_down"], arb["direction"], arb["agents_used"])
 
-                # --- Phase 5: Verdict + conviction ---
-                verdict, conviction = _compute_verdict(arb, crucible["severity"])
+                # --- Phase 5: Verdict + conviction (engine as source of truth) ---
+                from pmacs.engines.conviction import compute_conviction, verdict_tier as engine_verdict_tier
+                from pmacs.engines.pricing import compute_ev, EvInputs
+                from pmacs.schemas.arbitration import Arbitrated, ArbitrationDecision
+
+                ev_result = compute_ev(EvInputs(
+                    p_up=arb["p_up"], p_down=arb["p_down"],
+                    current_price=price, cycle_id=cycle_id,
+                ))
+                _is_bootstrap = True  # web pipeline is always bootstrap currently
+
+                _arb_model = Arbitrated(
+                    ticker=ticker, cycle_id=cycle_id,
+                    p_up=arb["p_up"], p_flat=arb["p_flat"], p_down=arb["p_down"],
+                    decision=ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE,
+                    agreement_score=arb["confidence"],
+                    matured_sources_used=arb["agents_used"],
+                )
+
+                conviction = compute_conviction(
+                    arb=_arb_model,
+                    crucible_severity=crucible["severity"],
+                    ev_multiple=ev_result.ev_multiple,
+                    is_bootstrap=_is_bootstrap,
+                )
+                _verdict_enum = engine_verdict_tier(conviction, is_bootstrap=_is_bootstrap)
+                verdict = _verdict_enum.value
                 processed += 1
+
+                # Enrich stored arbitration with conviction data for sankey-data endpoint
+                _last_cycle_arbitration[ticker]["conviction"] = round(conviction, 4)
+                _last_cycle_arbitration[ticker]["ev_multiple"] = round(ev_result.ev_multiple, 4)
+                _last_cycle_arbitration[ticker]["verdict"] = verdict
 
                 _log.info("[%s] Verdict=%s conviction=%.4f", ticker, verdict, conviction)
 
@@ -1480,6 +1752,9 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                     "p_down": arb["p_down"],
                     "direction": arb["direction"],
                     "agents_used": arb["agents_used"],
+                    "conviction": round(conviction, 4),
+                    "ev_multiple": round(ev_result.ev_multiple, 4),
+                    "crucible_severity": round(crucible["severity"], 4),
                 })
 
                 _emit_event("cycle", "ticker_progress", {
@@ -1572,6 +1847,37 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                     _aw.close()
                 except Exception as _ae:
                     _log.warning("Audit write failed (DECISION %s): %s", ticker, _ae)
+
+                # --- DuckDB persona affinity + Qdrant thesis embedding ---
+                try:
+                    from pmacs.storage.duckdb import DuckDBAdapter
+                    from pathlib import Path as _P
+                    _db_dir = _P(cfg.sqlite_path).parent
+                    _duck = DuckDBAdapter(db_path=_db_dir / "pmacs_analytics.duckdb")
+                    _duck.init_tables()
+                    for r in agent_results:
+                        if not r.get("error"):
+                            _duck.update_persona_affinity(
+                                persona=r["persona"], ticker=ticker, brier=0.667,
+                            )
+                except Exception:
+                    pass
+                try:
+                    from pmacs.storage.qdrant import QdrantAdapter
+                    from pathlib import Path as _P2
+                    _db_dir2 = _P2(cfg.sqlite_path).parent
+                    _qdrant = QdrantAdapter(path=str(_db_dir2 / "pmacs_qdrant"))
+                    _qdrant.create_collections()
+                    if memo:
+                        _qdrant.upsert_with_embedding(
+                            collection="theses",
+                            id=f"{cycle_id}_{ticker}",
+                            text=(memo or "")[:2000],
+                            payload={"cycle_id": cycle_id, "ticker": ticker,
+                                     "verdict": verdict, "conviction": conviction},
+                        )
+                except Exception:
+                    pass
 
                 # --- Phase 7b: Paper trade execution ---
                 is_already_held = False
@@ -1702,6 +2008,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                 })
 
         # Cycle closed
+        _current_ticker_processing = ""
         _log.info("Cycle %s completed: %d/%d tickers processed", cycle_id[:12], processed, total)
         _emit_event("cycle", "cycle.closed", {
             "cycle_id": cycle_id,
@@ -1738,6 +2045,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
             _log.warning("Audit write failed (CYCLE_CLOSE): %s", _ae)
 
     except Exception as cycle_exc:
+        _current_ticker_processing = ""
         _log.error("Cycle %s fatal error: %s", cycle_id[:12], cycle_exc, exc_info=True)
         _emit_event("cycle", "cycle.closed", {
             "cycle_id": cycle_id,

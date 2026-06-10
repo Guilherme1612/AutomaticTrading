@@ -40,8 +40,8 @@ async def _close_stuck_cycles() -> None:
         from pmacs.web.config import get_config
         from pmacs.web import data as _data_layer
         cfg = get_config()
-        import sqlite3 as _sqlite3
-        db = _sqlite3.connect(str(cfg.sqlite_path))
+        from pmacs.storage.sqlite import connect as _sql_connect
+        db = _sql_connect(cfg.sqlite_path)
         try:
             now = _dt.datetime.now(_dt.timezone.utc).isoformat()
             affected = db.execute(

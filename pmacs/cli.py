@@ -12,6 +12,7 @@ from pathlib import Path
 
 # Default paths — centralized via config.data_dir()
 from pmacs.config import data_dir as _get_data_dir
+from pmacs.storage.sqlite import connect as _sql_connect
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _get_data_dir()
@@ -65,12 +66,11 @@ def _ensure_data_dir() -> None:
 
 def _is_wizard_completed() -> bool:
     """Check if the first-run wizard has been completed by reading SQLite."""
-    import sqlite3
     db_path = _DATA_DIR / "pmacs.db"
     if not db_path.exists():
         return False
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         row = conn.execute(
             "SELECT value FROM wizard_state WHERE key = ?", ("wizard_completed",)
         ).fetchone()
@@ -690,7 +690,7 @@ def cmd_setup() -> None:
         "sse-starlette>=2.0",
         "jinja2>=3.1.6",
         "duckdb>=1.5.2",
-        "alpaca-py>=0.30",
+        "yfinance>=0.2",
         "kuzu>=0.5.0",
         "qdrant-client>=1.12.0",
         "sentence-transformers>=3.0.0",
@@ -711,7 +711,7 @@ def cmd_setup() -> None:
         "sse-starlette": "sse_starlette",
         "jinja2": "jinja2",
         "duckdb": "duckdb",
-        "alpaca-py": "alpaca",
+        "yfinance": "yfinance",
         "kuzu": "kuzu",
         "qdrant-client": "qdrant_client",
         "sentence-transformers": "sentence_transformers",
@@ -809,7 +809,7 @@ def cmd_setup() -> None:
             reason="CLI setup complete",
             totp_verified=False,
         )
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         conn.execute(
             "INSERT INTO mode_history (from_mode, to_mode, reason, triggered_by, changed_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -889,11 +889,109 @@ def cmd_setup() -> None:
     print("═" * 53)
 
 
+def cmd_watch() -> None:
+    """Supervise PMACS processes — restart any that die.
+
+    Polls heartbeats every 30s. If a process is stale (no heartbeat for >120s),
+    restarts it. Runs until Ctrl-C.
+    """
+    import time
+    from pmacs.cortex.health import check_heartbeats
+
+    _ensure_data_dir()
+
+    # Process name → restart command (same as cmd_start, minus inference)
+    python = _resolve_python()
+    _RESTART_CMDS: dict[str, list[str]] = {
+        "cortex": [python, "-m", "pmacs.cortex.daemon"],
+        "cortex-self-check": [python, "-m", "pmacs.cortex.self_check"],
+        "execution": [python, "-m", "pmacs.execution.service"],
+        "stoploss": [python, "-m", "pmacs.cortex.stop_loss_daemon"],
+        "mutation": [python, "-m", "pmacs.mutation.daemon"],
+    }
+    # nervous runs via uvicorn
+    _RESTART_CMDS["nervous"] = [
+        python, "-m", "uvicorn", "pmacs.web.app:app",
+        "--host", "127.0.0.1", "--port", "8000",
+    ]
+
+    _HB_NAMES: dict[str, str] = {
+        "cortex": "pmacs-cortex",
+        "cortex-self-check": "cortex-self-check",
+        "nervous": "nervous",
+        "stoploss": "pmacs-stoploss",
+        "mutation": "pmacs-mutation",
+    }
+
+    print("PMACS Supervisor — watching processes (Ctrl-C to stop)")
+    print("=" * 50)
+
+    restart_counts: dict[str, int] = {name: 0 for name in _RESTART_CMDS}
+    max_restarts = 5  # per process, then give up
+
+    try:
+        while True:
+            hb_names = list(_HB_NAMES.values())
+            statuses = check_heartbeats(
+                hb_names, heartbeat_dir=_HEARTBEAT_DIR, stale_threshold=120.0,
+            )
+            stale_procs = {s.proc for s in statuses if s.is_stale}
+
+            for name, hb_name in _HB_NAMES.items():
+                if hb_name in stale_procs:
+                    if restart_counts[name] >= max_restarts:
+                        continue  # already gave up on this one
+                    restart_counts[name] += 1
+                    ts = time.strftime("%H:%M:%S")
+                    print(
+                        f"  [{ts}] {name} is DOWN — restarting "
+                        f"(attempt {restart_counts[name]}/{max_restarts})"
+                    )
+                    try:
+                        if name == "nervous":
+                            _kill_port(8000)
+                        subprocess.Popen(
+                            _RESTART_CMDS[name], start_new_session=True,
+                        )
+                    except Exception as exc:
+                        print(f"  [{ts}] {name} restart FAILED: {exc}")
+                else:
+                    # Process is alive — reset restart count
+                    restart_counts[name] = 0
+
+            # Check execution via socket (no heartbeat)
+            sock_path = _DATA_DIR / "exec.sock"
+            if not sock_path.exists() and "execution" in _RESTART_CMDS:
+                if restart_counts.get("execution", 0) < max_restarts:
+                    restart_counts["execution"] = restart_counts.get("execution", 0) + 1
+                    ts = time.strftime("%H:%M:%S")
+                    print(
+                        f"  [{ts}] execution is DOWN — restarting "
+                        f"(attempt {restart_counts['execution']}/{max_restarts})"
+                    )
+                    try:
+                        subprocess.Popen(
+                            _RESTART_CMDS["execution"], start_new_session=True,
+                        )
+                    except Exception as exc:
+                        print(f"  [{ts}] execution restart FAILED: {exc}")
+                elif restart_counts.get("execution", 0) == max_restarts:
+                    restart_counts["execution"] = max_restarts + 1  # only warn once
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"  [{ts}] execution: gave up after {max_restarts} restarts")
+            else:
+                restart_counts["execution"] = 0
+
+            time.sleep(30)
+    except KeyboardInterrupt:
+        print("\nSupervisor stopped.")
+
+
 def main() -> None:
     """PMACS command-line interface."""
     if len(sys.argv) < 2:
         print("Usage: pmacs <command>")
-        print("Commands: wizard, setup, init, start, stop, clean, status, version")
+        print("Commands: wizard, setup, init, start, stop, clean, status, watch, version")
         print()
         print("  wizard  — Launch web-based setup wizard (first run)")
         print("  setup   — Interactive one-shot: configure + init + start")
@@ -902,6 +1000,7 @@ def main() -> None:
         print("  stop    — Stop all processes")
         print("  clean   — Delete all personal data (use --force to skip prompt)")
         print("  status  — Show process status")
+        print("  watch   — Supervise processes (auto-restart on failure)")
         print("  version — Print version")
         sys.exit(1)
 
@@ -914,6 +1013,7 @@ def main() -> None:
         "clean": cmd_clean,
         "status": cmd_status,
         "setup": cmd_setup,
+        "watch": cmd_watch,
         "wizard": cmd_wizard,
     }
 
@@ -922,7 +1022,7 @@ def main() -> None:
         handler()
     else:
         print(f"Unknown command: {command}")
-        print("Commands: setup, init, start, stop, clean, status, version")
+        print("Commands: setup, init, start, stop, clean, status, watch, version")
         sys.exit(1)
 
 

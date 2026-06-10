@@ -59,6 +59,7 @@ async def cortex_page(request: Request):
             name="cortex.html",
             context={
                 "page": "cortex",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("cortex", exc),
             },
         )

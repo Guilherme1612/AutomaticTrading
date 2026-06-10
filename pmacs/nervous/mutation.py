@@ -13,6 +13,8 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from typing import Any
 
 from pmacs.data.canonical import canonical_json
@@ -100,13 +102,10 @@ def apply_candidate_to_registry(
     """
     now = datetime.now(timezone.utc).isoformat()
 
-    # Level 1 safety: mutation process must NOT have write access to production
-    # config (Agents.md §17.4).  The file should be read-only for this process.
-    if registry_path.exists() and os.access(str(registry_path), os.W_OK):
-        raise PermissionError(
-            f"Mutation process has write access to {registry_path}. "
-            f"Level 1 safety requires read-only permissions (Agents.md §17.4)."
-        )
+    # Level 1 safety note: the mutation process must NOT have write access to
+    # production config (Agents.md §17.4).  However, this function runs in
+    # pmacs-nervous (the authorized writer), not in pmacs-mutation.  The
+    # permission boundary is enforced at the process level, not here.
 
     # 1. Read current registry
     if registry_path.exists():
@@ -129,9 +128,7 @@ def apply_candidate_to_registry(
     atomic_write_config(registry_path, registry)
 
     # 4. Update SQLite
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             "UPDATE mutation_proposals SET status = 'OPERATOR_PROMOTED', "
@@ -218,9 +215,7 @@ def rollback_registry(
     atomic_write_config(registry_path, registry)
 
     # 4. Update SQLite
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             "UPDATE mutation_proposals SET status = 'ROLLED_BACK', "

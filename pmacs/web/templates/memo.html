@@ -164,6 +164,18 @@
             <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.free_cash_flow }}</p>
         </div>
         {% endif %}
+        {% if fs.fcf_yield_ev %}
+        <div class="p-3 bg-surface-sunken/50 rounded-xl">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest">FCF Yield (EV)</p>
+            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.fcf_yield_ev }}</p>
+        </div>
+        {% endif %}
+        {% if fs.revenue_guidance_next_year %}
+        <div class="p-3 bg-surface-sunken/50 rounded-xl">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest">NTM Rev Guidance</p>
+            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.revenue_guidance_next_year }}</p>
+        </div>
+        {% endif %}
         {% if fs.debt_to_equity %}
         <div class="p-3 bg-surface-sunken/50 rounded-xl">
             <p class="text-[10px] text-text-muted uppercase tracking-widest">Debt/Equity</p>
@@ -178,8 +190,14 @@
         {% endif %}
         {% if fs.pe_ratio %}
         <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">P/E Ratio</p>
+            <p class="text-[10px] text-text-muted uppercase tracking-widest">P/E (TTM)</p>
             <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.pe_ratio }}</p>
+        </div>
+        {% endif %}
+        {% if fs.forward_pe %}
+        <div class="p-3 bg-surface-sunken/50 rounded-xl">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest">Forward P/E</p>
+            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.forward_pe }}</p>
         </div>
         {% endif %}
         {% if fs.peg_ratio %}
@@ -529,7 +547,7 @@
                          {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
                 {{ d.verdict }}
             </span>
-            <span class="text-xs font-mono text-text-muted">{{ "%.0f"|format((d.conviction_score or 0) * 100) }}%</span>
+            <span class="text-xs font-mono text-text-muted">{{ "%.0f"|format((d.conviction or 0) * 100) }}%</span>
         </div>
         {% endfor %}
     </div>

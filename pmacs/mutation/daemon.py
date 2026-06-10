@@ -9,7 +9,9 @@ All promotions require operator TOTP. No auto-promote.
 from __future__ import annotations
 
 import logging
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -160,7 +162,7 @@ class MutationDaemon:
     # ------------------------------------------------------------------
 
     def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
@@ -523,7 +525,7 @@ def main_loop() -> None:
         # Read paper cycle count from SQLite
         paper_cycle_count = 0
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = _sql_connect(db_path)
             try:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM cycles WHERE state = 'CLOSED'"

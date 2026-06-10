@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,7 +55,7 @@ def count_cycles_in_mode(mode: str, db_path: Path) -> int:
     """Count closed cycles in the given mode (SQLite)."""
     if not db_path.exists():
         return 0
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    with _sql_connect(db_path, read_only=True) as conn:
         row = conn.execute(
             "SELECT COUNT(*) FROM cycles WHERE mode = ? AND state = 'CLOSED'",
             (mode,),
@@ -65,7 +67,7 @@ def count_trades_in_mode(mode: str, db_path: Path) -> int:
     """Count trades executed in the given mode (SQLite)."""
     if not db_path.exists():
         return 0
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    with _sql_connect(db_path, read_only=True) as conn:
         row = conn.execute(
             "SELECT COUNT(*) FROM holdings WHERE mode = ?",
             (mode,),
@@ -85,7 +87,7 @@ def cycles_since_last_demotion(sqlite_db_path: Path) -> int:
     if not db_path.exists():
         return 0
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        with _sql_connect(db_path, read_only=True) as conn:
             # Find the most recent demotion (transition from higher to lower mode)
             row = conn.execute(
                 "SELECT MAX(changed_at) FROM mode_history "

@@ -503,6 +503,7 @@ class TestApplyCandidateToRegistry:
 
         registry_path = tmp_path / "model_registry.json"
         registry_path.write_text('{"active": "llama_server"}')
+        os.chmod(str(registry_path), 0o444)
         audit_path = tmp_path / "audit.log"
 
         result = apply_candidate_to_registry(
@@ -537,6 +538,7 @@ class TestApplyCandidateToRegistry:
 
         registry_path = tmp_path / "model_registry.json"
         registry_path.write_text('{}')
+        os.chmod(str(registry_path), 0o444)
         audit_path = tmp_path / "audit.log"
 
         apply_candidate_to_registry(
@@ -568,6 +570,7 @@ class TestApplyCandidateToRegistry:
 
         registry_path = tmp_path / "model_registry.json"
         registry_path.write_text('{}')
+        os.chmod(str(registry_path), 0o444)
         audit_path = tmp_path / "audit.log"
 
         apply_candidate_to_registry(

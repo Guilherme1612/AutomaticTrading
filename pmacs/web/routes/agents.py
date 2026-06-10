@@ -39,23 +39,37 @@ async def agents_page(request: Request):
         finally:
             db.close()
 
-        current_ticker = queue[0]["ticker"] if queue else None
         is_cycle_running = running_row is not None
 
         # Enrich personas with last cycle's agent results ONLY when a cycle is active
         from pmacs.web.routes.pipeline import (
             _last_cycle_agent_results,
             _last_cycle_crucible_results,
+            _current_cycle_tickers,
+            _current_ticker_processing,
         )
 
-        # Build lookup: persona_id → agent result for the most recent ticker
+        # Derive current/next ticker from the live cycle state, not the queue table
+        if is_cycle_running and _current_ticker_processing:
+            current_ticker = _current_ticker_processing
+            idx = _current_cycle_tickers.index(_current_ticker_processing) if _current_ticker_processing in _current_cycle_tickers else -1
+            next_ticker = _current_cycle_tickers[idx + 1] if idx >= 0 and idx + 1 < len(_current_cycle_tickers) else None
+        else:
+            # No cycle running — don't show stale queue ticker as "current"
+            current_ticker = None
+            next_ticker = None
+
+        # Build lookup: persona_id → agent result for the active/last ticker
         last_ticker_results = {}
         last_crucible = None
         has_active_cycle = current_ticker is not None or is_cycle_running
 
         if has_active_cycle and _last_cycle_agent_results:
-            # Use the last ticker that has results
-            last_key = list(_last_cycle_agent_results.keys())[-1]
+            # Prefer results for the currently-processing ticker; fall back to last completed
+            if _current_ticker_processing and _current_ticker_processing in _last_cycle_agent_results:
+                last_key = _current_ticker_processing
+            else:
+                last_key = list(_last_cycle_agent_results.keys())[-1]
             for r in _last_cycle_agent_results[last_key]:
                 last_ticker_results[r["persona"]] = r
             last_crucible = _last_cycle_crucible_results.get(last_key)
@@ -113,10 +127,32 @@ async def agents_page(request: Request):
                 "ticker": d["ticker"],
                 "verdict": d.get("verdict") or "SKIP",
                 "conviction": d.get("conviction") or 0.0,
-                "decided_at": d.get("opened_at") or "",
+                "decided_at": d.get("decided_at") or d.get("opened_at") or "",
             }
-            for d in sorted(decisions, key=lambda x: x.get("opened_at") or "", reverse=True)
+            for d in sorted(decisions, key=lambda x: x.get("decided_at") or x.get("opened_at") or "", reverse=True)
         ]
+
+        # Session stats for the stats panel
+        verdict_counts = {"STRONG_BUY": 0, "BUY": 0, "HOLD": 0, "SKIP": 0}
+        total_conviction = 0.0
+        best_ticker = ""
+        best_conviction = 0.0
+        for d in decisions:
+            v = d.get("verdict") or "SKIP"
+            if v in verdict_counts:
+                verdict_counts[v] += 1
+            c = d.get("conviction") or 0.0
+            total_conviction += c
+            if c > best_conviction:
+                best_conviction = c
+                best_ticker = d.get("ticker", "")
+        session_stats = {
+            "total": len(decisions),
+            "verdict_counts": verdict_counts,
+            "avg_conviction": total_conviction / len(decisions) if decisions else 0,
+            "best_ticker": best_ticker,
+            "best_conviction": best_conviction,
+        }
 
         return templates.TemplateResponse(
             request=request,
@@ -127,18 +163,25 @@ async def agents_page(request: Request):
                 "personas": enriched_personas,
                 "queue": queue,
                 "current_ticker": current_ticker,
+                "next_ticker": next_ticker,
                 "is_cycle_running": is_cycle_running,
                 "cycle_log": decisions,
                 "decision_summary": decision_summary,
+                "session_stats": session_stats,
                 "last_cycle": decisions[0]["opened_at"] if decisions else "--",
             },
         )
     except Exception as exc:
+        import traceback, logging
+        logging.getLogger("pmacs.agents").error(
+            "agents_page exception: %s\n%s", exc, traceback.format_exc()
+        )
         return templates.TemplateResponse(
             request=request,
             name="agents.html",
             context={
                 "page": "agents",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("agents", exc),
             },
         )
@@ -160,6 +203,8 @@ async def agents_sankey_data(request: Request):
         _last_cycle_crucible_results,
         _last_cycle_arbitration,
         _last_cycle_id,
+        _current_cycle_tickers,
+        _current_ticker_processing,
     )
 
     cfg = get_config()
@@ -167,8 +212,6 @@ async def agents_sankey_data(request: Request):
 
     db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
-        queue = data_layer.get_queue_status(db)
-        current_ticker = queue[0]["ticker"] if queue else None
         running_row = db.execute(
             "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' ORDER BY opened_at DESC LIMIT 1"
         ).fetchone()
@@ -265,7 +308,9 @@ async def agents_sankey_data(request: Request):
             "p_down": round(last_arb.get("p_down", 0.0), 3),
             "direction": round(last_arb.get("direction", 0.0), 3),
             "agents_used": last_arb.get("agents_used", 0),
-            "conviction": round(abs(last_arb.get("direction", 0.0)), 3),
+            "conviction": round(last_arb.get("conviction", 0.0), 4),
+            "ev_multiple": round(last_arb.get("ev_multiple", 0.0), 4),
+            "verdict": last_arb.get("verdict", ""),
         }
 
     # Crucible result
@@ -300,9 +345,11 @@ async def agents_sankey_data(request: Request):
     ]
 
     return JSONResponse(content={
-        "ticker": last_ticker or current_ticker,
+        "ticker": last_ticker or (_current_ticker_processing if is_running else "") or "",
         "cycle_id": _last_cycle_id or "",
         "is_running": is_running,
+        "current_ticker_processing": _current_ticker_processing or "",
+        "cycle_tickers": list(_current_cycle_tickers),
         "evidence_sources": evidence_sources,
         "personas": persona_outputs,
         "arbitration_result": arb_out,

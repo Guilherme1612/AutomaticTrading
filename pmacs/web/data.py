@@ -39,8 +39,11 @@ def _sqlite_connect(db_path: str | Path, *, readonly: bool = True) -> sqlite3.Co
         return sqlite3.connect(":memory:")
     if readonly:
         uri = f"file:{path}?mode=ro"
-        return sqlite3.connect(uri, uri=True)
-    return sqlite3.connect(str(path))
+        conn = sqlite3.connect(uri, uri=True)
+    else:
+        conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 
 def get_readonly_db(sqlite_path: str | Path) -> sqlite3.Connection:

@@ -5,7 +5,28 @@ spec_ref: Architecture.md §1.13, Agents.md §17
 from __future__ import annotations
 
 import hashlib
+import math
+from datetime import datetime, timezone
 from typing import Any
+
+# Half-life for episodic memory decay, in days.  Failures/lessons older than
+# ~90 days (3 half-lives → 12.5% weight) are effectively invisible.
+_DECAY_HALF_LIFE_DAYS = 30.0
+
+
+def _age_weight(ts_iso: str) -> float:
+    """Exponential decay weight based on age.  Returns 1.0 for now, 0.5 at
+    half-life, approaching 0 for very old items."""
+    if not ts_iso:
+        return 0.5  # unknown age → treat as moderately old
+    try:
+        ts = datetime.fromisoformat(ts_iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
+        return math.exp(-0.693 * age_days / _DECAY_HALF_LIFE_DAYS)  # ln(2) ≈ 0.693
+    except (ValueError, TypeError):
+        return 0.5
 
 # ---------------------------------------------------------------------------
 # Ticker knowledge map — material facts not captured in live data sources.
@@ -157,6 +178,8 @@ def build_context_brief(
     prior_key_signal: str | None = None,
     prior_decided_at: str | None = None,
     ticker_analysis_count: int = 0,
+    prior_agent_signals: list[dict] | None = None,
+    prior_crucible_severity: float | None = None,
 ) -> str:
     """Build a ~400-word context brief for a persona run (first analysis) or ~700 words (repeat).
 
@@ -230,12 +253,21 @@ def build_context_brief(
         f"MACRO CONTEXT: Current regime is {regime} (confidence {regime_confidence:.0%})."
     )
 
-    # --- Recent failures (from holding resolution) ---
+    # --- Recent failures (from holding resolution) — with decay ---
     if recent_failures:
-        failure_strs = [
-            f"{f.get('taxonomy', 'UNKNOWN')}: {f.get('summary', '')}" for f in recent_failures[:3]
+        # Sort by decay weight (most recent first), drop items with <10% weight
+        weighted = [
+            (f, _age_weight(f.get("ts", "")))
+            for f in recent_failures
         ]
-        sections.append("RECENT FAILURES: " + "; ".join(failure_strs))
+        weighted = [(f, w) for f, w in weighted if w >= 0.10]
+        weighted.sort(key=lambda x: x[1], reverse=True)
+        failure_strs = [
+            f"{f.get('taxonomy', 'UNKNOWN')}: {f.get('summary', '')} (recency {w:.0%})"
+            for f, w in weighted[:3]
+        ]
+        if failure_strs:
+            sections.append("RECENT FAILURES: " + "; ".join(failure_strs))
 
     # --- Persona-ticker affinity (DuckDB persona_ticker_affinity) ---
     # If affinity_data provided, prefer it over raw brier/cycle_count.
@@ -251,22 +283,54 @@ def build_context_brief(
             f"over {eff_cycles} cycles."
         )
 
-    # --- FDE failure history ---
+    # --- FDE failure history — with decay ---
     if fde_history:
-        fde_strs = [
-            f"{h.get('taxonomy', 'UNKNOWN')} (sev {h.get('severity', 0.0):.1f})"
-            for h in fde_history[:3]
+        fde_weighted = [
+            (h, _age_weight(h.get("ts", "")))
+            for h in fde_history
         ]
-        sections.append("FAILURE PATTERNS: " + "; ".join(fde_strs))
+        fde_weighted = [(h, w) for h, w in fde_weighted if w >= 0.10]
+        fde_weighted.sort(key=lambda x: x[1], reverse=True)
+        fde_strs = [
+            f"{h.get('taxonomy', 'UNKNOWN')} (sev {h.get('severity', 0.0):.1f}, recency {w:.0%})"
+            for h, w in fde_weighted[:3]
+        ]
+        if fde_strs:
+            sections.append("FAILURE PATTERNS: " + "; ".join(fde_strs))
 
-    # --- Lessons ---
+    # --- Lessons (similarity-matched, no timestamp — treat as advisory) ---
     if recent_lessons:
-        sections.append("RELEVANT PAST LESSONS: " + "; ".join(recent_lessons[:2]))
+        sections.append(
+            "PAST LESSONS (may be outdated — verify against current data before applying): "
+            + "; ".join(recent_lessons[:2])
+        )
 
     # --- Ticker knowledge (material facts not in live data) ---
     ticker_facts = _TICKER_KNOWLEDGE.get(ticker, [])
     if ticker_facts:
         sections.append("KNOWN MATERIAL FACTS (use [KNOWLEDGE] tag in analysis): " + " | ".join(ticker_facts))
+
+    # --- Prior agent signals (sanity check data from last cycle) ---
+    if prior_agent_signals and ticker_analysis_count >= 1:
+        signal_parts = []
+        for s in prior_agent_signals[:7]:
+            persona = s.get("persona", "unknown")
+            p_up = s.get("p_up", 0)
+            p_down = s.get("p_down", 0)
+            signal_parts.append(f"{persona}: p_up={p_up:.2f} p_down={p_down:.2f}")
+        sections.append(
+            "[PRIOR SIGNALS] Last cycle's agent signals for cross-validation: "
+            + "; ".join(signal_parts)
+        )
+
+    # --- Prior crucible severity ---
+    if prior_crucible_severity is not None and ticker_analysis_count >= 1:
+        sections.append(
+            f"[PRIOR CRUCIBLE] Previous cycle crucible severity was "
+            f"{prior_crucible_severity:.2f}. "
+            f"If severity was high (>0.5), verify that the issue identified "
+            f"has been resolved or is no longer relevant."
+        )
 
     brief = " ".join(sections)
     words = brief.split()
@@ -277,6 +341,76 @@ def build_context_brief(
         brief = " ".join(words[:word_limit]) + "..."
 
     return brief
+
+
+def compute_signal_drift(
+    prior_signals: list[dict],
+    current_signals: list[dict],
+    threshold: float = 0.20,
+) -> dict | None:
+    """Compare current agent signals against prior cycle's signals.
+
+    Parameters
+    ----------
+    prior_signals : list[dict]
+        Agent signals from the previous cycle, each with
+        ``persona``, ``p_up``, ``p_down`` keys.
+    current_signals : list[dict]
+        Agent signals from the current cycle (same format).
+    threshold : float
+        Minimum p_up delta to flag as drift (default 0.20 = 20pp).
+
+    Returns
+    -------
+    dict | None
+        ``None`` if no significant drift, else a dict with:
+        ``has_drift``, ``drifted_personas``, ``max_drift``, ``warning``.
+    """
+    if not prior_signals or not current_signals:
+        return None
+
+    # Index current signals by persona for fast lookup
+    current_by_persona: dict[str, dict] = {}
+    for s in current_signals:
+        key = str(s.get("persona", "")).lower().replace(" ", "_")
+        current_by_persona[key] = s
+
+    drifted: list[str] = []
+    max_delta = 0.0
+    details: list[str] = []
+
+    for prior in prior_signals:
+        persona = str(prior.get("persona", "")).lower().replace(" ", "_")
+        current = current_by_persona.get(persona)
+        if current is None:
+            continue
+        prior_p_up = float(prior.get("p_up", 0))
+        curr_p_up = float(current.get("p_up", 0))
+        delta = abs(prior_p_up - curr_p_up)
+        max_delta = max(max_delta, delta)
+        if delta > threshold:
+            drifted.append(persona)
+            details.append(
+                f"{persona}: p_up {prior_p_up:.2f}→{curr_p_up:.2f} (Δ{delta:.2f})"
+            )
+
+    if not drifted:
+        return None
+
+    warning = (
+        f"Signal drift detected vs prior cycle "
+        f"({max_delta:.0%} max delta). "
+        f"Affected: {', '.join(drifted)}. "
+        f"Detail: {'; '.join(details)}. "
+        f"Current cycle must explain divergence or risk crucible flag."
+    )
+    return {
+        "has_drift": True,
+        "drifted_personas": drifted,
+        "max_drift": max_delta,
+        "details": details,
+        "warning": warning,
+    }
 
 
 def inject_and_log(

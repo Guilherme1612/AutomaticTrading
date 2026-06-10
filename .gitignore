@@ -43,3 +43,6 @@ htmlcov/
 
 # Runtime data directory
 data/
+
+# Node.js
+node_modules/

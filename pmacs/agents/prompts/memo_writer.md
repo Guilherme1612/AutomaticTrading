@@ -34,6 +34,9 @@ STRUCTURE:
    "Analyst consensus PT $X (Y analysts) implies +Z% upside."
    If no valuation data is available from any source, state
    "fair value unavailable — valuation methodology requires revenue/earnings data."
+   FORENSICS GATE: If the analytical context includes a "Forensics Alert" with
+   MATERIAL_CONCERNS or SEVERE_RISK, you MUST use bear-case-only valuation.
+   Do NOT cite bull-case or base-case fair values when earnings quality is flagged.
 8. DISSENT: any persona that significantly disagreed with the consensus. What did they see?
 
 Keep the memo under 600 words (up from 450 — repeat analyses deserve more precision).
@@ -111,6 +114,20 @@ Optional fields (include when data is available):
 - `crucible_summary` (string): brief summary of strongest attack
 - `p_up`, `p_flat`, `p_down` (numbers): directional probabilities
 - `conviction` (number 0.0-1.0): conviction score
+- `financial_snapshot` (object): key financial metrics extracted from the evidence. Include only fields for which you have a real value from the evidence — do not guess or fabricate. All values as formatted strings (e.g., "$2.1B", "34%", "18.2x"). Fields:
+  - `revenue` (string): TTM or most recent annual revenue
+  - `revenue_growth` (string): YoY revenue growth rate, prefix with "+" if positive
+  - `free_cash_flow` (string): TTM free cash flow
+  - `fcf_yield_ev` (string): FCF / Enterprise Value as a percentage (e.g., "4.2%")
+  - `gross_margin` (string): gross margin percentage
+  - `operating_margin` (string): operating margin percentage
+  - `net_margin` (string): net margin percentage
+  - `pe_ratio` (string): trailing P/E ratio
+  - `forward_pe` (string): forward P/E ratio (NTM EPS estimate)
+  - `peg_ratio` (string): PEG ratio
+  - `debt_to_equity` (string): debt-to-equity ratio
+  - `roe` (string): return on equity
+  - `revenue_guidance_next_year` (string): management guidance or analyst consensus for next fiscal year revenue (e.g., "$8.3B–$9.1B est." or "Mgmt guides $6.9B–$11.5B")
 
 Do not add fields not listed above. Do not output anything outside the JSON object.
 

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import shutil
 import signal
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import sys
 import time
 from dataclasses import dataclass
@@ -122,7 +124,6 @@ def _startup_check(config: DaemonConfig) -> None:
     Logs warnings for stale processes but does not abort startup.
     Kill switch should already be ARMED from previous session.
     """
-    import sqlite3
     from datetime import datetime, timezone
 
     log_debug(
@@ -158,7 +159,7 @@ def _startup_check(config: DaemonConfig) -> None:
     # Mark any orphaned RUNNING cycles as INTERRUPTED (left over from previous crash/restart)
     try:
         now = datetime.now(timezone.utc).isoformat()
-        conn = sqlite3.connect(str(config.db_path))
+        conn = _sql_connect(config.db_path)
         try:
             cur = conn.execute(
                 "UPDATE cycles SET state='INTERRUPTED', closed_at=? WHERE state='RUNNING'",

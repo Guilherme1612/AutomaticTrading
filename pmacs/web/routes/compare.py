@@ -38,6 +38,7 @@ async def compare_page(request: Request):
             name="compare.html",
             context={
                 "page": "compare",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("compare", exc),
             },
         )

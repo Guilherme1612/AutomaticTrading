@@ -151,6 +151,7 @@ async def memo_page(request: Request, ticker: str):
                 name="memo.html",
                 context={
                     "page": "memo",
+                    "mode": "SHADOW + PAPER",
                     "ticker": ticker,
                     "error": data_layer.build_error_context(
                         "memo", Exception(f"No data found for {ticker}")
@@ -233,6 +234,7 @@ async def memo_page(request: Request, ticker: str):
             name="memo.html",
             context={
                 "page": "memo",
+                "mode": "SHADOW + PAPER",
                 "ticker": ticker,
                 "error": data_layer.build_error_context("memo", exc),
             },

@@ -12,7 +12,9 @@ Architecture.md Section 4.4: nervous orchestrates stop execution.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +41,7 @@ class StopEventPoller:
         Returns:
             List of dicts representing pending stop_events rows.
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             rows = conn.execute(
                 "SELECT id, holding_id, ticker, stop_type, trigger_price_usd, "
@@ -145,7 +147,7 @@ class StopEventPoller:
 
     def _update_status(self, trigger_id: int, status: StopEventStatus) -> None:
         """Update stop_events status for a given trigger."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             now = datetime.now(timezone.utc).isoformat()
             conn.execute(

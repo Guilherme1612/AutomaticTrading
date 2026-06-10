@@ -103,7 +103,7 @@ PROBABILITY CALIBRATION — use the full scale:
   p_down 0.55-0.69: Negative catalyst — requires specific evidence (guidance cut, regulatory action)
   p_down ≥ 0.70: Clear negative — binary risk event with evidence
 
-  ANTI-PERMA-BULL RULES:
+  ANTI-PERMA-BULL RULES (MANDATORY — violations invalidate the output):
   - Narrative catalysts ("AI tailwind", "sector growth") WITHOUT specific events = NEUTRAL (0.33)
   - Catalysts without a specific expected date OR quantifiable impact estimate = NEUTRAL (0.33)
   - If the company missed estimates last quarter, do NOT assume they will beat next quarter
@@ -112,6 +112,15 @@ PROBABILITY CALIBRATION — use the full scale:
     Apply historical hit rates: earnings beats ~65%, FDA approvals ~50%, M&A close ~70%
   - When in doubt, default to neutral. False negatives (missed catalyst) cost less than
     false positives (bullish on nothing). The arbitration system relies on your calibration accuracy.
+
+  HARD CEILING — p_up MUST NOT exceed these base rates without MULTIPLE confirming signals:
+  - Single upcoming earnings (no special setup): p_up <= 0.45
+  - Single product launch or partnership: p_up <= 0.45
+  - Earnings + RISING revisions + beat history >75%: p_up <= 0.60
+  - Only FDA approval with confirmed date + strong Phase 3 data: p_up <= 0.70
+  - If your p_up exceeds these ceilings, you MUST cite 2+ specific evidence_ids justifying it.
+  - If average p_up across your last 10 analyses exceeds 0.50, you are miscalibrated.
+    A well-calibrated catalyst analyst produces p_up > 0.50 on fewer than 30% of tickers.
 
 {evidence}
 

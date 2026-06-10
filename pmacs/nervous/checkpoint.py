@@ -6,7 +6,9 @@ ops are skipped.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +41,7 @@ def save_checkpoint(
         db_path: Path to the SQLite database.
         result_hash: Optional hash of the operation result.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             "INSERT OR REPLACE INTO op_idempotency (cycle_id, op_seq, op_type, completed_at, result_hash) "
@@ -67,7 +69,7 @@ def load_checkpoint(cycle_id: str, db_path: Path) -> CheckpointState | None:
     Returns:
         CheckpointState of the last completed op, or None if no checkpoints.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         row = conn.execute(
             "SELECT cycle_id, op_seq, op_type, completed_at, result_hash "
@@ -101,7 +103,7 @@ def is_completed(cycle_id: str, op_seq: int, db_path: Path) -> bool:
     Returns:
         True if the operation has a checkpoint record.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         row = conn.execute(
             "SELECT 1 FROM op_idempotency WHERE cycle_id = ? AND op_seq = ?",

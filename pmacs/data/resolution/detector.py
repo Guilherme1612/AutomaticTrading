@@ -7,7 +7,9 @@ while supporting a richer interface with explicit catalyst/evidence inputs.
 from __future__ import annotations
 
 import json
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -116,7 +118,7 @@ class CatalystResolutionDetector:
         """Load pending/confirmed catalysts from SQLite."""
         catalysts: list[Catalyst] = []
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = _sql_connect(db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, type, status, expected_date, actual_date, "
@@ -155,7 +157,7 @@ class CatalystResolutionDetector:
         """Load recent evidence from SQLite."""
         evidence_list: list[Evidence] = []
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = _sql_connect(db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, source, type, ticker, fetched_at, content_hash, "
@@ -201,7 +203,7 @@ class CatalystResolutionDetector:
     ) -> None:
         """Write resolution results back to SQLite."""
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = _sql_connect(db_path)
             try:
                 for r in results:
                     # Update catalyst status

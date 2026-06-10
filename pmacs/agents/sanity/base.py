@@ -6,6 +6,7 @@ Subclasses add persona-specific checks.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +43,29 @@ class BaseSanityValidator:
         reasoning = output.get("reasoning", None)
         if reasoning is not None and not reasoning.strip():
             return SanityResult(passed=False, reason="reasoning field is empty")
+
+        # Common check: key_signal must be non-empty and contain a quantitative element
+        key_signal = output.get("key_signal", None)
+        if key_signal is not None:
+            if not key_signal.strip():
+                return SanityResult(passed=False, reason="key_signal field is empty")
+            # Must contain at least one number, percentage, or currency symbol
+            if not re.search(r"[\d%$€£]", key_signal):
+                return SanityResult(
+                    passed=False,
+                    reason="key_signal must contain at least one quantitative element (number, %, $)",
+                )
+
+        # Common check: analysis must be non-empty and contain a specific number
+        analysis = output.get("analysis", None)
+        if analysis is not None:
+            if not analysis.strip():
+                return SanityResult(passed=False, reason="analysis field is empty")
+            if not re.search(r"\d", analysis):
+                return SanityResult(
+                    passed=False,
+                    reason="analysis must include at least one specific number from evidence",
+                )
 
         # Common check: evidence_ids reference real packets
         evidence_ids = output.get("evidence_ids", [])

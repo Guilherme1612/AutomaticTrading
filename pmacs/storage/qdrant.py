@@ -20,7 +20,7 @@ _EMBEDDING_DIM = 768  # bge-base-en-v1.5 dimension (Architecture.md §8.7)
 _qdrant_client: Any = None
 _sentence_model: Any = None
 _qdrant_import_available: bool | None = None
-_transformers_import_available: bool | None = None
+_transformers_available: bool | None = None
 
 
 class QdrantAdapter:

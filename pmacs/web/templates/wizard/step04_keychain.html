@@ -21,22 +21,25 @@
             </div>
             {% endif %}
 
-            <!-- Alpaca (required for paper trading) -->
+            <!-- Alpaca (optional — mock adapter used if not provided) -->
             <fieldset class="bg-surface-elevated border border-border rounded-lg p-5">
-                <legend class="text-sm font-semibold text-text-primary px-2">Alpaca Paper Trading</legend>
-                <p class="text-xs text-text-muted mb-3">Required for order execution</p>
+                <legend class="text-sm font-semibold text-text-primary px-2">
+                    Alpaca Paper Trading
+                    <span class="text-xs text-text-muted font-normal ml-2">(optional)</span>
+                </legend>
+                <p class="text-xs text-text-muted mb-3">Only needed for live broker execution. Mock adapter is used if skipped.</p>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label for="alpaca_key" class="text-xs text-text-secondary block mb-1">API Key</label>
                         <input type="text" name="alpaca_key" id="alpaca_key"
                                class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                               autocomplete="off" spellcheck="false" required>
+                               autocomplete="off" spellcheck="false">
                     </div>
                     <div>
                         <label for="alpaca_secret" class="text-xs text-text-secondary block mb-1">API Secret</label>
                         <input type="password" name="alpaca_secret" id="alpaca_secret"
                                class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                               autocomplete="off" required>
+                               autocomplete="off">
                     </div>
                 </div>
             </fieldset>

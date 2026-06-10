@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import fcntl
 import signal
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs; use _sql_connect for connections
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -151,6 +153,7 @@ class CycleOrchestrator:
         # Pre-cycle pipeline state (populated by _run_pre_cycle)
         self._fx_rate: Any | None = None
         self._macro_regime_result: Any | None = None
+        self._last_crucible_attacks: list[Any] = []
         self._gatekeeper_results: dict[str, Any] = {}
         self._queue: list[Any] = []
         self._universe_tickers: list[str] = []
@@ -195,7 +198,7 @@ class CycleOrchestrator:
         Called after every state transition that ends symbol processing.
         """
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 conn.execute("""
                     INSERT INTO holdings (id, ticker, state, cycle_id_opened, cycle_id_closed,
@@ -704,7 +707,7 @@ class CycleOrchestrator:
         self._fx_rate = rate
         now = datetime.now(timezone.utc).isoformat()
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO fx_snapshots "
@@ -733,7 +736,7 @@ class CycleOrchestrator:
         from pmacs.data.corp_actions import adjust_cost_basis_for_dividend, adjust_price_for_split
 
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, entry_price_usd, position_size_usd "
@@ -811,7 +814,7 @@ class CycleOrchestrator:
         from pmacs.data.universe import get_universe
 
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 entries = get_universe(conn, include_halted=True)
             finally:
@@ -913,7 +916,7 @@ class CycleOrchestrator:
         # Load persistent pins
         pinned_tickers: list[str] = []
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 pin_rows = conn.execute(
                     "SELECT ticker FROM persistent_pins"
@@ -927,7 +930,7 @@ class CycleOrchestrator:
         # Load prior cycle conviction scores to promote high-conviction tickers to P2
         prior_conviction: dict[str, float] = {}
         try:
-            conn2 = sqlite3.connect(str(self._db_path))
+            conn2 = _sql_connect(self._db_path)
             try:
                 rows = conn2.execute(
                     "SELECT ticker, conviction_score FROM decisions "
@@ -950,7 +953,7 @@ class CycleOrchestrator:
 
         # Write queue to SQLite
         now = datetime.now(timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             for item in queue:
                 conn.execute(
@@ -1170,6 +1173,7 @@ class CycleOrchestrator:
         if isinstance(result, int):
             return result  # abort path
         holding, persona_results, evidence_packets, op = result
+        self._last_persona_results = persona_results  # IMP-3: forensics quality extraction
 
         # -- Step 13e: Arbitration ---
         result = self._step_13e_arbitration(holding, ticker, cycle_id, op, persona_results)
@@ -1263,10 +1267,14 @@ class CycleOrchestrator:
         kuzu = self._get_kuzu_adapter()
         if kuzu is not None:
             try:
-                failures = kuzu.get_failures_for_ticker(ticker, limit=3)
+                failures = kuzu.get_failures_for_ticker(ticker, limit=5)
                 if failures:
                     recent_failures = [
-                        {"taxonomy": f.get("fa.taxonomy", ""), "summary": f.get("fa.summary", "")}
+                        {
+                            "taxonomy": f.get("fa.taxonomy", ""),
+                            "summary": f.get("fa.summary", ""),
+                            "ts": f.get("fa.ts", ""),
+                        }
                         for f in failures
                     ]
                 # FDE history from KuzuDB
@@ -1318,7 +1326,7 @@ class CycleOrchestrator:
         prior_decided_at: str | None = None
         ticker_analysis_count: int = 0
         try:
-            conn_prior = sqlite3.connect(str(self._db_path))
+            conn_prior = _sql_connect(self._db_path)
             try:
                 rows = conn_prior.execute(
                     "SELECT verdict, conviction_score, decided_at "
@@ -1343,6 +1351,32 @@ class CycleOrchestrator:
                 ).fetchall()
                 if memo_rows and memo_rows[0][0]:
                     prior_key_signal = memo_rows[0][0][:200]
+                # Parse prior agent signals and crucible severity for sanity checking
+                prior_agent_signals: list[dict] | None = None
+                prior_crucible_severity: float | None = None
+                try:
+                    import json as _json
+                    # Agent signals from thesis_summary JSON
+                    ts_rows = conn_prior.execute(
+                        "SELECT thesis_summary FROM decisions WHERE ticker = ? "
+                        "ORDER BY decided_at DESC LIMIT 1", (ticker,)
+                    ).fetchall()
+                    if ts_rows and ts_rows[0][0]:
+                        ts_data = _json.loads(ts_rows[0][0])
+                        if "agent_signals" in ts_data:
+                            prior_agent_signals = ts_data["agent_signals"]
+                    # Crucible severity from memo_json
+                    mj_rows = conn_prior.execute(
+                        "SELECT memo_json FROM memos WHERE ticker = ? "
+                        "ORDER BY decided_at DESC LIMIT 1", (ticker,)
+                    ).fetchall()
+                    if mj_rows and mj_rows[0][0]:
+                        memo_data = _json.loads(mj_rows[0][0])
+                        prior_crucible_severity = memo_data.get("crucible_severity")
+                except (ValueError, TypeError):
+                    pass
+                # Store for drift detection in crucible step
+                self._prior_agent_signals_for_drift = prior_agent_signals
             finally:
                 conn_prior.close()
         except Exception:
@@ -1363,6 +1397,8 @@ class CycleOrchestrator:
                 prior_key_signal=prior_key_signal,
                 prior_decided_at=prior_decided_at,
                 ticker_analysis_count=ticker_analysis_count,
+                prior_agent_signals=prior_agent_signals,
+                prior_crucible_severity=prior_crucible_severity,
             )
         except Exception as exc:
             log_debug(
@@ -1460,11 +1496,26 @@ class CycleOrchestrator:
 
         signals: list[ArbitrationSignal] = []
         brier_data = self._get_persona_brier_data()
+        skipped_insufficient: list[str] = []
         for persona_name_str, raw_output in persona_results.items():
             dp = self._extract_directional_probability(persona_name_str, ticker, cycle_id, raw_output)
             if dp is not None:
+                # Skip agents with confidence=0 (INSUFFICIENT_DATA) — they had
+                # no relevant data and would only add noise to arbitration (IMP-2).
+                if dp.confidence == 0.0:
+                    skipped_insufficient.append(persona_name_str)
+                    continue
                 avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
                 signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
+
+        if skipped_insufficient:
+            log_debug(
+                "ARBITRATION_SKIP_INSUFFICIENT",
+                payload={"cycle_id": cycle_id, "ticker": ticker,
+                         "skipped": skipped_insufficient},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Skipped {len(skipped_insufficient)} INSUFFICIENT_DATA agents: {', '.join(skipped_insufficient)}",
+            )
 
         if not signals:
             transition(holding, HoldingState.ABORTED_LLM, "no_valid_directional_probs", cycle_id, op)
@@ -1512,6 +1563,27 @@ class CycleOrchestrator:
         """Steps 13f-13g: Crucible loop. Returns int (abort) or (holding, severity, op)."""
         from pmacs.engines.state_machine import transition
         from pmacs.schemas.contracts import HoldingState
+
+        # Inject signal drift warning into crucible context if prior cycle data exists
+        prior_signals = getattr(self, "_prior_agent_signals_for_drift", None)
+        if prior_signals:
+            try:
+                from pmacs.agents.episodic_context import compute_signal_drift
+                current_signals = [
+                    {"persona": str(dp.persona), "p_up": dp.p_up, "p_down": dp.p_down}
+                    for dp in getattr(arbitrated, "persona_outputs", [])
+                ]
+                drift = compute_signal_drift(prior_signals, current_signals)
+                if drift and drift.get("has_drift"):
+                    brief = brief + "\n\n" + drift["warning"]
+                    log_debug("SIGNAL_DRIFT_DETECTED",
+                        payload={"cycle_id": cycle_id, "ticker": ticker,
+                                 "drifted_personas": drift["drifted_personas"],
+                                 "max_drift": drift["max_drift"]},
+                        level="INFO", cycle_id=cycle_id,
+                        msg=f"Signal drift for {ticker}: {', '.join(drift['drifted_personas'])}")
+            except Exception:
+                pass
 
         holding = transition(holding, HoldingState.PHASE2_CRUCIBLE, "phase2_crucible_start", cycle_id, op)
         op += 1
@@ -1565,6 +1637,10 @@ class CycleOrchestrator:
                     crucible_severity = 0.5
 
                 crucible_iterations += 1
+                # Store attacks for downstream use (FIX-3: MemoWriter needs them)
+                crucible_attacks = crucible_data.get("attacks", [])
+                self._last_crucible_attacks = crucible_attacks
+
                 log_debug("CRUCIBLE_CYCLE_COMPLETE",
                     payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
                              "severity": crucible_severity},
@@ -1576,7 +1652,7 @@ class CycleOrchestrator:
                     break
                 elif crucible_severity >= 0.3 and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1:
                     crucible_state = "REWRITE"
-                    attacks = crucible_data.get("attacks", [])
+                    attacks = crucible_attacks
                     revised_evidence = _rebuild_evidence_brief(evidence_packets, attacks, arbitrated, ticker)
                     log_debug("CRUCIBLE_REWRITE_TRIGGERED",
                         payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
@@ -1663,12 +1739,14 @@ class CycleOrchestrator:
             elif hasattr(ledger, "total_value"):
                 portfolio_value = ledger.total_value
 
-        is_bootstrap = arbitrated.decision.value == "PROCEED_BOOTSTRAP_LOW_CONFIDENCE"
+        from pmacs.schemas.arbitration import ArbitrationDecision
+        is_bootstrap = arbitrated.decision == ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE
         sizing_result = size_position(SizingInputs(
             p_up=arbitrated.p_up, p_down=arbitrated.p_down,
             target_gain_pct=ev_result.target_gain_pct, stop_loss_pct=ev_result.stop_loss_pct,
             matured_sources_used=arbitrated.matured_sources_used,
             is_limited_history=is_bootstrap,
+            is_bootstrap=is_bootstrap,
             portfolio_value_usd=portfolio_value, current_price=current_price,
         ))
 
@@ -1701,7 +1779,10 @@ class CycleOrchestrator:
         from pmacs.schemas.conviction import VerdictTier
         conviction_score = compute_conviction(arb=arbitrated, crucible_severity=crucible_severity,
                                               ev_multiple=ev_result.ev_multiple, is_bootstrap=is_bootstrap)
-        verdict = verdict_tier(conviction_score)
+        # Pass holding context so active positions with valid thesis get HOLD
+        _is_active = getattr(holding, 'state', None) in ('ACTIVE', 'MONITORING')
+        verdict = verdict_tier(conviction_score, is_active_holding=_is_active,
+                               thesis_valid=True, is_bootstrap=is_bootstrap)
         log_debug("SYMBOL_CONVICTION_COMPUTED",
             payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
                      "conviction_score": conviction_score, "verdict": verdict.value},
@@ -1726,9 +1807,9 @@ class CycleOrchestrator:
         if ledger is not None and hasattr(ledger, "position_count"):
             current_position_count = ledger.position_count
         elif ledger is not None:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
-                row = conn.execute("SELECT COUNT(*) FROM holdings WHERE state = 'ACTIVE'").fetchone()
+                row = conn.execute("SELECT COUNT(*) FROM holdings WHERE state IN ('ACTIVE', 'MONITORING')").fetchone()
                 current_position_count = row[0] if row else 0
             finally:
                 conn.close()
@@ -1776,12 +1857,27 @@ class CycleOrchestrator:
 
         # 13m: Memo (best effort)
         try:
+            # IMP-3: Extract forensics quality from persona results
+            forensics_quality = None
+            forensics_key = "forensics"
+            if hasattr(self, "_last_persona_results") and forensics_key in self._last_persona_results:
+                try:
+                    import json as _fj
+                    fraw = getattr(self._last_persona_results[forensics_key], "raw_output", "")
+                    if fraw:
+                        fdata = _fj.loads(fraw)
+                        forensics_quality = fdata.get("earnings_quality", None)
+                except Exception:
+                    pass
+
             memo_runner = MemoWriterRunner()
             memo_runner.set_analytical_context(
                 arbitrated=arbitrated,
                 verdict=verdict,
                 conviction_score=conviction_score,
                 crucible_severity=crucible_severity,
+                crucible_attacks=self._last_crucible_attacks,
+                forensics_quality=forensics_quality,
                 persona_outputs=getattr(arbitrated, "persona_outputs", None),
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
@@ -1799,17 +1895,25 @@ class CycleOrchestrator:
                 level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), continuing (best effort)")
 
-        # 13n: Scan record
+        # 13n: Scan record (IMP-6: persist price at decision time)
         now_iso = datetime.now(timezone.utc).isoformat()
+        current_price = getattr(self, '_current_price', 0.0)
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
+                # IMP-6: add price_usd column if missing (migration)
+                try:
+                    conn.execute("ALTER TABLE scan_records ADD COLUMN price_usd REAL")
+                    conn.commit()
+                except Exception:
+                    pass
                 conn.execute(
                     "INSERT INTO scan_records "
-                    "(ticker, cycle_id, verdict, conviction_score, direction, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(ticker, cycle_id, verdict, conviction_score, direction, created_at, price_usd) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (ticker, cycle_id, verdict.value, conviction_score,
-                     "UP" if arbitrated.p_up > arbitrated.p_down else "DOWN", now_iso),
+                     "UP" if arbitrated.p_up > arbitrated.p_down else "DOWN", now_iso,
+                     current_price if current_price > 0 else None),
                 )
                 conn.commit()
             finally:
@@ -1819,6 +1923,42 @@ class CycleOrchestrator:
                 payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
                 level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
                 msg=f"Scan record write failed for {ticker}: {exc}")
+
+        # 13n+: DuckDB persona affinity + Qdrant thesis embedding
+        try:
+            duck = self._get_duckdb_adapter()
+            if duck is not None:
+                for dp in getattr(arbitrated, "persona_outputs", []):
+                    try:
+                        persona_name = dp.persona.value if hasattr(dp.persona, "value") else str(dp.persona)
+                        duck.update_persona_affinity(
+                            persona=persona_name,
+                            ticker=ticker,
+                            brier=0.667,  # uninformed 3-state prior until resolution
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        try:
+            qdrant = self._get_qdrant_adapter()
+            if qdrant is not None:
+                thesis_text = getattr(holding, "thesis_summary", "") or ""
+                if thesis_text:
+                    qdrant.upsert_with_embedding(
+                        collection="theses",
+                        id=f"{cycle_id}_{ticker}",
+                        text=thesis_text[:2000],
+                        payload={
+                            "cycle_id": cycle_id,
+                            "ticker": ticker,
+                            "verdict": verdict.value if hasattr(verdict, "value") else str(verdict),
+                            "conviction": conviction_score,
+                        },
+                    )
+        except Exception:
+            pass
 
         return op + 2
 
@@ -2029,7 +2169,7 @@ class CycleOrchestrator:
         # 13p: Catastrophe net stop
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 conn.execute(
                     "INSERT INTO stop_events "
@@ -2205,7 +2345,7 @@ class CycleOrchestrator:
             # Body cost from token counts (use $0/m token conservative fallback)
             # Actual pricing comes from pricing.py cache when available
             from pmacs.billing.pricing import get_pricing
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 pricing = get_pricing(conn, model_id)
             finally:
@@ -2240,7 +2380,7 @@ class CycleOrchestrator:
             )
 
             duckdb_adapter = self._get_duckdb_adapter()
-            sqlite_conn = sqlite3.connect(str(self._db_path))
+            sqlite_conn = _sql_connect(self._db_path)
             try:
                 log_usage(sqlite_conn, duckdb_adapter, call_record, estimated)
             finally:
@@ -2410,7 +2550,7 @@ class CycleOrchestrator:
         """Close cycle with ABORTED state and emit cycle.interrupted SSE (S5-2)."""
         now = datetime.now(timezone.utc).isoformat()
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             conn.execute(
                 "UPDATE cycles SET state = 'ABORTED', closed_at = ? WHERE cycle_id = ?",
@@ -2656,6 +2796,14 @@ class CycleOrchestrator:
         except ValueError:
             return None
 
+        # Extract confidence; force to 0.0 for INSUFFICIENT_DATA signals
+        # so arbitration skips agents that had no relevant data (IMP-2).
+        confidence = data.get("confidence", 0.5)
+        anomaly = data.get("anomaly", "")
+        signal = data.get("signal", "")
+        if anomaly == "INSUFFICIENT_DATA" or signal == "INSUFFICIENT_DATA":
+            confidence = 0.0
+
         try:
             return DirectionalProbability(
                 persona=persona_enum,
@@ -2663,6 +2811,7 @@ class CycleOrchestrator:
                 p_up=float(p_up),
                 p_flat=float(p_flat),
                 p_down=float(p_down),
+                confidence=float(confidence),
                 evidence_ids=data.get("evidence_ids", []),
                 cycle_id=cycle_id,
             )
@@ -2776,7 +2925,7 @@ class CycleOrchestrator:
         """Step 14: Re-evaluate active holdings >= 7 days since last re-eval."""
         from datetime import date, timedelta
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             rows = conn.execute(
                 "SELECT id, ticker, entry_price_usd, position_size_usd, "
@@ -2836,6 +2985,8 @@ class CycleOrchestrator:
                                 persona_name_str, ticker, cycle_id, raw_output,
                             )
                             if dp is not None:
+                                if dp.confidence == 0.0:
+                                    continue  # Skip INSUFFICIENT_DATA (IMP-2)
                                 avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
                                 signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
 
@@ -2940,7 +3091,7 @@ class CycleOrchestrator:
     def _step_thesis_aging(self, cycle_id: str) -> None:
         """Step 15: Mandatory re-eval for holdings >= 90 days old."""
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, entry_date FROM holdings WHERE state = 'ACTIVE'"
@@ -3027,7 +3178,7 @@ class CycleOrchestrator:
 
         active_holdings: list[Holding] = []
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, state, entry_price_usd, position_size_usd, "
@@ -3106,7 +3257,7 @@ class CycleOrchestrator:
         # Collect resolved holdings with verdict and outcome data
         resolutions: list[dict] = []
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT ticker, verdict, actual_outcome, p_up, p_flat, p_down "
@@ -3186,7 +3337,7 @@ class CycleOrchestrator:
         false_severity_count = 0
         total_crucible_attacks = 0
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM scan_records WHERE direction = 'UP' "
@@ -3227,7 +3378,7 @@ class CycleOrchestrator:
 
         attributed = 0
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT ticker, verdict, actual_outcome FROM resolutions "
@@ -3278,7 +3429,7 @@ class CycleOrchestrator:
         # Check antipatterns for all tickers processed this cycle
         checked = 0
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT DISTINCT ticker FROM scan_records WHERE cycle_id = ?",
@@ -3310,7 +3461,7 @@ class CycleOrchestrator:
 
         lessons_extracted = 0
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT ticker, verdict, actual_outcome, failure_taxonomy, thesis "
@@ -3343,7 +3494,7 @@ class CycleOrchestrator:
                             pass
                     # Write lesson to SQLite
                     try:
-                        conn2 = sqlite3.connect(str(self._db_path))
+                        conn2 = _sql_connect(self._db_path)
                         try:
                             conn2.execute(
                                 "INSERT INTO lessons "
@@ -3406,7 +3557,7 @@ class CycleOrchestrator:
 
         classified = 0
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT id, ticker, state, entry_price_usd, exit_price_usd, "
@@ -3456,7 +3607,7 @@ class CycleOrchestrator:
 
                 # Write classification to SQLite
                 try:
-                    conn2 = sqlite3.connect(str(self._db_path))
+                    conn2 = _sql_connect(self._db_path)
                     try:
                         conn2.execute(
                             "INSERT INTO failure_classifications "
@@ -3541,7 +3692,7 @@ class CycleOrchestrator:
         # Build SQLite connection for cross-checks
         sqlite_conn = None
         try:
-            sqlite_conn = sqlite3.connect(str(self._db_path))
+            sqlite_conn = _sql_connect(self._db_path)
         except Exception:
             pass
 
@@ -3620,7 +3771,7 @@ class CycleOrchestrator:
         """
         for attempt in range(retries):
             try:
-                conn = sqlite3.connect(str(self._db_path))
+                conn = _sql_connect(self._db_path)
                 try:
                     conn.execute(sql, params)
                     conn.commit()
@@ -3683,7 +3834,7 @@ class CycleOrchestrator:
         from pmacs.engines.override_learning import cluster_overrides
 
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 rows = conn.execute(
                     "SELECT original_verdict, override_verdict, ticker "
@@ -3716,7 +3867,7 @@ class CycleOrchestrator:
     @staticmethod
     def _current_mode(db_path: Path) -> str:
         """Read current mode from mode_history or default to INSTALLING."""
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             row = conn.execute(
                 "SELECT to_mode FROM mode_history ORDER BY id DESC LIMIT 1"
@@ -3763,7 +3914,7 @@ def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) 
     now = datetime.now(timezone.utc).isoformat()
     mode = _current_mode(db_path)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             "INSERT INTO cycles (cycle_id, opened_at, closed_at, state, trigger, mode) "
@@ -3820,7 +3971,7 @@ def close_cycle(cycle_id: str, db_path: Path, audit_path: Path | None = None) ->
     """
     now = datetime.now(timezone.utc).isoformat()
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             "UPDATE cycles SET state = 'CLOSED', closed_at = ? WHERE cycle_id = ?",

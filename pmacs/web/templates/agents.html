@@ -11,19 +11,33 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-{% if not current_ticker and not is_cycle_running %}
-<div id="no-cycle-banner" class="card card-elevated border-accent/20 mb-8 flex items-center justify-between reveal">
-    <div class="flex items-center gap-3">
-        <div class="w-8 h-8 rounded-full bg-accent-soft flex items-center justify-center">
-            <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
+
+<!-- Current Ticker Panel — always first -->
+<div id="current-ticker-panel" class="card card-elevated {{ 'card-accent-blue' if is_cycle_running else '' }} mb-4 reveal" data-stagger>
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <span id="current-ticker-dot" class="w-2.5 h-2.5 rounded-full {{ 'bg-blue-500 anim-breathing' if is_cycle_running else 'bg-border-strong' }}"></span>
+            <h3 id="current-ticker-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">{{ 'Current Ticker' if is_cycle_running else 'Ready' }}</h3>
         </div>
-        <span class="text-sm text-accent font-medium">No active cycle. Showing last completed cycle.</span>
+        <span id="current-ticker" class="font-mono text-2xl font-bold text-accent truncate max-w-xs {{ '' if current_ticker else 'hidden' }}">{{ current_ticker or '' }}</span>
+        <button type="button" id="run-full-cycle-btn" onclick="runCycleNow()" class="px-4 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium whitespace-nowrap {{ 'hidden' if current_ticker else '' }}">Run full cycle</button>
     </div>
-    <button type="button" onclick="runCycleNow()" class="px-4 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium">Run new cycle</button>
 </div>
-{% endif %}
+
+<!-- Next Up Panel — second ticker in queue -->
+<div id="next-up-panel" class="card card-elevated mb-4 reveal" data-stagger>
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-border-strong"></span>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Next Up</h3>
+        </div>
+        {% if next_ticker %}
+        <span id="next-ticker" class="font-mono text-lg font-semibold text-text-secondary truncate max-w-xs block">{{ next_ticker }}</span>
+        {% else %}
+        <span id="next-ticker" class="text-sm text-text-muted">No ticker queued</span>
+        {% endif %}
+    </div>
+</div>
 
 <!-- Solo Research Runner -->
 <div class="card card-elevated mb-8 reveal" data-stagger>
@@ -32,7 +46,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
         </svg>
         <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Research</h3>
-        <span class="text-[10px] text-text-muted">Analyze any ticker</span>
+        <span class="text-[10px] text-text-muted">Analyze a single ticker</span>
     </div>
     <div class="flex items-center gap-2">
         <input id="solo-ticker-input" type="text" placeholder="e.g. AAPL, TSLA, NVDA"
@@ -47,18 +61,6 @@
     <div id="solo-status" class="hidden mt-2">
         <p class="text-xs text-text-muted" id="solo-status-text">Preparing...</p>
     </div>
-</div>
-
-<!-- Queue info + link to Pipeline -->
-<div class="flex flex-wrap items-center justify-between gap-2 mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2">
-        <span class="text-xs text-text-muted">Queue: <span class="font-mono font-medium text-text-primary">{{ queue|length }} ticker{{ 's' if queue|length != 1 else '' }}</span></span>
-        <a href="/pipeline" class="text-xs text-accent hover:underline font-medium">Manage queue →</a>
-    </div>
-    <a href="/" class="text-xs text-text-muted hover:text-accent transition-colors font-medium flex items-center gap-1.5">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-        Dashboard →
-    </a>
 </div>
 
 <!-- Result Cards Carousel -->
@@ -87,21 +89,6 @@
     </div>
 </div>
 
-<!-- Current ticker panel -->
-<div class="card card-elevated {{ 'card-accent-blue' if is_cycle_running else '' }} mb-8 reveal" data-stagger>
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full {{ 'bg-blue-500 anim-breathing' if is_cycle_running else 'bg-text-muted' }}"></span>
-            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">{{ 'Current Analysis' if is_cycle_running else 'Next Up' }}</h3>
-        </div>
-        {% if current_ticker %}
-        <span id="current-ticker" class="font-mono text-xl font-bold {{ 'text-accent' if is_cycle_running else 'text-text-secondary' }} truncate max-w-xs block">{{ current_ticker }}</span>
-        {% else %}
-        <span id="current-ticker" class="text-sm text-text-muted">No ticker queued</span>
-        {% endif %}
-    </div>
-</div>
-
 <!-- Ticker History Pills (review completed tickers) -->
 <div id="ticker-history-bar" class="hidden mb-6 reveal" data-stagger>
     <div class="flex items-center gap-2 flex-wrap">
@@ -114,7 +101,7 @@
 </div>
 
 <!-- 9 persona cards in a responsive grid -->
-<div class="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
     {% for persona in personas %}
     {% set status_accent = 'blue' if persona.status == 'running' else 'green' if persona.status == 'complete' else 'red' if persona.status == 'error' else '' %}
     <div class="card card-elevated {{ 'card-accent-' + status_accent if status_accent else '' }} reveal"
@@ -244,6 +231,7 @@
 
     <!-- Process tab: 5-step pipeline timeline -->
     <div id="viz-process" class="space-y-2 py-2">
+        <p id="process-idle-hint" class="text-[11px] text-text-muted text-center py-1 pb-2 opacity-60">Waiting for a cycle to start — stages will animate live</p>
         <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="data_fetch">
             <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
             <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Data Fetch</span>
@@ -307,21 +295,26 @@
             Run a cycle to see conviction breakdown.
         </div>
         <div id="conviction-blocks" class="hidden space-y-2">
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div class="p-3 bg-surface-sunken/50 rounded-xl">
                     <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Direction</p>
                     <p class="text-lg font-mono font-bold text-text-primary" id="cv-direction">—</p>
-                    <p class="text-[10px] text-text-muted mt-0.5">avg p_up − p_down</p>
+                    <p class="text-[10px] text-text-muted mt-0.5">p_up − p_down</p>
                 </div>
                 <div class="p-3 bg-surface-sunken/50 rounded-xl">
                     <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Maturity</p>
                     <p class="text-lg font-mono font-bold text-text-primary" id="cv-maturity">—</p>
-                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-maturity-sub">bootstrap factor</p>
+                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-maturity-sub">bootstrap = 1.0</p>
                 </div>
                 <div class="p-3 bg-surface-sunken/50 rounded-xl">
                     <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Crucible</p>
                     <p class="text-lg font-mono font-bold" id="cv-crucible">—</p>
-                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-crucible-sub">1 − severity</p>
+                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-crucible-sub">1 − sev<sup>0.7</sup></p>
+                </div>
+                <div class="p-3 bg-surface-sunken/50 rounded-xl">
+                    <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">EV Factor</p>
+                    <p class="text-lg font-mono font-bold text-text-primary" id="cv-ev">—</p>
+                    <p class="text-[10px] text-text-muted mt-0.5" id="cv-ev-sub">ev / 1.5, cap 1.0</p>
                 </div>
                 <div class="p-3 rounded-xl border-2 border-accent/30">
                     <p class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1">Conviction</p>
@@ -330,28 +323,72 @@
                 </div>
             </div>
             <div class="px-2 pt-1 border-t border-border-subtle">
-                <p class="text-[10px] text-text-muted font-mono">Threshold: HOLD ≥ 0.10 · BUY ≥ 0.30 · STRONG_BUY ≥ 0.60</p>
+                <p class="text-[10px] text-text-muted font-mono">Bootstrap: HOLD ≥ 0.05 · BUY ≥ 0.15 · STRONG_BUY ≥ 0.40</p>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Cycle Log (live SSE feed) -->
+<!-- Session Stats — replaces old Cycle Log -->
 <div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Cycle Log</h3>
+            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Session Stats</h3>
         </div>
-        <button type="button" id="cycle-log-clear"
-                class="text-[10px] text-text-muted hover:text-text-primary transition-colors font-medium px-2 py-1 rounded-lg hover:bg-surface-sunken">
-            Clear
-        </button>
+        <span id="session-total" class="text-xs text-text-muted font-mono">{{ session_stats.total }} decisions</span>
     </div>
-    <div id="cycle-log-feed" class="max-h-48 overflow-y-auto space-y-0.5">
-        <div id="cycle-log-empty" class="flex items-center justify-center py-6 text-xs text-text-muted">
-            Waiting for cycle activity…
+
+    <!-- Verdict distribution bar -->
+    <div class="mb-4">
+        <div class="flex gap-0.5 w-full h-3 rounded-lg overflow-hidden" id="verdict-distribution-bar">
+            {% set vc = session_stats.verdict_counts %}
+            {% set total = [vc.STRONG_BUY + vc.BUY + vc.HOLD + vc.SKIP, 1]|max %}
+            <div class="bg-positive transition-all duration-500" style="width: {{ (vc.STRONG_BUY / total * 100)|int }}%" title="{{ vc.STRONG_BUY }} STRONG_BUY"></div>
+            <div class="bg-accent transition-all duration-500" style="width: {{ (vc.BUY / total * 100)|int }}%" title="{{ vc.BUY }} BUY"></div>
+            <div class="bg-amber-400 transition-all duration-500" style="width: {{ (vc.HOLD / total * 100)|int }}%" title="{{ vc.HOLD }} HOLD"></div>
+            <div class="bg-negative transition-all duration-500" style="width: {{ (vc.SKIP / total * 100)|int }}%" title="{{ vc.SKIP }} SKIP"></div>
         </div>
+        <div class="flex justify-between mt-1.5">
+            <div class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-positive"></span>
+                <span class="text-[10px] font-mono text-text-muted">SB {{ vc.STRONG_BUY }}</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-accent"></span>
+                <span class="text-[10px] font-mono text-text-muted">BUY {{ vc.BUY }}</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span class="text-[10px] font-mono text-text-muted">HOLD {{ vc.HOLD }}</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-negative"></span>
+                <span class="text-[10px] font-mono text-text-muted">SKIP {{ vc.SKIP }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Key metrics row -->
+    <div class="grid grid-cols-3 sm:grid-cols-3 gap-2 sm:gap-3">
+        <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
+            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Avg Conv.</p>
+            <p class="text-base sm:text-lg font-mono font-bold {{ 'text-positive' if session_stats.avg_conviction >= 0.3 else 'text-accent' if session_stats.avg_conviction >= 0.1 else 'text-text-muted' }}" id="session-avg-conviction">{{ "%.0f"|format(session_stats.avg_conviction * 100) }}%</p>
+        </div>
+        <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
+            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Best Ticker</p>
+            <p class="text-base sm:text-lg font-mono font-bold {{ 'text-positive' if session_stats.best_ticker else 'text-text-muted' }}" id="session-best-ticker">{{ session_stats.best_ticker or '—' }}</p>
+            <p class="text-[9px] sm:text-[10px] text-text-muted font-mono">{{ "%.0f"|format(session_stats.best_conviction * 100) + "%" if session_stats.best_ticker else '—' }}</p>
+        </div>
+        <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
+            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Pipeline</p>
+            <p class="text-base sm:text-lg font-mono font-bold text-text-muted" id="session-pipeline-stage">Idle</p>
+        </div>
+    </div>
+
+    <!-- Live activity feed (compact, 4 lines max) -->
+    <div id="cycle-log-feed" class="hidden mt-3 pt-3 border-t border-border-subtle max-h-24 overflow-y-auto space-y-0.5">
+        <div id="cycle-log-empty" class="hidden"></div>
     </div>
 </div>
 
@@ -394,7 +431,7 @@
 // This queue staggers the DOM updates so each card visibly transitions separately.
 var _agentUpdateQueue = [];
 var _agentUpdateTimer = null;
-var AGENT_STAGGER_MS = 120;
+var AGENT_STAGGER_MS = 60;
 
 // Debounced sankey refresh — collapses 7 parallel agent.complete calls into 1 fetch
 var _sankeyRefreshTimer = null;
@@ -428,6 +465,7 @@ function _drainAgentQueue() {
 // ─── Result Cards ─────────────────────────────────────────────────────────────
 var _completedCards = [];      // [{ticker, verdict, conviction, ev_pct, target_usd, crucible, signals}]
 var _currentCardIdx = 0;
+var _cycleTickers = [];        // full ticker list for current cycle (from cycle.opened)
 var _pendingSignals = {};      // ticker → [{name, p_up, p_down}]
 var _pendingCrucible = {};     // ticker → {severity, thesis_survives}
 var _tickerHistory = {};       // ticker → {agentResults, signals, crucible, arbitration, verdict, conviction}
@@ -778,6 +816,8 @@ function _stepSetStatus(stepId, status, timingMs) {
     var bar = row.querySelector("[data-step-bar]");
     var timeEl = row.querySelector("[data-step-time]");
     if (status === "running") {
+        var hint = document.getElementById("process-idle-hint");
+        if (hint) hint.style.display = "none";
         dot.className = "w-2 h-2 rounded-full bg-accent anim-breathing shrink-0";
         bar.style.width = "50%";
         bar.className = "h-full bg-accent rounded-full transition-all duration-500";
@@ -803,6 +843,34 @@ function _resetProcessSteps() {
         _stepSetStatus(s, "pending");
     });
     _stepStartTimes = {};
+    var hint = document.getElementById("process-idle-hint");
+    if (hint) hint.style.display = "";
+}
+
+function _updateReadyPanelActive(ticker) {
+    var tickerEl = document.getElementById("current-ticker");
+    var btn = document.getElementById("run-full-cycle-btn");
+    var dot = document.getElementById("current-ticker-dot");
+    var heading = document.getElementById("current-ticker-heading");
+    var panel = document.getElementById("current-ticker-panel");
+    if (tickerEl) { tickerEl.textContent = ticker; tickerEl.classList.remove("hidden"); }
+    if (btn) btn.classList.add("hidden");
+    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-blue-500 anim-breathing";
+    if (heading) heading.textContent = "Current Ticker";
+    if (panel) panel.classList.add("card-accent-blue");
+}
+
+function _resetReadyPanel() {
+    var tickerEl = document.getElementById("current-ticker");
+    var btn = document.getElementById("run-full-cycle-btn");
+    var dot = document.getElementById("current-ticker-dot");
+    var heading = document.getElementById("current-ticker-heading");
+    var panel = document.getElementById("current-ticker-panel");
+    if (tickerEl) { tickerEl.textContent = ""; tickerEl.classList.add("hidden"); }
+    if (btn) btn.classList.remove("hidden");
+    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-border-strong";
+    if (heading) heading.textContent = "Ready";
+    if (panel) panel.classList.remove("card-accent-blue");
 }
 
 // ─── Signals tab ──────────────────────────────────────────────────────────────
@@ -858,11 +926,16 @@ function _renderConviction(arb, crucible) {
 
     var direction = arb.direction !== undefined ? arb.direction : (arb.p_up - arb.p_down);
     var severity = crucible ? (crucible.severity || 0) : 0;
-    var crucibleFactor = Math.max(0, 1 - severity);
-    var maturity = 1.0; // default when no cycle count available
-    var conviction = Math.abs(direction) * maturity * crucibleFactor;
+    // Match engine: amplified severity = severity^0.7 (conviction.py L48)
+    var amplifiedSeverity = Math.pow(severity, 0.7);
+    var crucibleFactor = Math.max(0, 1 - amplifiedSeverity);
+    var maturity = 1.0; // bootstrap mode (maturity_factor=1.0)
+    // EV factor: ev_multiple / 1.5, capped at 1.0 (conviction.py L52)
+    var evFactor = arb.ev_multiple !== undefined ? Math.max(0, Math.min(arb.ev_multiple / 1.5, 1.0)) : 0.67;
+    var conviction = direction * maturity * crucibleFactor * evFactor;
 
-    var verdict = conviction >= 0.6 ? "STRONG_BUY" : conviction >= 0.3 ? "BUY" : conviction >= 0.1 ? "HOLD" : "SKIP";
+    // Bootstrap thresholds (conviction.py L79-85)
+    var verdict = conviction >= 0.40 ? "STRONG_BUY" : conviction >= 0.15 ? "BUY" : conviction >= 0.05 ? "HOLD" : "SKIP";
     var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
     var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
 
@@ -881,7 +954,16 @@ function _renderConviction(arb, crucible) {
     }
     if (crucSubEl && crucible) {
         var survives = crucible.thesis_survives;
-        crucSubEl.textContent = "1 − " + Math.round(severity * 100) + "% severity" + (survives ? " ✓" : " ✗");
+        crucSubEl.textContent = "1 − " + Math.round(severity * 100) + "%^0.7" + (survives ? " ✓" : " ✗");
+    }
+    var evEl = document.getElementById("cv-ev");
+    var evSubEl = document.getElementById("cv-ev-sub");
+    if (evEl) {
+        evEl.textContent = evFactor.toFixed(2);
+        evEl.className = "text-lg font-mono font-bold " + (evFactor >= 0.5 ? "text-positive" : evFactor > 0 ? "text-amber-400" : "text-negative");
+    }
+    if (evSubEl) {
+        evSubEl.textContent = arb.ev_multiple !== undefined ? "ev=" + arb.ev_multiple.toFixed(2) : "estimated";
     }
     if (convEl) {
         convEl.textContent = conviction.toFixed(3);
@@ -1040,13 +1122,26 @@ function runSoloAnalysis() {
         return;
     }
 
+    // Optimistic UI: show running state IMMEDIATELY before fetch returns
     if (btn) { btn.disabled = true; btn.classList.add("opacity-60", "cursor-not-allowed"); btn.textContent = "Running..."; }
     if (statusDiv) statusDiv.classList.remove("hidden");
-    if (statusText) statusText.textContent = "Analyzing " + ticker + "... ~20 seconds.";
+    if (statusText) statusText.textContent = "Analyzing " + ticker + "...";
     input.disabled = true;
 
     _activeHistoryTicker = null;
     _renderTickerHistoryPills();
+
+    // Instant visual: set all persona cards to "queued" state + start process steps
+    _resetProcessSteps();
+    _updateReadyPanelActive(ticker);
+    _stepSetStatus("data_fetch", "running");
+    document.querySelectorAll("[data-persona]").forEach(function(card) {
+        var badge = card.querySelector("[data-status-badge]");
+        var bar = card.querySelector("[data-progress-bar]");
+        if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
+        if (bar) { bar.classList.add("indeterminate"); bar.style.width = "25%"; }
+        card.classList.add("card-accent-blue");
+    });
 
     fetch("/api/solo/run", {
         method: "POST",
@@ -1055,7 +1150,7 @@ function runSoloAnalysis() {
     }).then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.ok) {
-            if (typeof showToast === "function") showToast("Solo analysis started for " + ticker, "info");
+            if (typeof showToast === "function") showToast("Analyzing " + ticker, "info", 2000);
             var banner = document.getElementById("no-cycle-banner");
             if (banner) banner.style.display = "none";
         } else {
@@ -1097,8 +1192,26 @@ function _cycleLogAdd(eventType, description) {
     _cycleLogEntries.unshift({ts: ts, type: eventType, desc: description});
     if (_cycleLogEntries.length > _CYCLE_LOG_MAX) _cycleLogEntries.pop();
 
+    // Update pipeline stage indicator
+    var stageEl = document.getElementById("session-pipeline-stage");
+    if (stageEl) {
+        var stageMap = {
+            "data_fetch_start": "Fetching", "data_fetch_done": "Data OK",
+            "agents_start": "Agents", "agents_done": "Agents OK",
+            "crucible_start": "Crucible", "crucible_done": "Crucible OK",
+            "arbitration": "Arbitration", "decision": "Deciding",
+            "memo": "Writing memo", "complete": "Done",
+        };
+        var stage = description.split("→").pop().trim();
+        if (stageMap[stage]) {
+            stageEl.textContent = stageMap[stage];
+            stageEl.className = "text-lg font-mono font-bold text-accent";
+        }
+    }
+
     var feed = document.getElementById("cycle-log-feed");
     if (!feed) return;
+    feed.classList.remove("hidden");
     var empty = document.getElementById("cycle-log-empty");
     if (empty) empty.classList.add("hidden");
 
@@ -1109,10 +1222,9 @@ function _cycleLogAdd(eventType, description) {
     // Prepend newest entry at top
     var typeColor = _LOG_TYPE_COLOR[eventType] || "bg-surface-sunken text-text-muted";
     var row = document.createElement("div");
-    row.className = "flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+    row.className = "flex items-start gap-2 py-1 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
     row.innerHTML =
-        '<span class="text-[10px] font-mono text-text-muted shrink-0 mt-0.5">' + escapeHtml(ts) + '</span>' +
-        '<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ' + typeColor + '">' + escapeHtml(eventType) + '</span>' +
+        '<span class="text-[10px] font-mono text-text-muted shrink-0">' + escapeHtml(ts) + '</span>' +
         '<span class="text-[11px] text-text-secondary leading-snug">' + escapeHtml(description) + '</span>';
     var firstChild = feed.querySelector(":not(#cycle-log-empty)");
     feed.insertBefore(row, firstChild || null);
@@ -1174,19 +1286,37 @@ function _initAgentsPageUI() {
     fetch("/agents/sankey-data")
         .then(function(r) { return r.json(); })
         .then(function(d) {
-            if (d.is_running) {
-                var banner = document.getElementById("no-cycle-banner");
-                if (banner) banner.style.display = "none";
+            // Seed cycle ticker list so Next Up works even on mid-cycle page loads
+            if (d.cycle_tickers && d.cycle_tickers.length > 0) {
+                _cycleTickers = d.cycle_tickers;
+                // Seed Next Up from current processing position
+                var activeTicker = d.current_ticker_processing || d.ticker || "";
+                if (activeTicker) {
+                    _updateReadyPanelActive(activeTicker);
+                    var curIdx = _cycleTickers.indexOf(activeTicker);
+                    var nextEl = document.getElementById("next-ticker");
+                    if (nextEl) {
+                        if (curIdx >= 0 && curIdx + 1 < _cycleTickers.length) {
+                            nextEl.textContent = _cycleTickers[curIdx + 1];
+                            nextEl.className = "font-mono text-lg font-semibold text-text-secondary truncate max-w-xs block";
+                        } else {
+                            nextEl.textContent = "No ticker queued";
+                            nextEl.className = "text-sm text-text-muted";
+                        }
+                    }
+                }
+            } else if (d.is_running && d.ticker) {
+                _updateReadyPanelActive(d.ticker);
             }
             _renderSignals(d.personas || []);
             _renderConviction(d.arbitration_result, d.crucible_result);
             if (d.stages) {
                 var stageToStep = {
-                    "evidence": "data_fetch",
-                    "personas": "agents_running",
+                    "data_fetch": "data_fetch",
+                    "agents_running": "agents_running",
                     "crucible": "crucible",
                     "arbitration": "arbitration",
-                    "verdict": "decision",
+                    "decision": "decision",
                 };
                 d.stages.forEach(function(stage) {
                     var stepId = stageToStep[stage.id];
@@ -1209,28 +1339,51 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
     if (typeof onSSE === "function") {
         onSSE("cycle", function (data) {
             if (data.event_type === "ticker_progress") {
-                var tickerEl = document.getElementById("current-ticker");
-                if (tickerEl && data.ticker) {
-                    tickerEl.textContent = data.ticker;
-                    tickerEl.className = "font-mono text-xl font-bold text-accent";
-                }
-                // Update process step
-                if (data.step) {
-                    _stepSetStatus(data.step, "running");
-                    // Mark prior steps done
-                    var order = ["data_fetch","agents_running","crucible","arbitration","decision"];
-                    var idx = order.indexOf(data.step);
-                    for (var i = 0; i < idx; i++) { _stepSetStatus(order[i], "done"); }
-                }
-                if (data.step === "data_fetch") {
+                if (data.ticker) { _updateReadyPanelActive(data.ticker); }
+                // Map backend step values → UI step IDs + state
+                var stepMap = {
+                    "data_fetch_start":  {id: "data_fetch",    state: "running"},
+                    "data_fetch_done":   {id: "data_fetch",    state: "done"},
+                    "agents_start":      {id: "agents_running", state: "running"},
+                    "agents_done":       {id: "agents_running", state: "done"},
+                    "crucible_start":    {id: "crucible",      state: "running"},
+                    "crucible_done":     {id: "crucible",      state: "done"},
+                    "arbitration":       {id: "arbitration",   state: "running"},
+                    "decision":          {id: "decision",      state: "running"},
+                };
+                var stepOrder = ["data_fetch","agents_running","crucible","arbitration","decision"];
+                if (data.step === "data_fetch_start") {
+                    // New ticker starting — reset UI
                     _activeHistoryTicker = null;
                     _resetProcessSteps();
-                    _stepSetStatus("data_fetch", "running");
                     document.querySelectorAll("[data-analysis-text]").forEach(function(el) {
                         el.innerHTML = "";
                         el.style.maxHeight = "0";
                     });
                     _renderTickerHistoryPills();
+                    // Update Next Up: show ticker after the current one
+                    if (data.ticker && _cycleTickers.length > 0) {
+                        var curIdx = _cycleTickers.indexOf(data.ticker);
+                        var nextEl = document.getElementById("next-ticker");
+                        if (nextEl) {
+                            if (curIdx >= 0 && curIdx + 1 < _cycleTickers.length) {
+                                nextEl.textContent = _cycleTickers[curIdx + 1];
+                                nextEl.className = "font-mono text-lg font-semibold text-text-secondary truncate max-w-xs block";
+                            } else {
+                                nextEl.textContent = "No ticker queued";
+                                nextEl.className = "text-sm text-text-muted";
+                            }
+                        }
+                    }
+                }
+                var mapped = stepMap[data.step];
+                if (mapped) {
+                    _stepSetStatus(mapped.id, mapped.state);
+                    // Mark prior steps done when a step starts
+                    if (mapped.state === "running") {
+                        var idx = stepOrder.indexOf(mapped.id);
+                        for (var i = 0; i < idx; i++) { _stepSetStatus(stepOrder[i], "done"); }
+                    }
                 }
                 _cycleLogAdd("ticker_progress", (data.ticker || "") + " → " + (data.step || ""));
             }
@@ -1242,13 +1395,28 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _cycleLogAdd("cycle.opened", "Cycle started" + (data.cycle_id ? " " + data.cycle_id : ""));
                 var banner = document.getElementById("no-cycle-banner");
                 if (banner) banner.style.display = "none";
+                // Store ticker list for Next Up tracking
+                if (data.tickers) { _cycleTickers = data.tickers; }
+                // Seed Next Up panel with second ticker in queue
+                if (_cycleTickers.length > 1) {
+                    var nextEl = document.getElementById("next-ticker");
+                    if (nextEl) {
+                        nextEl.textContent = _cycleTickers[1];
+                        nextEl.className = "font-mono text-lg font-semibold text-text-secondary truncate max-w-xs block";
+                    }
+                }
             }
             if (data.event_type === "cycle.closed" || data.event === "cycle_complete") {
                 _stepSetStatus("decision", "done");
                 _cycleLogAdd("cycle.closed", "Cycle complete");
-                var banner = document.getElementById("no-cycle-banner");
-                if (banner) banner.style.display = "";
+                _cycleTickers = [];
+                var nextEl = document.getElementById("next-ticker");
+                if (nextEl) { nextEl.textContent = "No ticker queued"; nextEl.className = "text-sm text-text-muted"; }
+                var pipelineStage = document.getElementById("session-pipeline-stage");
+                if (pipelineStage) { pipelineStage.textContent = "Idle"; pipelineStage.className = "text-lg font-mono font-bold text-text-muted"; }
                 _resetSoloUI();
+                // Reset steps + READY panel after a brief pause so user sees completion
+                setTimeout(function() { _resetProcessSteps(); _resetReadyPanel(); }, 2000);
                 // Refresh signals + conviction from server
                 setTimeout(function() {
                     fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
@@ -1261,9 +1429,12 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _stepSetStatus("arbitration", "done");
                 _stepSetStatus("decision", "running");
                 _cycleLogAdd("decision.arbitrated", data.ticker || "");
-                if (data.arbitration_result || data.direction !== undefined) {
-                    _renderConviction(data.arbitration_result || data, null);
-                }
+                // Pass crucible data from pending cache so conviction formula is accurate
+                var _crucibleForConv = data.ticker ? (_pendingCrucible[data.ticker] || null) : null;
+                var arbWithEv = data.arbitration_result || data;
+                // Ensure ev_multiple flows through for conviction display
+                if (data.ev_multiple !== undefined) arbWithEv.ev_multiple = data.ev_multiple;
+                _renderConviction(arbWithEv, _crucibleForConv);
                 // Save into ticker history
                 if (data.ticker) {
                     if (!_tickerHistory[data.ticker]) _tickerHistory[data.ticker] = {agentResults: {}, signals: [], crucible: null, arbitration: null, verdict: null, conviction: 0};
@@ -1272,6 +1443,8 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                         p_down: data.p_down,
                         direction: data.direction,
                         agents_used: data.agents_used,
+                        ev_multiple: data.ev_multiple,
+                        conviction: data.conviction,
                     };
                 }
             }
@@ -1478,8 +1651,20 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
             }
 
             if (data.event_type === "agent.complete" || data.event_type === "crucible.complete") {
-                card.classList.add("persona-result-fade");
-                setTimeout(function () { card.classList.remove("persona-result-fade"); }, 500);
+                card.classList.add("persona-result-fade", "persona-complete-glow");
+                setTimeout(function () {
+                    card.classList.remove("persona-result-fade", "persona-complete-glow");
+                }, 800);
+            }
+
+            // Queued → running: immediate visual feedback with accent border
+            if (data.event_type === "agent.queued") {
+                card.classList.add("card-accent-blue");
+            }
+            if (data.event_type === "agent.complete" || data.event_type === "crucible.complete") {
+                card.classList.remove("card-accent-blue");
+                card.classList.add("card-accent-green");
+                setTimeout(function() { card.classList.remove("card-accent-green"); }, 3000);
             }
         });
     }

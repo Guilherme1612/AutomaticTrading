@@ -6,7 +6,9 @@ On detection, marks process as BROKEN_CRASH_LOOP which triggers kill switch.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +51,7 @@ def record_restart(
     db_path = _resolve_db(db_path)
     p = Path(db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = _sql_connect(p)
     try:
         _ensure_table(conn)
         now = datetime.now(timezone.utc).isoformat()
@@ -101,7 +103,7 @@ def check_crash_loop(
         True if crash loop detected.
     """
     db_path = _resolve_db(db_path)
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -158,7 +160,7 @@ def check_any_crash_loop(
         Name of first process in crash loop, or None if all healthy.
     """
     db_path = _resolve_db(db_path)
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         _ensure_table(conn)
 
@@ -193,7 +195,7 @@ def clear_crash_loop_mark(
         db_path: Path to SQLite database.
     """
     db_path = _resolve_db(db_path)
-    conn = sqlite3.connect(str(db_path))
+    conn = _sql_connect(db_path)
     try:
         conn.execute(
             """UPDATE process_state SET is_broken_crash_loop = 0, restart_count_60s = 0

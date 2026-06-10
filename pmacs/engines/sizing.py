@@ -36,6 +36,7 @@ class SizingInputs:
     max_position_pct: float = 0.20  # 20%
     portfolio_value_usd: float = 5000.0
     current_price: float = 1.0
+    is_bootstrap: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,19 @@ def size_position(x: SizingInputs) -> SizingResult:
     kelly_fraction = compute_kelly(x.p_up, x.p_down, x.target_gain_pct, x.stop_loss_pct)
 
     if kelly_fraction <= 0:
+        # IMP-4: During bootstrap paper trading, use a minimal 5% position floor
+        # even when Kelly is negative/zero. This generates trade data needed for
+        # Sharpe/drawdown/win-rate calculations required for mode promotion.
+        if x.is_bootstrap:
+            min_pct = 0.05  # 5% of portfolio = $250 on $5K
+            target_usd = min_pct * x.portfolio_value_usd
+            target_usd = min(target_usd, MAX_POSITION_USD)
+            target_shares = target_usd / x.current_price if x.current_price > 0 else 0.0
+            return SizingResult(
+                target_usd=target_usd,
+                target_shares=target_shares,
+                applied_haircuts={"bootstrap_floor": min_pct},
+            )
         return SizingResult(
             target_usd=0.0,
             target_shares=0.0,

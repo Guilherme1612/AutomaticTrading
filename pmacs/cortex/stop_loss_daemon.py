@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -204,7 +206,7 @@ def run_stop_loss_loop(
             breached_count = 0
 
             try:
-                conn = sqlite3.connect(str(db_path))
+                conn = _sql_connect(db_path)
                 try:
                     rows = conn.execute(
                         "SELECT id, ticker, state, stop_price_usd "

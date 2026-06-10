@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pmacs.storage.sqlite import connect as _sql_connect
+
 MAX_CONCURRENT_AB = 3  # fallback; prefer config.mutation.max_ab_tests
 
 
@@ -105,9 +107,7 @@ class ABRunner:
         """Recover in-flight A/B tests from SQLite after restart."""
         if self._db_path is None:
             return
-        import sqlite3
-
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             rows = conn.execute(
                 "SELECT id FROM mutation_proposals WHERE status = 'RUNNING_AB'"
@@ -139,9 +139,7 @@ class ABRunner:
         """Create mutation_outcomes table if it doesn't exist."""
         if self._db_path is None:
             return
-        import sqlite3
-
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS mutation_outcomes "
@@ -156,10 +154,8 @@ class ABRunner:
         """Write a single outcome to mutation_outcomes table."""
         if self._db_path is None:
             return
-        import sqlite3
-
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = _sql_connect(self._db_path)
             try:
                 conn.execute(
                     "INSERT INTO mutation_outcomes "
@@ -177,9 +173,7 @@ class ABRunner:
         """Record A/B start in SQLite."""
         if self._db_path is None:
             return
-        import sqlite3
-
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             conn.execute(
                 "UPDATE mutation_proposals SET status = 'RUNNING_AB', "
@@ -194,9 +188,7 @@ class ABRunner:
         """Record A/B completion in SQLite."""
         if self._db_path is None:
             return
-        import sqlite3
-
-        conn = sqlite3.connect(str(self._db_path))
+        conn = _sql_connect(self._db_path)
         try:
             conn.execute(
                 "UPDATE mutation_proposals SET status = 'AB_COMPLETE', "

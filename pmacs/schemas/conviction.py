@@ -38,7 +38,15 @@ class ConvictionResult(BaseModel):
     reason: str = ""
 
     @staticmethod
-    def score_to_verdict(score: float) -> VerdictTier:
+    def score_to_verdict(score: float, is_bootstrap: bool = False) -> VerdictTier:
+        if is_bootstrap:
+            if score >= 0.40:
+                return VerdictTier.STRONG_BUY
+            if score >= 0.15:
+                return VerdictTier.BUY
+            if score >= 0.05:
+                return VerdictTier.HOLD
+            return VerdictTier.SKIP
         if score >= 0.6:
             return VerdictTier.STRONG_BUY
         if score >= 0.3:

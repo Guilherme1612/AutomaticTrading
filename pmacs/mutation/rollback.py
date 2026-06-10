@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pmacs.constants import MUTATION_AUTO_ROLLBACK_WINDOW
+from pmacs.storage.sqlite import connect as _sql_connect
 
 
 def regression_detected(
@@ -67,9 +68,7 @@ def execute_rollback(
 
     # Update SQLite
     if db_path is not None:
-        import sqlite3
-
-        conn = sqlite3.connect(str(db_path))
+        conn = _sql_connect(db_path)
         try:
             conn.execute(
                 "UPDATE mutation_proposals SET status = 'ROLLED_BACK', "

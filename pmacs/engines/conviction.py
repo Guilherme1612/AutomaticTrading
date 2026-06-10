@@ -60,15 +60,29 @@ def verdict_tier(
     conviction: float,
     is_active_holding: bool = False,
     thesis_valid: bool = True,
+    is_bootstrap: bool = False,
 ) -> VerdictTier:
     """Maps conviction to verdict tier.
 
-    STRONG_BUY >= 0.6, BUY >= 0.3, SKIP < 0.3 or negative.
+    Standard: STRONG_BUY >= 0.6, BUY >= 0.3, SKIP < 0.3.
+    Bootstrap: STRONG_BUY >= 0.40, BUY >= 0.15, HOLD >= 0.05.
     Negative conviction always SKIP (no shorting in v1).
     Active holding with valid thesis -> HOLD.
+
+    Bootstrap thresholds are lower because paper positions use virtual
+    capital and generate needed trade data for Sharpe/drawdown/win-rate
+    calculations required for mode promotion (Source.md §5, Phases.md §4).
     """
     if is_active_holding and thesis_valid:
         return VerdictTier.HOLD  # Active position with valid thesis
+    if is_bootstrap:
+        if conviction >= 0.40:
+            return VerdictTier.STRONG_BUY
+        if conviction >= 0.15:
+            return VerdictTier.BUY
+        if conviction >= 0.05:
+            return VerdictTier.HOLD
+        return VerdictTier.SKIP
     if conviction >= 0.6:
         return VerdictTier.STRONG_BUY
     if conviction >= 0.3:

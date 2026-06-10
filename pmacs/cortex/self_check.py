@@ -7,7 +7,9 @@ by writing to the kill_switch SQLite table.
 """
 from __future__ import annotations
 
-import sqlite3
+import sqlite3  # noqa: F811 — kept for type refs
+
+from pmacs.storage.sqlite import connect as _sql_connect
 import time
 import urllib.request
 import urllib.error
@@ -69,7 +71,7 @@ def engage_kill_switch_direct(
         return
 
     try:
-        conn = sqlite3.connect(str(p))
+        conn = _sql_connect(p)
         try:
             now_iso = _now_iso()
             # Ensure kill_switch table exists

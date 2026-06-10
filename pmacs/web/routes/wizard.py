@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from pmacs.web.templating import templates
+from pmacs.storage.sqlite import connect as _sql_connect
 
 router = APIRouter(prefix="/wizard", tags=["wizard"])
 
@@ -44,12 +45,11 @@ def _read_wizard_state() -> dict:
     Backward-compatible: if the system has mode_history entries (existing install),
     treats wizard as already completed.
     """
-    import sqlite3
     db = _db_path()
     if not db.exists():
         return {"current_step": 1, "completed": False}
     try:
-        conn = sqlite3.connect(str(db))
+        conn = _sql_connect(db)
         try:
             # Check wizard_completed flag
             row = conn.execute(
@@ -83,10 +83,10 @@ def _write_wizard_step(step: int) -> None:
 
 def _write_wizard_kv(key: str, value: str) -> None:
     """Write a key-value pair to wizard_state table."""
-    import sqlite3
+
     db = _db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
+    conn = _sql_connect(db)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wizard_state (
             key TEXT PRIMARY KEY,
@@ -104,12 +104,12 @@ def _write_wizard_kv(key: str, value: str) -> None:
 
 def _get_backend_type() -> str:
     """Get the backend type from wizard state. Returns 'local' or 'cloud'."""
-    import sqlite3
+
     db = _db_path()
     if not db.exists():
         return "local"
     try:
-        conn = sqlite3.connect(str(db))
+        conn = _sql_connect(db)
         row = conn.execute(
             "SELECT value FROM wizard_state WHERE key = ?", ("backend_type",)
         ).fetchone()
@@ -121,10 +121,10 @@ def _get_backend_type() -> str:
 
 def _mark_wizard_completed() -> None:
     """Mark the wizard as fully completed in SQLite."""
-    import sqlite3
+
     db = _db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
+    conn = _sql_connect(db)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wizard_state (
             key TEXT PRIMARY KEY,
@@ -525,7 +525,7 @@ async def _execute_step(request: Request, step: int) -> dict:
         # Allow advancement if critical sources pass (non-critical can be configured later)
         critical_ok = all(
             result.get("results", {}).get(src, {}).get("ok", False)
-            for src in ("polygon", "edgar", "alpaca")
+            for src in ("polygon", "edgar")
         )
         return {"ok": critical_ok, "context": {"data_result": result}}
 
@@ -542,8 +542,8 @@ async def _execute_step(request: Request, step: int) -> dict:
             try:
                 from datetime import datetime, timezone as _tz
                 db = _db_path()
-                import sqlite3
-                conn = sqlite3.connect(str(db))
+
+                conn = _sql_connect(db)
                 try:
                     conn.execute(
                         "CREATE TABLE IF NOT EXISTS universe ("
@@ -596,7 +596,7 @@ async def _execute_step(request: Request, step: int) -> dict:
         # Run a full synthetic pipeline to verify the system works before PAPER promotion
         smoke_result = {"all_ok": False, "checks": {}}
         try:
-            import sqlite3
+
             from pathlib import Path as _Path
             from pmacs.config import data_dir as _resolve_data_dir
 
@@ -609,7 +609,7 @@ async def _execute_step(request: Request, step: int) -> dict:
             # 1. Verify DB is writable
             try:
                 if db_path.exists():
-                    conn = sqlite3.connect(str(db_path))
+                    conn = _sql_connect(db_path)
                     conn.execute("SELECT 1")
                     conn.close()
                     smoke_result["checks"]["db_write"] = True
@@ -685,7 +685,7 @@ async def _execute_step(request: Request, step: int) -> dict:
     elif step == 11:
         # Complete / promote to SHADOW + PAPER (Source.md §12 Step 11)
         import json as _json
-        import sqlite3
+
         from pathlib import Path as _Path
         from pmacs.engines.mode_manager import transition_mode
         from pmacs.schemas.system import Mode
@@ -735,7 +735,7 @@ async def _execute_step(request: Request, step: int) -> dict:
                 )
 
                 # Persist to mode_history
-                conn = sqlite3.connect(str(db_path))
+                conn = _sql_connect(db_path)
                 conn.execute(
                     "INSERT INTO mode_history (from_mode, to_mode, reason, triggered_by, changed_at) "
                     "VALUES (?, ?, ?, ?, ?)",

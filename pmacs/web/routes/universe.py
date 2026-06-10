@@ -35,6 +35,7 @@ _COMPANY_NAMES: dict[str, str] = {
     "ZETA": "Zeta Global",
     "NU": "Nu Holdings",
     "OUST": "Ouster Inc.",
+    "AMZN": "Amazon.com Inc.",
 }
 
 # Static sector overrides — DB sector column may have stale data from Finnhub metadata
@@ -58,6 +59,7 @@ _COMPANY_SECTORS: dict[str, str] = {
     "OUST": "Technology",
     "GOOGL": "Technology",
     "META": "Technology",
+    "AMZN": "Technology",
 }
 
 
@@ -130,6 +132,7 @@ async def universe_page(request: Request):
             name="universe.html",
             context={
                 "page": "universe",
+                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("universe", exc),
             },
         )

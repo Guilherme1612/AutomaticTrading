@@ -35,7 +35,7 @@ class ShortInterestRunner(PersonaRunner):
             persona_name="short_interest",
             grammar_name="short_interest",
             temperature=0.2,
-            max_tokens=3072,
+            max_tokens=5120,
             cycle_id=cycle_id,
             audit_writer=audit_writer,
             simulation_mode=simulation_mode,

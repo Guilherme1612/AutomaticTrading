@@ -134,6 +134,14 @@
     {% endif %}
 </div>
 <script>
+// --- CSRF helper ---
+function _csrfHeaders(extra) {
+    var h = extra || {};
+    var c = document.cookie.split("; ").find(function(c) { return c.startsWith("pmacs_csrf="); });
+    if (c) h["x-csrf-token"] = c.split("=")[1];
+    return h;
+}
+
 // --- Group tab filtering ---
 function filterByGroup(group, btn) {
     document.querySelectorAll('#group-tabs button').forEach(function(b) {
@@ -189,7 +197,7 @@ function getSelectedTickers() {
 function toggleIndexOverlay(enabled) {
     fetch("/api/universe/index-overlay", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: _csrfHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({enabled: enabled})
     }).then(function(r) { return r.json(); })
     .then(function(data) {
@@ -323,7 +331,7 @@ function _acSelect(ticker) {
     _closeAutocomplete();
     fetch("/api/universe/add", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: _csrfHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({ticker: ticker})
     }).then(function(r) { return r.json(); })
     .then(function(data) {
@@ -347,7 +355,7 @@ function _closeAutocomplete() {
 function removeTicker(symbol) {
     fetch("/api/universe/remove", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: _csrfHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({ticker: symbol})
     }).then(function(r) { return r.json(); })
     .then(function(data) {
@@ -375,7 +383,7 @@ function bulkTagSubsector() {
     if (!subsector || !subsector.trim()) return;
     fetch("/api/universe/bulk-tag", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: _csrfHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({tickers: selected, subsector: subsector.trim()})
     }).then(function(r) { return r.json(); })
     .then(function(data) {
@@ -397,7 +405,7 @@ function bulkRemoveTickers() {
     }
     fetch("/api/universe/bulk-remove", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: _csrfHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({tickers: selected})
     }).then(function(r) { return r.json(); })
     .then(function(data) {

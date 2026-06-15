@@ -58,7 +58,7 @@
                 <div class="text-center mb-12">
                     <h1 class="text-4xl font-bold text-text-primary mb-4 tracking-tight">PMACS</h1>
                     <p class="text-text-secondary text-lg mb-2">Portfolio Management and Catalyst Automation System</p>
-                    <p class="text-text-muted text-sm">A single-operator, local-only, catalyst-driven decision engine.</p>
+                    <p class="text-text-muted text-sm">A single-operator, catalyst-driven decision engine.</p>
                 </div>
 
                 <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-8">
@@ -66,15 +66,7 @@
                     <ul class="space-y-3 text-sm text-text-secondary">
                         <li class="flex items-start gap-3">
                             <span class="text-text-muted mt-0.5">&#9656;</span>
-                            <span>Apple Silicon Mac (M1 family) with at least 32 GB RAM</span>
-                        </li>
-                        <li class="flex items-start gap-3">
-                            <span class="text-text-muted mt-0.5">&#9656;</span>
-                            <span>macOS Ventura or later</span>
-                        </li>
-                        <li class="flex items-start gap-3">
-                            <span class="text-text-muted mt-0.5">&#9656;</span>
-                            <span>~25 GB free disk space (model + databases)</span>
+                            <span>macOS Ventura or later (Apple Silicon recommended)</span>
                         </li>
                         <li class="flex items-start gap-3">
                             <span class="text-text-muted mt-0.5">&#9656;</span>
@@ -82,9 +74,10 @@
                         </li>
                         <li class="flex items-start gap-3">
                             <span class="text-text-muted mt-0.5">&#9656;</span>
-                            <span>No internet connection required for operation (inference is fully local)</span>
+                            <span>~1 GB free disk space for databases</span>
                         </li>
                     </ul>
+                    <p class="text-xs text-text-muted mt-4">You'll choose between <strong class="text-text-secondary">Cloud API</strong> (Anthropic, OpenRouter) or <strong class="text-text-secondary">Local Inference</strong> (llama-server, 32 GB RAM + 25 GB disk) in the next step.</p>
                     {% if system_info %}
                     <div class="mt-4 pt-4 border-t border-border text-xs text-text-muted font-mono">
                         Detected: {{ system_info.get("platform", "Unknown") }}

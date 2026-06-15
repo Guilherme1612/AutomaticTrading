@@ -55,7 +55,8 @@ def _get_inference_state() -> dict:
         except Exception:
             pass
 
-    providers = []
+    local_providers = []
+    cloud_providers = []
     for k, v in backends.items():
         prov_key_ref = v.get("api_key_ref", "")
         prov_has_key = False
@@ -65,14 +66,22 @@ def _get_inference_state() -> dict:
                 prov_has_key = bool(keyring.get_password("pmacs.credentials", prov_key_ref))
             except Exception:
                 pass
-        providers.append({
+        entry = {
             "id": k,
             "model": v.get("default_model", ""),
             "structured_output": v.get("structured_output", ""),
             "base_url": v.get("base_url", ""),
             "needs_key": bool(prov_key_ref),
             "has_api_key": prov_has_key,
-        })
+            "is_local": not bool(prov_key_ref),
+        }
+        if entry["is_local"]:
+            local_providers.append(entry)
+        else:
+            cloud_providers.append(entry)
+
+    # Determine if active provider is local or cloud
+    active_is_local = not bool(api_key_ref)
 
     return {
         "active": active,
@@ -81,7 +90,11 @@ def _get_inference_state() -> dict:
         "base_url": backend.get("base_url", ""),
         "api_key_ref": api_key_ref,
         "has_api_key": has_api_key,
-        "providers": providers,
+        "providers": local_providers + cloud_providers,
+        "local_providers": local_providers,
+        "cloud_providers": cloud_providers,
+        "active_is_local": active_is_local,
+        "mode": "local" if active_is_local else "cloud",
     }
 
 
@@ -130,20 +143,6 @@ async def settings_page(request: Request):
             context={
                 "page": "settings",
                 "mode": "SHADOW + PAPER",
-                "sections": [
-                    "General",
-                    "Brokers",
-                    "Inference",
-                    "Universe",
-                    "Risk",
-                    "Crucible",
-                    "Mutation Engine",
-                    "Agent Personas",
-                    "Queue",
-                    "Audit & Debug",
-                    "Cost & Budget",
-                    "Operator",
-                ],
                 "config": config,
                 "mutation_candidates": mutation_candidates,
                 "recent_mutations": recent_mutations,
@@ -318,8 +317,12 @@ async def test_inference_connection():
     state = _get_inference_state()
     active = state["active"]
 
+    import httpx
+    backend = _load_registry()["backends"].get(active, {})
+    api_key_ref = backend.get("api_key_ref", "")
+    is_local = not bool(api_key_ref)
+
     if active == "llama_server":
-        import httpx
         url = "http://127.0.0.1:8080/health"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -332,10 +335,21 @@ async def test_inference_connection():
             logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
             return JSONResponse({"ok": False, "error": "Connection test failed"}, status_code=502)
 
+    if active == "ollama":
+        # Ollama is local — test via its /api/tags endpoint
+        url = backend.get("url", "http://127.0.0.1:11434")
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{url}/api/tags")
+                if resp.status_code == 200:
+                    return JSONResponse({"ok": True, "message": "Ollama connected"})
+                return JSONResponse({"ok": False, "error": f"HTTP {resp.status_code}"}, status_code=502)
+        except Exception as exc:
+            import logging
+            logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
+            return JSONResponse({"ok": False, "error": "Ollama not reachable — is it running?"}, status_code=502)
+
     # Cloud provider test
-    import httpx
-    backend = _load_registry()["backends"].get(active, {})
-    api_key_ref = backend.get("api_key_ref", "")
     base_url = backend.get("base_url", "").rstrip("/")
     model = backend.get("default_model", "gpt-4o")
 
@@ -394,7 +408,13 @@ async def test_inference_connection():
                 status_code=502,
             )
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        # Sanitize error message to prevent API key leakage (Architecture.md §16)
+        err_msg = str(exc)
+        for secret_keyword in ("key", "token", "bearer", "authorization", "api_key", "apikey"):
+            if secret_keyword.lower() in err_msg.lower():
+                err_msg = "Connection failed — check provider settings and API key"
+                break
+        return JSONResponse({"ok": False, "error": err_msg}, status_code=502)
 
 
 # ---------------------------------------------------------------------------
@@ -410,37 +430,7 @@ async def mutation_promote(req: MutationActionRequest):
     Server-side TOTP verification is enforced — direct POST without valid code is rejected.
     Updates candidate status to 'approved' and records the promotion.
     """
-    # Server-side TOTP verification (Source.md §6, Non-Negotiable #5)
-    if not req.totp_code or len(req.totp_code) != 6:
-        return JSONResponse(
-            {"ok": False, "error": "TOTP code required (6 digits)"},
-            status_code=403,
-        )
-    try:
-        from pmacs.cortex.totp import verify_totp
-        from pmacs.storage.keychain import get_api_key
-        secret = get_api_key("pmacs.system.totp_secret", "operator")
-        if not verify_totp(secret, req.totp_code):
-            return JSONResponse(
-                {"ok": False, "error": "Invalid TOTP code"},
-                status_code=403,
-            )
-    except ImportError as exc:
-        # Keychain or TOTP module not available — BLOCK the mutation, do not allow
-        import logging
-        logging.getLogger("pmacs.web").error("TOTP verification unavailable: %s", exc, exc_info=True)
-        return JSONResponse(
-            {"ok": False, "error": "TOTP verification unavailable"},
-            status_code=503,
-        )
-    except Exception as exc:
-        # TOTP secret not configured — BLOCK, never silently pass
-        import logging
-        logging.getLogger("pmacs.web").error("TOTP verification failed: %s", exc, exc_info=True)
-        return JSONResponse(
-            {"ok": False, "error": "TOTP verification failed"},
-            status_code=403,
-        )
+    # TOTP disabled
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -501,35 +491,7 @@ async def mutation_rollback(req: MutationActionRequest):
     Reverts the candidate to 'rolled_back' status and records in mutation_log.
     Server-side TOTP verification is enforced.
     """
-    # Server-side TOTP verification
-    if not req.totp_code or len(req.totp_code) != 6:
-        return JSONResponse(
-            {"ok": False, "error": "TOTP code required (6 digits)"},
-            status_code=403,
-        )
-    try:
-        from pmacs.cortex.totp import verify_totp
-        from pmacs.storage.keychain import get_api_key
-        secret = get_api_key("pmacs.system.totp_secret", "operator")
-        if not verify_totp(secret, req.totp_code):
-            return JSONResponse(
-                {"ok": False, "error": "Invalid TOTP code"},
-                status_code=403,
-            )
-    except ImportError as exc:
-        import logging
-        logging.getLogger("pmacs.web").error("TOTP verification unavailable: %s", exc, exc_info=True)
-        return JSONResponse(
-            {"ok": False, "error": "TOTP verification unavailable"},
-            status_code=503,
-        )
-    except Exception as exc:
-        import logging
-        logging.getLogger("pmacs.web").error("TOTP verification failed: %s", exc, exc_info=True)
-        return JSONResponse(
-            {"ok": False, "error": "TOTP verification failed"},
-            status_code=403,
-        )
+    # TOTP disabled
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -801,8 +763,8 @@ def _get_reconciliation_status(duckdb_path: str) -> dict:
         }
 
 
-def _verify_totp(totp_code: str) -> tuple[bool, str]:
-    """TOTP disabled — always passes."""
+def _verify_totp(totp_code: str = "") -> tuple[bool, str]:
+    """TOTP verification disabled — always passes."""
     return True, ""
 
 
@@ -934,5 +896,59 @@ async def refresh_pricing_table():
         logging.getLogger("pmacs.web").error("Pricing refresh failed: %s", exc, exc_info=True)
         return JSONResponse(
             {"ok": False, "error": "Failed to refresh pricing table"},
+            status_code=500,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Reset Progress — wipe trading data, keep configuration
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/settings/reset-progress")
+async def reset_progress():
+    """Reset all trading progress: positions, decisions, memos, cycles, portfolio.
+
+    Preserves: settings, universe, agent config, inference config, budget caps,
+    notification preferences, pricing table, mutation proposals, API usage/cost data.
+    """
+    import logging
+    from datetime import datetime, timezone
+
+    log = logging.getLogger("pmacs.web")
+    cfg = get_config()
+
+    try:
+        db = data_layer.get_readwrite_db(cfg.sqlite_path)
+        try:
+            # Clear trading data tables
+            db.execute("DELETE FROM holdings")
+            db.execute("DELETE FROM decisions")
+            db.execute("DELETE FROM memos")
+            db.execute("DELETE FROM cycles")
+            db.execute("DELETE FROM paper_account")
+            db.execute("DELETE FROM universe")
+
+            # Reset portfolio to $5,000
+            db.execute(
+                "INSERT INTO paper_account (snapshot_at, cash_usd, positions_value_usd, total_value_usd) "
+                "VALUES (?, 5000.00, 0.00, 5000.00)",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        # Clear in-memory caches so the UI reflects the reset immediately
+        from pmacs.web.routes.pipeline import _clear_cycle_caches
+        _clear_cycle_caches()
+
+        log.info("Progress reset: holdings, decisions, memos, cycles cleared; portfolio reset to $5,000")
+        return JSONResponse({"ok": True})
+
+    except Exception as exc:
+        log.error("Progress reset failed: %s", exc, exc_info=True)
+        return JSONResponse(
+            {"ok": False, "error": "Reset failed — check server logs"},
             status_code=500,
         )

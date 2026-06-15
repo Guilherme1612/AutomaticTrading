@@ -46,3 +46,8 @@ data/
 
 # Node.js
 node_modules/
+
+# Dev screenshots / audit artifacts (not project assets)
+screenshots/
+.playwright-mcp/
+*.png

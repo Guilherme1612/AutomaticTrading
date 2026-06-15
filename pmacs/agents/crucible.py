@@ -28,7 +28,7 @@ class CrucibleRunner(PersonaRunner):
             persona_name="crucible",
             grammar_name="crucible",
             temperature=0.1,  # Lower than other personas
-            max_tokens=768,
+            max_tokens=2048,
         )
 
     def get_pydantic_model(self):

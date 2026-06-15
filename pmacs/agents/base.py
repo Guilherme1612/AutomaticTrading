@@ -77,7 +77,7 @@ class PersonaRunner(ABC):
         model_config: dict[str, Any] | None = None,
         grammar_name: str | None = None,
         temperature: float = 0.2,
-        max_tokens: int = 3072,
+        max_tokens: int = 5120,
         cycle_id: str = "",
         audit_writer: AuditWriter | None = None,
         simulation_mode: bool = False,
@@ -869,7 +869,7 @@ class PersonaRunner(ABC):
         return "\n".join(lines) if lines else "No evidence provided."
 
     def _call_llm(
-        self, prompt: str, grammar: str, temperature: float, timeout: float = 120.0
+        self, prompt: str, grammar: str, temperature: float, timeout: float = 600.0
     ) -> str:
         """Dispatch to the active LLM backend (local or API).
 
@@ -965,6 +965,7 @@ class PersonaRunner(ABC):
             "prompt": prompt,
             "temperature": temperature,
             "n_predict": self.max_tokens,
+            "seed": 42,  # Determinism: same evidence → same output
         }
         if grammar:
             body["grammar"] = grammar
@@ -1075,11 +1076,31 @@ class PersonaRunner(ABC):
         # max_tokens_multiplier: accounts for thinking-mode overhead (e.g. Qwen3.6 on Ollama)
         token_multiplier = extra_params.pop("max_tokens_multiplier", 1)
         effective_max_tokens = self.max_tokens * int(token_multiplier)
+
+        # For local models (Ollama/Qwen3.6) that don't enforce response_format,
+        # inject JSON schema instructions directly into the prompt.
+        json_prompt = prompt
+        try:
+            model_cls = self.get_pydantic_model()
+            schema = model_cls.model_json_schema()
+            import json as _json
+            field_names = list(schema.get("properties", {}).keys())
+            json_prompt = (
+                f"{prompt}\n\n"
+                f"CRITICAL: You MUST respond with ONLY a valid JSON object. "
+                f"No thinking, no analysis text, no markdown — ONLY the JSON object.\n"
+                f"Required top-level fields: {field_names}\n"
+                f"Start your response with {{ and end with }}."
+            )
+        except Exception:
+            pass  # Non-critical: fall back to response_format enforcement
+
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": json_prompt}],
             "max_tokens": effective_max_tokens,
             "temperature": temperature,
+            "seed": 42,  # Determinism: same evidence → same output
             "response_format": {"type": "json_object"},
         }
         # Merge remaining backend-specific extra params
@@ -1111,10 +1132,28 @@ class PersonaRunner(ABC):
         if choices:
             msg = choices[0].get("message", {})
             content = msg.get("content", "") or ""
-            # Qwen3.6 thinking mode: JSON lands in reasoning when content is empty
-            if not content.strip():
-                content = msg.get("reasoning", "") or ""
-            return content
+            reasoning = msg.get("reasoning", "") or ""
+
+            # Qwen3.6 thinking mode: strip <think>...</think> wrapper
+            import re
+            content = re.sub(r"<think>[\s\S]*?</think>\s*", "", content).strip()
+            reasoning = re.sub(r"<think>[\s\S]*?</think>\s*", "", reasoning).strip()
+
+            # Prefer whichever field contains valid JSON
+            for candidate in (content, reasoning):
+                candidate = candidate.strip()
+                if candidate and candidate.startswith("{"):
+                    return candidate
+
+            # Qwen3.6 on Ollama: model may output thinking text then JSON.
+            # Extract the first balanced JSON object from mixed text/JSON output.
+            for candidate in (content, reasoning):
+                extracted = self._extract_balanced_json(candidate)
+                if extracted:
+                    return extracted
+
+            # Fallback: return content (will likely fail parse, triggering retry)
+            return content or reasoning
         return ""
 
     def _audit_llm_call(
@@ -1278,14 +1317,54 @@ class PersonaRunner(ABC):
         return ""
 
     @staticmethod
+    def _extract_balanced_json(text: str) -> str | None:
+        """Extract the first balanced JSON object from mixed text.
+
+        Walks character-by-character tracking brace depth, respecting
+        strings (so braces inside JSON string values are not counted).
+        Returns None if no balanced object is found.
+        """
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                if in_string:
+                    escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        return None
+
+    @staticmethod
     def _extract_json(raw: str) -> str:
         """Extract JSON object from raw LLM output.
 
         Handles cases where the model wraps JSON in markdown code blocks
-        or surrounding text.
+        or surrounding text. Uses balanced brace matching to avoid
+        capturing too much when reasoning text contains braces.
         """
         text = raw.strip()
-        # Try to find JSON object boundaries
+        result = PersonaRunner._extract_balanced_json(text)
+        if result:
+            return result
+        # Fallback: simple boundary search
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:

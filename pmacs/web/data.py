@@ -32,11 +32,18 @@ PROCESS_NAMES = [
 
 
 def _sqlite_connect(db_path: str | Path, *, readonly: bool = True) -> sqlite3.Connection:
-    """Get a SQLite connection. Returns in-memory DB if file missing."""
+    """Get a SQLite connection. Returns in-memory DB if file missing (read-only).
+    For read-write, creates the file if it doesn't exist."""
     path = Path(db_path)
     if not path.exists():
-        # Return in-memory connection for tests / no-DB scenarios
-        return sqlite3.connect(":memory:")
+        if readonly:
+            # Return in-memory connection for tests / no-DB scenarios
+            return sqlite3.connect(":memory:")
+        # Read-write: create the file and parent dirs
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
     if readonly:
         uri = f"file:{path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
@@ -288,7 +295,7 @@ def get_system_health(heartbeat_dir: Path, audit_path: Path | str | None = None)
     processes = []
     inference_ok = False
     for s in statuses:
-        proc_display = s.proc if s.proc.startswith("pmacs-") else f"pmacs-{s.proc}"
+        proc_display = f"pmacs-{s.proc}" if not s.proc.startswith("pmacs-") else s.proc
         status = "running" if not s.is_stale else "stale"
         processes.append({"name": proc_display, "status": status})
         if s.proc == "inference" and not s.is_stale:
@@ -843,17 +850,19 @@ def get_cortex_status(
     processes = []
     port_map = {
         "inference": 8080,
-        "cortex": None,
+        "pmacs-cortex": None,
         "cortex-self-check": None,
         "execution": None,
         "nervous": 8000,
-        "stoploss": None,
-        "mutation": None,
+        "pmacs-stoploss": None,
+        "pmacs-mutation": None,
+        "dashboard": None,
     }
     for s in process_statuses:
+        display_name = s.proc if s.proc.startswith("pmacs-") else f"pmacs-{s.proc}"
         processes.append(
             {
-                "name": f"pmacs-{s.proc}",
+                "name": display_name,
                 "port": port_map.get(s.proc),
                 "status": "running" if not s.is_stale else "offline",
             }

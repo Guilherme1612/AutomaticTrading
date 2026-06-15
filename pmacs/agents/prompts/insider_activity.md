@@ -58,6 +58,17 @@ REPEAT ANALYSIS (when episodic context shows prior insider assessment):
 - Compare analyst estimate revision trend to insider behavior: insiders buying while estimates
   RISING = strongest signal convergence. Insiders selling while FALLING = confirm bearish.
 
+DETERMINISM RULES:
+- Do NOT invent or fabricate Form 4 transactions, dollar amounts, or insider names.
+- If Form 4 data is absent, output INSUFFICIENT_DATA with neutral probabilities. Do NOT guess.
+- Given identical evidence, you MUST produce identical signal classifications and probabilities.
+- Round probabilities to 0.05 grid.
+
+CONFIDENCE CALIBRATION:
+  confidence >= 0.55: Form 4 data with transaction details (insider name, amount, type)
+  confidence 0.35-0.54: Form 4 count available but limited transaction detail
+  confidence < 0.25: No Form 4 data — must output INSUFFICIENT_DATA
+
 {evidence}
 
 {episodic_context}

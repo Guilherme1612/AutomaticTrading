@@ -377,11 +377,11 @@
                         <span class="text-sm text-text-secondary">Inference</span>
                     </div>
                     {% if system_health.inference_backend == 'cloud' %}
-                    <span class="font-mono text-sm font-medium text-warning whitespace-nowrap">Sim (cloud)</span>
+                    <span class="font-mono text-sm font-medium text-positive whitespace-nowrap">Cloud API</span>
                     {% elif system_health.inference_ok %}
                     <span class="font-mono text-sm font-medium text-positive">OK</span>
                     {% else %}
-                    <span class="font-mono text-sm font-medium text-warning">Local (offline)</span>
+                    <span class="font-mono text-sm font-medium text-warning">Offline</span>
                     {% endif %}
                 </div>
             </div>

@@ -28,7 +28,7 @@ class MemoWriterRunner(PersonaRunner):
             persona_name="memo_writer",
             grammar_name="memo_writer",
             temperature=0.3,  # Highest temperature: analysis=0.2, Crucible=0.1
-            max_tokens=5120,
+            max_tokens=8192,
         )
         self._analytical_context: str = ""
 

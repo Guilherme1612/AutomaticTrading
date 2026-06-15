@@ -11,533 +11,630 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-<div class="flex items-center gap-3 mb-8 reveal">
-    <span class="w-2.5 h-2.5 rounded-full bg-accent"></span>
-    <h2 class="text-lg font-semibold text-text-primary">Settings</h2>
-</div>
 
-<!-- Section jump navigation -->
-<div class="sticky top-0 z-10 bg-surface/95 backdrop-blur-sm py-2 mb-6 flex gap-1.5 border-b border-border-subtle overflow-x-auto" style="-webkit-overflow-scrolling:touch">
-  <a href="#section-general" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">General</a>
-  <a href="#section-brokers" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Brokers</a>
-  <a href="#section-inference" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Inference</a>
-  <a href="#section-universe" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Universe</a>
-  <a href="#section-risk" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Risk</a>
-  <a href="#section-crucible" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Crucible</a>
-  <a href="#section-mutation-engine" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Mutation Engine</a>
-  <a href="#section-agent-personas" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Agent Personas</a>
-  <a href="#section-queue" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Queue</a>
-  <a href="#section-audit-debug" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Audit &amp; Debug</a>
-  <a href="#section-cost-budget" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Cost &amp; Budget</a>
-  <a href="#section-operator" class="px-3 py-1 text-[11px] rounded-xl bg-surface-sunken hover:bg-border-subtle text-text-muted hover:text-text-primary transition-colors font-medium">Operator</a>
-</div>
-
-<!-- Scrollable sections -->
-<div class="space-y-8">
-    {% for section in sections %}
-    <div id="section-{{ section | lower | replace(' ', '-') | replace('&', '') | replace('--', '-') | trim('-') }}"
-         class="card card-elevated p-6 reveal" data-stagger>
-        <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-accent"></span>
-                <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">{{ section }}</h3>
-            </div>
-            <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2.5 py-1 rounded-lg">config/{{ section | lower | replace(' ', '_') | replace('&', 'and') }}.toml</span>
+<!-- Header -->
+<div class="flex items-center justify-between mb-8 reveal">
+    <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-xl bg-accent-soft flex items-center justify-center">
+            <svg class="w-4 h-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
         </div>
-        <div class="text-sm text-text-muted py-4 text-center">
-            {% if section == "General" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Mode</dt>
-                    <dd class="font-mono text-text-primary">{{ mode }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Paper Capital</dt>
-                    <dd class="font-mono text-text-primary">$5,000</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Max Positions</dt>
-                    <dd class="font-mono text-text-primary">5</dd>
-                </div>
-                <div class="flex justify-between items-center">
-                    <dt class="text-text-secondary">Theme</dt>
-                    <dd>
-                        <select id="theme-select" onchange="setTheme(this.value)"
-                                class="text-sm font-mono border border-border rounded-xl px-3 py-1.5 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
-                            <option value="system">System</option>
-                            <option value="light">Light</option>
-                            <option value="dark">Dark</option>
-                        </select>
-                    </dd>
-                </div>
-                <div class="flex justify-between items-center">
-                    <dt class="text-text-secondary">Display Currency</dt>
-                    <dd>
-                        <select id="currency-select" onchange="setDisplayPref('currency', this.value)"
-                                class="text-sm font-mono border border-border rounded-xl px-3 py-1.5 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
-                            <option value="USD" selected>USD — US Dollar</option>
-                            <option value="EUR">EUR — Euro</option>
-                        </select>
-                    </dd>
-                </div>
-                <div class="flex justify-between items-center">
-                    <dt class="text-text-secondary">Display Density</dt>
-                    <dd>
-                        <select id="density-select" onchange="setDisplayPref('density', this.value)"
-                                class="text-sm font-mono border border-border rounded-xl px-3 py-1.5 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
-                            <option value="compact">Compact</option>
-                            <option value="comfortable" selected>Comfortable</option>
-                            <option value="spacious">Spacious</option>
-                        </select>
-                    </dd>
-                </div>
-                <div class="flex justify-between items-center">
-                    <dt class="text-text-secondary">EOD Timezone</dt>
-                    <dd>
-                        <select id="timezone-select" onchange="setDisplayPref('timezone', this.value)"
-                                class="text-sm font-mono border border-border rounded-xl px-3 py-1.5 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
-                            <option value="America/New_York" selected>US Eastern (ET)</option>
-                            <option value="America/Chicago">US Central (CT)</option>
-                            <option value="Europe/London">London (GMT/BST)</option>
-                            <option value="Europe/Berlin">Central European (CET)</option>
-                            <option value="Asia/Tokyo">Tokyo (JST)</option>
-                        </select>
-                    </dd>
-                </div>
-            </dl>
-            <div class="border-t border-border-subtle mt-4 pt-4">
-                <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-3">Notification Levels</h4>
-                <p class="text-xs text-text-muted mb-3">Adjust per-event notification behavior. Source: config/notification.toml</p>
-                <div class="space-y-2">
-                    {% for event_key, event_label in notification_events | default([
-                        ("cycle_start", "Cycle Start"),
-                        ("cycle_complete", "Cycle Complete"),
-                        ("trade_filled_paper", "Trade Filled (Paper)"),
-                        ("trade_filled_live", "Trade Filled (Live)"),
-                        ("kill_switch_engaged", "Kill Switch"),
-                        ("audit_chain_failure", "Audit Chain Failure"),
-                        ("stop_loss_triggered", "Stop Loss Triggered"),
-                        ("mutation_candidate_ready", "Mutation Candidate"),
-                    ]) %}
-                    <div class="flex items-center justify-between py-1">
-                        <span class="text-sm text-text-primary flex items-center gap-2">
-                            {% if event_key in ("kill_switch_engaged", "audit_chain_failure") %}
-                            <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                            {% elif event_key == "trade_filled_live" %}
-                            <span class="w-1.5 h-1.5 rounded-full bg-positive"></span>
-                            {% elif event_key == "mutation_candidate_ready" %}
-                            <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
-                            {% else %}
-                            <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
-                            {% endif %}
-                            {{ event_label }}
-                        </span>
-                        <select class="text-xs font-mono border border-border rounded-xl px-2.5 py-1.5 bg-surface-elevated notification-level-select focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors{% if event_key in ('kill_switch_engaged', 'audit_chain_failure') %} opacity-50 cursor-not-allowed{% endif %}"
-                                data-event="{{ event_key }}"
-                                {% if event_key in ("kill_switch_engaged", "audit_chain_failure") %}disabled title="This event cannot be silenced"{% endif %}>
-                            <option value="toast" {{ 'selected' if notification_levels.get(event_key, 'toast') == 'toast' else '' }}>Toast</option>
-                            <option value="toast+sound" {{ 'selected' if notification_levels.get(event_key) == 'toast+sound' else '' }}>Toast + Sound</option>
-                            <option value="modal" {{ 'selected' if notification_levels.get(event_key) == 'modal' else '' }}>Modal</option>
-                            <option value="none" {{ 'selected' if notification_levels.get(event_key) == 'none' else '' }}>Silent</option>
-                        </select>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% elif section == "Risk" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Max Single Position</dt>
-                    <dd class="font-mono text-text-primary">{{ (config.get('risk', {}).get('max_single_position_pct', 0.20) * 100) | int }}% (${{ (config.get('risk', {}).get('max_single_position_pct', 0.20) * 5000) | int }})</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Catastrophe-net Stop</dt>
-                    <dd class="font-mono text-text-primary">{{ (config.get('risk', {}).get('catastrophe_net_pct', 0.15) * 100) | int }}% below entry</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">EV Minimum</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('risk', {}).get('ev_minimum_pct', 0.01) }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Max Concurrent Positions</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('risk', {}).get('max_concurrent', 5) }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Kill Switch Daily Loss</dt>
-                    <dd class="font-mono text-text-primary">{{ (config.get('risk', {}).get('kill_switch_daily_loss_pct', 0.05) * 100) | int }}%</dd>
-                </div>
-            </dl>
-            {% elif section == "Crucible" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Time Budget</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('crucible', {}).get('time_budget_s', 90) }}s per attack</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Max Cycles</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('crucible', {}).get('max_cycles', 2) }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Severity No-Trade</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('crucible', {}).get('severity_no_trade', 0.6) }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Temperature</dt>
-                    <dd class="font-mono text-text-primary">0.1</dd>
-                </div>
-            </dl>
-            {% elif section == "Mutation Engine" %}
-            <details class="mt-3">
-            <summary class="text-xs text-text-muted cursor-pointer hover:text-text-primary mb-3">Show details ▸</summary>
-            <!-- Mutation Engine config + candidate display -->
-            <dl class="space-y-3 text-left max-w-lg mb-6">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Activation Threshold</dt>
-                    <dd class="font-mono text-text-primary">50 cycles</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Auto-Promote</dt>
-                    <dd class="font-mono text-crucible">Disabled (TOTP required)</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Stat-Sig Threshold</dt>
-                    <dd class="font-mono text-text-primary">p &lt; 0.05, d &gt; 0.20</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Probation Period</dt>
-                    <dd class="font-mono text-text-primary">30 cycles</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Auto-Rollback Window</dt>
-                    <dd class="font-mono text-text-primary">50 cycles</dd>
-                </div>
-            </dl>
+        <div>
+            <h2 class="text-lg font-semibold text-text-primary">Settings</h2>
+            <p class="text-xs text-text-muted">Configure your PMACS instance</p>
+        </div>
+    </div>
+    <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2.5 py-1 rounded-lg">{{ mode }}</span>
+</div>
 
-            <!-- Mutation Candidates -->
-            <div class="border-t border-border-subtle pt-4">
-                <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-3">Pending Candidates</h4>
-                {% if mutation_candidates %}
-                <div class="space-y-3">
-                    {% for candidate in mutation_candidates %}
-                    {% if candidate.status == 'PROPOSED' %}
-                    <div class="card card-accent-purple p-3 rounded-xl">
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="flex items-center gap-2">
-                                <span class="text-sm font-mono font-semibold text-text-primary">{{ candidate.dimension }}</span>
-                                <span class="text-xs text-text-muted">&#8594;</span>
-                                <span class="text-sm font-mono text-text-secondary">{{ candidate.target }}</span>
-                            </div>
-                            <span class="text-xs text-text-muted font-mono">{{ candidate.proposed_at | default('--') }}</span>
-                        </div>
-                        <div class="flex items-center gap-4 text-xs text-text-secondary">
-                            <span>n = <strong class="text-text-primary">{{ candidate.sample_size | default(0) }}</strong></span>
-                            <span>d = <strong class="text-text-primary">{{ candidate.effect_size | default('--') }}</strong></span>
-                            <span>p = <strong class="text-text-primary">{{ candidate.p_value | default('--') }}</strong></span>
-                            {% if candidate.trending_direction %}
-                            <span class="px-2 py-0.5 rounded-lg
-                                         {{ 'bg-positive-soft text-positive' if candidate.trending_direction == 'positive' else '' }}
-                                         {{ 'bg-negative-soft text-negative' if candidate.trending_direction == 'negative' else '' }}
-                                         {{ 'bg-surface-sunken text-text-muted' if candidate.trending_direction == 'neutral' else '' }}">
-                                {{ candidate.trending_direction }}
-                            </span>
-                            {% endif %}
-                        </div>
-                        <div class="flex gap-2 mt-3">
-                            <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="viewDiff(this.dataset.candidateId)"
-                                    class="px-3 py-1.5 text-xs border border-border text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">
-                                View Diff
-                            </button>
-                            <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="promoteMutation(this.dataset.candidateId)"
-                                    class="px-3 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-colors font-medium">
-                                Promote (TOTP)
-                            </button>
-                            <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="rejectMutation(this.dataset.candidateId)"
-                                    class="px-3 py-1.5 text-xs border border-border text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">
-                                Reject (TOTP)
-                            </button>
-                        </div>
-                    </div>
-                    {% endif %}
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="text-xs text-text-muted">No pending mutation candidates. Active after 50 PAPER cycles.</p>
-                {% endif %}
-            </div>
+<!-- ═══════════════════════════════════════════
+     ROW 1: Appearance + AI Provider
+     ═══════════════════════════════════════════ -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
-            <!-- Recent Promotions Log -->
-            <div class="border-t border-border-subtle pt-4 mt-4">
-                <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-3">Recent Promotions</h4>
-                {% if recent_mutations %}
-                <div class="space-y-2">
-                    {% for mut in recent_mutations %}
-                    <div class="flex items-center justify-between py-2 border-b border-border-subtle last:border-0">
-                        <div class="flex items-center gap-3">
-                            <span class="text-xs font-mono font-semibold text-text-primary">{{ mut.dimension }}</span>
-                            <span class="text-xs text-text-muted">&#8594;</span>
-                            <span class="text-xs font-mono text-text-secondary">{{ mut.target }}</span>
-                        </div>
-                        <div class="flex items-center gap-3">
-                            <span class="text-xs text-text-muted font-mono">{{ mut.promoted_at | default('--') }}</span>
-                            {% if mut.status == 'active' %}
-                            <span class="text-xs px-2 py-0.5 rounded-xl bg-positive-soft text-positive font-medium">Active</span>
-                            <button type="button" data-candidate-id="{{ mut.candidate_id }}" onclick="rollbackMutation(this.dataset.candidateId)"
-                                    class="px-2.5 py-0.5 text-xs border border-red-200 text-negative rounded-xl hover:bg-negative-soft transition-colors font-medium">
-                                Rollback (TOTP)
-                            </button>
-                            {% elif mut.status == 'rolled_back' %}
-                            <span class="text-xs px-2 py-0.5 rounded-xl bg-surface-sunken text-text-muted font-medium">Rolled back</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="text-xs text-text-muted">No recent promotions.</p>
-                {% endif %}
+    <!-- Appearance -->
+    <section class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-6">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Appearance</h3>
+        </div>
+
+        <!-- Theme selector as visual pills -->
+        <div class="mb-5">
+            <label class="text-xs text-text-muted font-medium block mb-2">Theme</label>
+            <div class="inline-flex rounded-xl border border-border overflow-hidden" id="theme-toggle">
+                <button type="button" onclick="setTheme('light')" data-theme="light"
+                        class="theme-btn px-4 py-2 text-xs font-medium transition-all flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                    Light
+                </button>
+                <button type="button" onclick="setTheme('dark')" data-theme="dark"
+                        class="theme-btn px-4 py-2 text-xs font-medium transition-all flex items-center gap-1.5 border-l border-border">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+                    Dark
+                </button>
+                <button type="button" onclick="setTheme('system')" data-theme="system"
+                        class="theme-btn px-4 py-2 text-xs font-medium transition-all flex items-center gap-1.5 border-l border-border">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    System
+                </button>
             </div>
-            </details>
-            {% elif section == "Inference" %}
-            <!-- Active provider indicator -->
-            <div class="flex items-center gap-2 mb-4">
+        </div>
+
+        <!-- Density -->
+        <div class="mb-5">
+            <label class="text-xs text-text-muted font-medium block mb-2">Density</label>
+            <div class="inline-flex rounded-xl border border-border overflow-hidden" id="density-toggle">
+                <button type="button" onclick="setDisplayPref('density','compact')" data-density="compact"
+                        class="density-btn px-4 py-2 text-xs font-medium transition-all">Compact</button>
+                <button type="button" onclick="setDisplayPref('density','comfortable')" data-density="comfortable"
+                        class="density-btn px-4 py-2 text-xs font-medium transition-all border-l border-border">Comfortable</button>
+                <button type="button" onclick="setDisplayPref('density','spacious')" data-density="spacious"
+                        class="density-btn px-4 py-2 text-xs font-medium transition-all border-l border-border">Spacious</button>
+            </div>
+        </div>
+
+        <!-- Timezone + Currency in a row -->
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-text-muted font-medium block mb-2">Timezone</label>
+                <select id="timezone-select" onchange="setDisplayPref('timezone', this.value)"
+                        class="w-full text-sm border border-border rounded-xl px-3 py-2 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
+                    <option value="America/New_York" selected>US Eastern</option>
+                    <option value="America/Chicago">US Central</option>
+                    <option value="Europe/London">London</option>
+                    <option value="Europe/Berlin">CET</option>
+                    <option value="Asia/Tokyo">Tokyo</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-xs text-text-muted font-medium block mb-2">Currency</label>
+                <select id="currency-select" onchange="setDisplayPref('currency', this.value)"
+                        class="w-full text-sm border border-border rounded-xl px-3 py-2 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
+                    <option value="USD" selected>USD ($)</option>
+                    <option value="EUR">EUR</option>
+                </select>
+            </div>
+        </div>
+    </section>
+
+    <!-- AI Provider -->
+    <section class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                <h3 class="text-sm font-semibold text-text-primary">AI Provider</h3>
+            </div>
+            <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-positive anim-breathing"></span>
-                <span class="text-sm font-mono text-positive">Active: <strong id="inference-active-label">{{ inference.active }}</strong></span>
-                {% if inference.model %}
-                <span class="text-xs text-text-muted font-mono ml-2">({{ inference.model }})</span>
-                {% endif %}
+                <span class="text-xs font-mono text-positive" id="inference-active-label">{{ inference.active }}</span>
             </div>
+        </div>
 
-            <!-- Provider selection -->
-            <div class="space-y-3 mb-6">
-                <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">Provider</h4>
-                {% for provider in inference.providers %}
-                <label class="flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-colors
-                             {{ 'card-accent-blue' if provider.id == inference.active else 'border-border hover:border-border-subtle' }}">
+        <!-- Mode toggle: Local vs Cloud -->
+        <div class="mb-5">
+            <div class="inline-flex rounded-xl border border-border overflow-hidden" id="inference-mode-toggle">
+                <button type="button" onclick="setInferenceMode('local')" data-mode="local"
+                        class="inference-mode-btn px-4 py-2 text-xs font-medium transition-all flex items-center gap-1.5
+                        {{ 'bg-accent-soft text-accent' if inference.active_is_local else 'text-text-muted hover:text-text-primary hover:bg-surface-sunken/50' }}">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v3"/></svg>
+                    Local
+                </button>
+                <button type="button" onclick="setInferenceMode('cloud')" data-mode="cloud"
+                        class="inference-mode-btn px-4 py-2 text-xs font-medium transition-all flex items-center gap-1.5 border-l border-border
+                        {{ 'bg-accent-soft text-accent' if not inference.active_is_local else 'text-text-muted hover:text-text-primary hover:bg-surface-sunken/50' }}">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+                    Cloud API
+                </button>
+            </div>
+        </div>
+
+        <!-- Local providers panel -->
+        <div id="inference-local-panel" class="{{ 'hidden' if not inference.active_is_local else '' }}">
+            <div class="space-y-2 mb-5">
+                {% for provider in inference.local_providers %}
+                <label class="flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-all
+                             {{ 'border-accent bg-accent-soft' if provider.id == inference.active else 'border-border hover:border-border-strong hover:bg-surface-sunken/30' }}">
                     <input type="radio" name="inference-provider" value="{{ provider.id }}"
-                           id="inference-provider-{{ provider.id }}"
                            {{ 'checked' if provider.id == inference.active else '' }}
                            onchange="switchProvider(this.value)"
-                           aria-label="{{ provider.id }} provider"
-                           class="accent-blue-600">
-                    <div class="flex-1">
-                        <div class="text-sm font-medium text-text-primary">{{ provider.id }}</div>
-                        <div class="text-xs text-text-muted font-mono">
-                            {{ provider.model or 'No model configured' }}
-                            {% if provider.needs_key %}
-                            &middot; API Key: {% if provider.has_api_key %}Configured{% else %}<span class="text-amber-500 font-medium">Not set</span>{% endif %}
-                            {% else %}
-                            &middot; Local (no key needed)
-                            {% endif %}
-                        </div>
+                           class="accent-blue-600 shrink-0">
+                    <div class="flex-1 min-w-0">
+                        <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
+                        <span class="text-xs text-text-muted font-mono ml-2">{{ provider.model or 'No model' }}</span>
                     </div>
+                    <span class="text-[10px] font-mono text-text-muted px-1.5 py-0.5 rounded-md bg-surface-sunken/50 shrink-0">Local</span>
                 </label>
                 {% endfor %}
             </div>
 
-            <!-- Provider-specific settings -->
-            <div id="inference-cloud-settings" class="space-y-3 mb-6 {{ 'hidden' if inference.active == 'llama_server' else '' }}">
-                <h4 class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">Cloud Provider Settings</h4>
+            <!-- Local model config -->
+            <div class="space-y-3 mb-4">
                 <div>
-                    <label for="inference-model-input" class="block text-xs text-text-secondary mb-1">Model Name</label>
+                    <label for="inference-model-input" class="text-xs text-text-muted font-medium block mb-1.5">Model</label>
                     <div class="flex gap-2">
                         <input type="text" id="inference-model-input"
+                               value="{{ inference.model }}"
+                               placeholder="e.g. qwen3.6:latest"
+                               class="flex-1 px-3 py-2 text-sm border border-border rounded-xl font-mono bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
+                        <button type="button" onclick="saveModel()"
+                                class="px-3 py-2 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium shrink-0">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cloud providers panel -->
+        <div id="inference-cloud-panel" class="{{ 'hidden' if inference.active_is_local else '' }}">
+            <div class="space-y-2 mb-5">
+                {% for provider in inference.cloud_providers %}
+                <label class="flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-all
+                             {{ 'border-accent bg-accent-soft' if provider.id == inference.active else 'border-border hover:border-border-strong hover:bg-surface-sunken/30' }}">
+                    <input type="radio" name="inference-provider" value="{{ provider.id }}"
+                           {{ 'checked' if provider.id == inference.active else '' }}
+                           onchange="switchProvider(this.value)"
+                           class="accent-blue-600 shrink-0">
+                    <div class="flex-1 min-w-0">
+                        <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
+                        <span class="text-xs text-text-muted font-mono ml-2">{{ provider.model or 'No model' }}</span>
+                    </div>
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0
+                          {{ 'bg-positive-soft text-positive' if provider.has_api_key else 'bg-negative-soft text-negative' }}">
+                        {{ 'Key set' if provider.has_api_key else 'No key' }}
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <!-- Cloud config: model + API key -->
+            <div class="space-y-3 mb-4">
+                <div>
+                    <label for="inference-cloud-model-input" class="text-xs text-text-muted font-medium block mb-1.5">Model</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="inference-cloud-model-input"
                                value="{{ inference.model }}"
                                placeholder="e.g. openai/gpt-4o"
                                class="flex-1 px-3 py-2 text-sm border border-border rounded-xl font-mono bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
                         <button type="button" onclick="saveModel()"
-                                class="px-4 py-2 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-colors font-medium">
-                            Save
-                        </button>
+                                class="px-3 py-2 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium shrink-0">Save</button>
                     </div>
                 </div>
                 <div>
-                    <label for="inference-api-key-input" class="block text-xs text-text-secondary mb-1">API Key</label>
+                    <label for="inference-api-key-input" class="text-xs text-text-muted font-medium block mb-1.5">API Key</label>
                     <div class="flex gap-2">
                         <input type="password" id="inference-api-key-input"
-                               placeholder="{{ '•••••••• (configured)' if inference.has_api_key else 'Enter API key' }}"
+                               placeholder="{{ '(configured)' if inference.has_api_key else 'Enter API key' }}"
                                class="flex-1 px-3 py-2 text-sm border border-border rounded-xl font-mono bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
                         <button type="button" onclick="saveApiKey()"
-                                class="px-4 py-2 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-colors font-medium">
-                            Save
-                        </button>
+                                class="px-3 py-2 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium shrink-0">Save</button>
                     </div>
                 </div>
             </div>
-
-            <!-- Static config values -->
-            <div class="border-t border-border-subtle pt-4 mb-4">
-                <dl class="space-y-3 text-left max-w-lg">
-                    <div class="flex justify-between">
-                        <dt class="text-text-secondary">Analysis Temperature</dt>
-                        <dd class="font-mono text-text-primary">0.2</dd>
-                    </div>
-                    <div class="flex justify-between">
-                        <dt class="text-text-secondary">Crucible Temperature</dt>
-                        <dd class="font-mono text-text-primary">0.1</dd>
-                    </div>
-                    <div class="flex justify-between">
-                        <dt class="text-text-secondary">Memo Writer Temperature</dt>
-                        <dd class="font-mono text-text-primary">0.3</dd>
-                    </div>
-                    <div class="flex justify-between">
-                        <dt class="text-text-secondary">Max Concurrent Slots</dt>
-                        <dd class="font-mono text-text-primary">{{ config.get('resources', {}).get('max_slots', '--') }}</dd>
-                    </div>
-                </dl>
-            </div>
-
-            <!-- Test Connection -->
-            <div class="flex items-center gap-3">
-                <button type="button" onclick="testConnection()"
-                        id="inference-test-btn"
-                        class="px-4 py-2 text-xs border border-accent text-accent rounded-xl hover:bg-accent-soft transition-colors font-medium">
-                    Test Connection
-                </button>
-                <span id="inference-test-result" class="text-xs text-text-muted"></span>
-            </div>
-            {% elif section == "Brokers" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Paper Broker</dt>
-                    <dd class="font-mono text-text-primary">Alpaca Paper</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Live Broker</dt>
-                    <dd class="font-mono text-text-primary">Alpaca</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Paper API Key</dt>
-                    <dd class="font-mono text-text-primary">{% if config.get('broker', {}).get('alpaca_paper_key') %}Configured{% else %}<span class="text-amber-500 font-medium">Not set</span>{% endif %}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">IBKR Connection</dt>
-                    <dd class="font-mono text-text-muted">Future (not in current scope)</dd>
-                </div>
-            </dl>
-            {% elif section == "Universe" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Universe Size</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('universe', {}).get('size', 'Dynamic') }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Rotation Frequency</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('universe', {}).get('rotation', 'Weekly') }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Index Overlay</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('universe', {}).get('index_overlay', 'Enabled') }}</dd>
-                </div>
-            </dl>
-            {% elif section == "Agent Personas" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                {% for persona in ['catalyst_summarizer', 'crucible', 'forensics', 'growth_hunter', 'insider_activity', 'macro_regime', 'moat_analyst', 'short_interest', 'memo_writer'] %}
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">{{ persona | replace('_', ' ') | title }}</dt>
-                    <dd class="flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-positive anim-breathing"></span>
-                        <span class="font-mono text-xs text-positive">Active</span>
-                    </dd>
-                </div>
-                {% endfor %}
-                <div class="flex justify-between mt-2 pt-2 border-t border-border-subtle">
-                    <dt class="text-text-secondary">Total Personas</dt>
-                    <dd class="font-mono text-text-primary">9</dd>
-                </div>
-            </dl>
-            {% elif section == "Queue" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Priority Bands</dt>
-                    <dd class="font-mono text-text-primary">3 (HIGH, NORMAL, LOW)</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Max Concurrent Analysis</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('resources', {}).get('max_slots', 3) }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Cycle Time Limit</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('resources', {}).get('cycle_time_limit_s', 300) }}s</dd>
-                </div>
-            </dl>
-            {% elif section == "Audit & Debug" %}
-            <details class="mt-3">
-            <summary class="text-xs text-text-muted cursor-pointer hover:text-text-primary mb-3">Show details ▸</summary>
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Audit Log Path</dt>
-                    <dd class="font-mono text-xs text-text-primary">data/audit.log</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Debug Log Level</dt>
-                    <dd class="font-mono text-text-primary">{{ config.get('debug', {}).get('level', 'INFO') }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Chain Verification</dt>
-                    <dd class="font-mono text-positive">Enabled</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Hash Algorithm</dt>
-                    <dd class="font-mono text-text-primary">SHA-256</dd>
-                </div>
-            </dl>
-            </details>
-            {% elif section == "Cost & Budget" %}
-            <details class="mt-3">
-            <summary class="text-xs text-text-muted cursor-pointer hover:text-text-primary mb-3">Show details ▸</summary>
-            {% include "cost_settings.html" %}
-            </details>
-            {% elif section == "Operator" %}
-            <dl class="space-y-3 text-left max-w-lg">
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Current Mode</dt>
-                    <dd class="font-mono text-text-primary">{{ mode }}</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">TOTP Status</dt>
-                    <dd class="font-mono text-positive">Configured</dd>
-                </div>
-                <div class="flex justify-between">
-                    <dt class="text-text-secondary">Mode Override</dt>
-                    <dd>
-                        <button type="button" onclick="open_totp_modal({
-                            actionId: 'settings.mode_override',
-                            description: 'Override system mode',
-                            consequences: 'Bypasses promotion gate checks. The system has not proven performance at the target level.',
-                            callbackUrl: '/api/settings/mode_override',
-                            onSuccess: function() { window.location.reload(); }
-                        })" class="px-3 py-1.5 text-xs border border-border text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">
-                            Force Promote/Demote (TOTP)
-                        </button>
-                    </dd>
-                </div>
-            </dl>
-            {% else %}
-            <p class="text-sm text-text-muted">No configuration loaded for this section.</p>
-            {% endif %}
         </div>
-    </div>
-    {% endfor %}
+
+        <!-- Test connection -->
+        <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
+            <div class="flex gap-4 text-text-muted">
+                <span class="text-[10px] font-mono">Analysis: 0.2</span>
+                <span class="text-[10px] font-mono">Crucible: 0.1</span>
+                <span class="text-[10px] font-mono">Memo: 0.3</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="inference-test-result" class="text-xs text-text-muted"></span>
+                <button type="button" onclick="testConnection()" id="inference-test-btn"
+                        class="px-3 py-1.5 text-xs border border-accent text-accent rounded-xl hover:bg-accent-soft transition-colors font-medium">
+                    Test
+                </button>
+            </div>
+        </div>
+    </section>
 </div>
 
+<!-- ═══════════════════════════════════════════
+     ROW 2: Budget
+     ═══════════════════════════════════════════ -->
+<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+    <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Budget</h3>
+        </div>
+        {% if cost_state.avg_cycle_cost > 0 %}
+        <span class="text-xs text-text-muted font-mono">avg ${{ "%.3f"|format(cost_state.avg_cycle_cost) }}/cycle</span>
+        {% endif %}
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Today -->
+        <div>
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-xs text-text-muted font-medium">Today</span>
+                <span class="font-mono text-sm">
+                    <span id="settings-cost-daily" class="font-semibold text-text-primary">${{ "%.2f"|format(cost_state.today_cost) }}</span>
+                    <span class="text-text-muted"> / ${{ "%.2f"|format(cost_state.daily_cap) }}</span>
+                </span>
+            </div>
+            <div class="w-full h-2 bg-surface-sunken rounded-full overflow-hidden">
+                {% set daily_pct = cost_state.today_cost / cost_state.daily_cap if cost_state.daily_cap > 0 else 0 %}
+                <div id="settings-cost-daily-bar"
+                     class="h-full rounded-full transition-all duration-500 {{ 'bg-negative' if daily_pct > 0.9 else 'bg-warning' if daily_pct > 0.7 else 'bg-positive' }}"
+                     style="width: {{ [daily_pct * 100, 100]|min }}%"></div>
+            </div>
+        </div>
+
+        <!-- This month -->
+        <div>
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-xs text-text-muted font-medium">This Month</span>
+                <span class="font-mono text-sm">
+                    <span id="settings-cost-monthly" class="font-semibold text-text-primary">${{ "%.2f"|format(cost_state.month_cost) }}</span>
+                    <span class="text-text-muted"> / ${{ "%.2f"|format(cost_state.monthly_cap) }}</span>
+                </span>
+            </div>
+            <div class="w-full h-2 bg-surface-sunken rounded-full overflow-hidden">
+                {% set monthly_pct = cost_state.month_cost / cost_state.monthly_cap if cost_state.monthly_cap > 0 else 0 %}
+                <div id="settings-cost-monthly-bar"
+                     class="h-full rounded-full transition-all duration-500 {{ 'bg-negative' if monthly_pct > 0.9 else 'bg-warning' if monthly_pct > 0.7 else 'bg-positive' }}"
+                     style="width: {{ [monthly_pct * 100, 100]|min }}%"></div>
+            </div>
+        </div>
+
+        <!-- Caps -->
+        <div class="flex items-end gap-3">
+            <div class="flex-1">
+                <label for="cost-daily-cap-input" class="text-[10px] text-text-muted font-medium block mb-1">Daily cap</label>
+                <div class="flex items-center gap-1">
+                    <span class="text-text-muted text-sm">$</span>
+                    <input type="number" id="cost-daily-cap-input"
+                           value="{{ "%.2f"|format(cost_state.daily_cap) }}"
+                           step="0.50" min="0.50" max="100"
+                           class="w-full px-2 py-1.5 text-sm font-mono border border-border rounded-lg bg-surface-elevated focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
+                </div>
+            </div>
+            <div class="flex-1">
+                <label for="cost-monthly-cap-input" class="text-[10px] text-text-muted font-medium block mb-1">Monthly cap</label>
+                <div class="flex items-center gap-1">
+                    <span class="text-text-muted text-sm">$</span>
+                    <input type="number" id="cost-monthly-cap-input"
+                           value="{{ "%.2f"|format(cost_state.monthly_cap) }}"
+                           step="1.00" min="1" max="1000"
+                           class="w-full px-2 py-1.5 text-sm font-mono border border-border rounded-lg bg-surface-elevated focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
+                </div>
+            </div>
+            <button type="button" onclick="saveBudgetCaps()"
+                    class="px-3 py-1.5 text-xs bg-accent text-white rounded-lg hover:opacity-90 transition-opacity font-medium shrink-0">
+                Save
+            </button>
+        </div>
+    </div>
+
+    <!-- Per-persona breakdown (collapsible) -->
+    {% if persona_costs %}
+    <details class="mt-5 pt-5 border-t border-border-subtle group">
+        <summary class="text-xs text-text-muted font-medium cursor-pointer hover:text-text-secondary transition-colors flex items-center gap-1.5 select-none">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+            Per-persona breakdown (30 days)
+        </summary>
+        <div class="mt-3 overflow-x-auto">
+            <table class="w-full text-xs min-w-[400px]">
+                <thead>
+                    <tr class="text-left text-text-muted border-b border-border-subtle">
+                        <th class="pb-2 font-medium">Persona</th>
+                        <th class="pb-2 font-medium text-right">Calls</th>
+                        <th class="pb-2 font-medium text-right">Tokens</th>
+                        <th class="pb-2 font-medium text-right">Cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for p in persona_costs %}
+                    <tr class="border-b border-border-subtle/50">
+                        <td class="py-1.5 font-mono text-text-secondary">{{ p.persona | replace('_', ' ') | title }}</td>
+                        <td class="py-1.5 font-mono text-right text-text-muted">{{ p.call_count }}</td>
+                        <td class="py-1.5 font-mono text-right text-text-muted">{{ "{:,}".format(p.prompt_tokens + p.completion_tokens) }}</td>
+                        <td class="py-1.5 font-mono text-right {{ 'text-negative' if p.cost_usd > 1.0 else 'text-text-secondary' }}">${{ "%.4f"|format(p.cost_usd) }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="border-t border-border">
+                        <td class="pt-2 font-semibold text-text-primary text-xs">Total</td>
+                        <td class="pt-2 font-mono text-right text-text-muted">{{ persona_costs | sum(attribute='call_count') }}</td>
+                        <td class="pt-2 font-mono text-right text-text-muted">{{ "{:,}".format(persona_costs | sum(attribute='prompt_tokens') + persona_costs | sum(attribute='completion_tokens')) }}</td>
+                        <td class="pt-2 font-mono text-right font-semibold text-text-primary">${{ "%.4f"|format(persona_costs | sum(attribute='cost_usd')) }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </details>
+    {% endif %}
+
+    <!-- Pricing table (collapsible) -->
+    {% if pricing_table %}
+    <details class="mt-4 pt-4 border-t border-border-subtle group">
+        <summary class="text-xs text-text-muted font-medium cursor-pointer hover:text-text-secondary transition-colors flex items-center gap-1.5 select-none">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+            Pricing table
+        </summary>
+        <div class="mt-3 overflow-x-auto">
+            <table class="w-full text-xs min-w-[400px]">
+                <thead>
+                    <tr class="text-left text-text-muted border-b border-border-subtle">
+                        <th class="pb-2 font-medium">Model</th>
+                        <th class="pb-2 font-medium text-right">In / 1M</th>
+                        <th class="pb-2 font-medium text-right">Out / 1M</th>
+                        <th class="pb-2 font-medium text-right">Cached / 1M</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for pr in pricing_table %}
+                    <tr class="border-b border-border-subtle/50">
+                        <td class="py-1.5 font-mono text-text-secondary">{{ pr.model_id }}</td>
+                        <td class="py-1.5 font-mono text-right text-text-muted">${{ "%.2f"|format(pr.input_price_per_token * 1_000_000) }}</td>
+                        <td class="py-1.5 font-mono text-right text-text-muted">${{ "%.2f"|format(pr.output_price_per_token * 1_000_000) }}</td>
+                        <td class="py-1.5 font-mono text-right text-text-muted">
+                            {% if pr.cached_input_price_per_token %} ${{ "%.2f"|format(pr.cached_input_price_per_token * 1_000_000) }}{% else %}--{% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <div class="flex justify-end mt-2">
+                <button type="button" onclick="refreshPricing()"
+                        class="px-3 py-1 text-[10px] border border-border text-text-muted rounded-lg hover:bg-surface-sunken transition-colors font-medium">
+                    Refresh
+                </button>
+            </div>
+        </div>
+    </details>
+    {% endif %}
+</section>
+
+<!-- ═══════════════════════════════════════════
+     ROW 3: Notifications
+     ═══════════════════════════════════════════ -->
+<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+    <div class="flex items-center gap-2 mb-5">
+        <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+        <h3 class="text-sm font-semibold text-text-primary">Notifications</h3>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
+        {% for event_key, event_label, event_color in [
+            ("cycle_start", "Cycle Start", "accent"),
+            ("cycle_complete", "Cycle Complete", "accent"),
+            ("trade_filled_paper", "Trade Filled (Paper)", "accent"),
+            ("trade_filled_live", "Trade Filled (Live)", "positive"),
+            ("kill_switch_engaged", "Kill Switch", "negative"),
+            ("audit_chain_failure", "Audit Chain Failure", "negative"),
+            ("stop_loss_triggered", "Stop Loss Triggered", "negative"),
+            ("mutation_candidate_ready", "Mutation Candidate", "purple-500"),
+        ] %}
+        <div class="flex items-center justify-between py-2">
+            <span class="text-sm text-text-primary flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-{{ event_color }} shrink-0"></span>
+                {{ event_label }}
+            </span>
+            <select class="text-xs font-mono border border-border rounded-lg px-2 py-1 bg-surface-elevated notification-level-select focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors{% if event_key in ('kill_switch_engaged', 'audit_chain_failure') %} opacity-50 cursor-not-allowed{% endif %}"
+                    data-event="{{ event_key }}"
+                    {% if event_key in ("kill_switch_engaged", "audit_chain_failure") %}disabled title="Cannot be silenced"{% endif %}>
+                <option value="toast" {{ 'selected' if notification_levels.get(event_key, 'toast') == 'toast' else '' }}>Toast</option>
+                <option value="toast+sound" {{ 'selected' if notification_levels.get(event_key) == 'toast+sound' else '' }}>Toast + Sound</option>
+                <option value="modal" {{ 'selected' if notification_levels.get(event_key) == 'modal' else '' }}>Modal</option>
+                <option value="none" {{ 'selected' if notification_levels.get(event_key) == 'none' else '' }}>Silent</option>
+            </select>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- ═══════════════════════════════════════════
+     ROW 4: Reset Progress
+     ═══════════════════════════════════════════ -->
+<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+    <div class="flex items-center gap-2 mb-2">
+        <svg class="w-4 h-4 text-negative" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <h3 class="text-sm font-semibold text-text-primary">Reset Progress</h3>
+    </div>
+    <p class="text-xs text-text-muted mb-5">Wipe all trading progress and start fresh. This resets positions, decisions, memos, cycle history, and universe. Settings and agent configuration are preserved.</p>
+
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
+        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken/50 border border-border-subtle">
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-xs text-text-secondary">Positions closed</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken/50 border border-border-subtle">
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-xs text-text-secondary">Portfolio to $5,000</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken/50 border border-border-subtle">
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-xs text-text-secondary">Decisions cleared</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken/50 border border-border-subtle">
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-xs text-text-secondary">Memos wiped</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken/50 border border-border-subtle">
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span class="text-xs text-text-secondary">Universe cleared</span>
+        </div>
+    </div>
+
+    <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
+        <div id="reset-status" class="text-xs text-text-muted"></div>
+        <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" id="reset-confirm-check" class="accent-red-500 w-3.5 h-3.5">
+                <span class="text-xs text-text-secondary">I understand this is irreversible</span>
+            </label>
+            <button type="button" id="reset-btn" onclick="resetProgress()" disabled
+                    class="px-4 py-2 text-xs bg-negative/80 text-white rounded-xl hover:bg-negative transition-colors font-medium disabled:opacity-30 disabled:cursor-not-allowed">
+                Reset All Progress
+            </button>
+        </div>
+    </div>
+</section>
+
+<script>
+document.getElementById("reset-confirm-check").addEventListener("change", function() {
+    document.getElementById("reset-btn").disabled = !this.checked;
+});
+
+function resetProgress() {
+    if (!document.getElementById("reset-confirm-check").checked) return;
+    var btn = document.getElementById("reset-btn");
+    var status = document.getElementById("reset-status");
+    btn.disabled = true; btn.textContent = "Resetting...";
+    status.textContent = "";
+
+    fetch("/api/settings/reset-progress", {method: "POST"})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                status.textContent = "Reset complete. Reloading...";
+                status.className = "text-xs text-positive font-medium";
+                setTimeout(function() { window.location.reload(); }, 1200);
+            } else {
+                status.textContent = "Failed: " + (data.error || "Unknown error");
+                status.className = "text-xs text-negative";
+                btn.disabled = false; btn.textContent = "Reset All Progress";
+            }
+        })
+        .catch(function(err) {
+            status.textContent = "Failed: " + err.message;
+            status.className = "text-xs text-negative";
+            btn.disabled = false; btn.textContent = "Reset All Progress";
+        });
+}
+</script>
+
+<!-- ═══════════════════════════════════════════
+     ROW 5: Mutations (only if candidates exist)
+     ═══════════════════════════════════════════ -->
+{% if mutation_candidates or recent_mutations %}
+<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+    <div class="flex items-center justify-between mb-5">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Mutations</h3>
+        </div>
+        <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg">Activates after 50 cycles</span>
+    </div>
+
+    <!-- Pending Candidates -->
+    {% if mutation_candidates %}
+    <div class="space-y-3 mb-5">
+        {% for candidate in mutation_candidates %}
+        {% if candidate.status == 'PROPOSED' %}
+        <div class="p-4 rounded-xl border border-purple-500/20 bg-crucible-soft">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-mono font-semibold text-text-primary">{{ candidate.dimension }}</span>
+                    <span class="text-xs text-text-muted">&rarr;</span>
+                    <span class="text-sm font-mono text-text-secondary">{{ candidate.target }}</span>
+                </div>
+                <span class="text-xs text-text-muted font-mono">{{ candidate.proposed_at | default('--') }}</span>
+            </div>
+            <div class="flex items-center gap-4 text-xs text-text-secondary mb-3">
+                <span>n=<strong class="text-text-primary">{{ candidate.sample_size | default(0) }}</strong></span>
+                <span>d=<strong class="text-text-primary">{{ candidate.effect_size | default('--') }}</strong></span>
+                <span>p=<strong class="text-text-primary">{{ candidate.p_value | default('--') }}</strong></span>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="viewDiff(this.dataset.candidateId)"
+                        class="px-3 py-1.5 text-xs border border-border text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">Diff</button>
+                <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="promoteMutation(this.dataset.candidateId)"
+                        class="px-3 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-colors font-medium">Promote</button>
+                <button type="button" data-candidate-id="{{ candidate.candidate_id }}" onclick="rejectMutation(this.dataset.candidateId)"
+                        class="px-3 py-1.5 text-xs border border-border text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">Reject</button>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Recent Promotions -->
+    {% if recent_mutations %}
+    <div class="space-y-2{% if mutation_candidates %} pt-4 border-t border-border-subtle{% endif %}">
+        <h4 class="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-2">Recent</h4>
+        {% for mut in recent_mutations %}
+        <div class="flex items-center justify-between py-2 border-b border-border-subtle/50 last:border-0">
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-semibold text-text-primary">{{ mut.dimension }}</span>
+                <span class="text-xs text-text-muted">&rarr;</span>
+                <span class="text-xs font-mono text-text-secondary">{{ mut.target }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if mut.status == 'active' %}
+                <span class="text-[10px] px-1.5 py-0.5 rounded-md bg-positive-soft text-positive font-medium">Active</span>
+                <button type="button" data-candidate-id="{{ mut.candidate_id }}" onclick="rollbackMutation(this.dataset.candidateId)"
+                        class="px-2 py-0.5 text-[10px] border border-red-200 text-negative rounded-lg hover:bg-negative-soft transition-colors font-medium">Rollback</button>
+                {% elif mut.status == 'rolled_back' %}
+                <span class="text-[10px] px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted font-medium">Rolled back</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════
+     Scripts
+     ═══════════════════════════════════════════ -->
 <script>
 (function() {
-    try {
-        var saved = localStorage.getItem("pmacs-theme") || "system";
-        var sel = document.getElementById("theme-select");
-        if (sel) sel.value = saved;
-    } catch (e) {}
+    // Initialize theme toggle state
+    var saved = localStorage.getItem("pmacs-theme") || "system";
+    document.querySelectorAll(".theme-btn").forEach(function(btn) {
+        if (btn.dataset.theme === saved) {
+            btn.classList.add("bg-accent-soft", "text-accent");
+        } else {
+            btn.classList.add("text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
+        }
+    });
+
+    // Initialize density toggle state
+    var savedDensity = localStorage.getItem("pmacs-density") || "comfortable";
+    document.querySelectorAll(".density-btn").forEach(function(btn) {
+        if (btn.dataset.density === savedDensity) {
+            btn.classList.add("bg-accent-soft", "text-accent");
+        } else {
+            btn.classList.add("text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
+        }
+    });
+
+    // Notification level listeners
+    document.querySelectorAll(".notification-level-select").forEach(function(sel) {
+        sel.addEventListener("change", function() {
+            var eventKey = this.getAttribute("data-event");
+            var level = this.value;
+            fetch("/api/settings/notifications", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({event: eventKey, level: level})
+            }).then(function(resp) { return resp.json(); }).then(function(data) {
+                if (data.ok) showToast("Saved", "success", 1500);
+                else showToast("Failed: " + (data.error || "Unknown error"), "error");
+            }).catch(function(err) { showToast("Save failed", "error"); });
+        });
+    });
 })();
 
 function setTheme(mode) {
     try { localStorage.setItem("pmacs-theme", mode); } catch (e) {}
     var root = document.documentElement;
     var isDark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    if (isDark) {
-        root.classList.add("dark");
-    } else {
-        root.classList.remove("dark");
-    }
+    if (isDark) { root.classList.add("dark"); } else { root.classList.remove("dark"); }
+    // Update toggle visuals
+    document.querySelectorAll(".theme-btn").forEach(function(btn) {
+        btn.classList.remove("bg-accent-soft", "text-accent", "text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
+        if (btn.dataset.theme === mode) {
+            btn.classList.add("bg-accent-soft", "text-accent");
+        } else {
+            btn.classList.add("text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
+        }
+    });
 }
 
 function setDisplayPref(key, value) {
@@ -546,134 +643,60 @@ function setDisplayPref(key, value) {
         var root = document.documentElement;
         root.classList.remove("density-compact", "density-comfortable", "density-spacious");
         root.classList.add("density-" + value);
-    }
-    showToast("Display preference saved: " + key + " = " + value, "success", 1500);
-}
-
-document.querySelectorAll(".notification-level-select").forEach(function(sel) {
-    sel.addEventListener("change", function() {
-        var eventKey = this.getAttribute("data-event");
-        var level = this.value;
-        fetch("/api/settings/notifications", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({event: eventKey, level: level})
-        }).then(function(resp) {
-            return resp.json();
-        }).then(function(data) {
-            if (data.ok) {
-                showToast("Notification level saved: " + eventKey, "success", 2000);
+        // Update toggle visuals
+        document.querySelectorAll(".density-btn").forEach(function(btn) {
+            btn.classList.remove("bg-accent-soft", "text-accent", "text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
+            if (btn.dataset.density === value) {
+                btn.classList.add("bg-accent-soft", "text-accent");
             } else {
-                showToast("Failed to save: " + (data.error || "Unknown error"), "error");
+                btn.classList.add("text-text-muted", "hover:text-text-primary", "hover:bg-surface-sunken/50");
             }
-        }).catch(function(err) {
-            showToast("Save failed: " + err.message, "error");
         });
-    });
-});
-</script>
-
-<script>
-function promoteMutation(candidateId) {
-    open_totp_modal({
-        actionId: 'mutation.promote.' + candidateId,
-        description: 'Promote mutation candidate: ' + candidateId,
-        consequences: 'This mutation will be applied to production configuration. The system will monitor for regression over 50 cycles.',
-        callbackUrl: '/api/mutation/promote',
-        onSuccess: function() {
-            showToast('Mutation promoted: ' + candidateId, 'success');
-            setTimeout(function() { window.location.reload(); }, 1000);
-        }
-    });
-}
-
-function rejectMutation(candidateId) {
-    open_totp_modal({
-        actionId: 'mutation.reject.' + candidateId,
-        description: 'Reject mutation candidate: ' + candidateId,
-        consequences: 'This candidate will be permanently rejected.',
-        callbackUrl: '/api/mutation/reject',
-        onSuccess: function() {
-            showToast('Mutation rejected: ' + candidateId, 'info');
-            setTimeout(function() { window.location.reload(); }, 1000);
-        }
-    });
-}
-
-function rollbackMutation(candidateId) {
-    open_totp_modal({
-        actionId: 'mutation.rollback.' + candidateId,
-        description: 'Rollback mutation: ' + candidateId,
-        consequences: 'Production config reverts to the pre-mutation state immediately. All dependent cycles will use the old configuration.',
-        callbackUrl: '/api/mutation/rollback',
-        onSuccess: function() {
-            showToast('Mutation rolled back: ' + candidateId, 'success');
-            setTimeout(function() { window.location.reload(); }, 1000);
-        }
-    });
-}
-
-function viewDiff(candidateId) {
-    var modal = document.getElementById('diff-modal');
-    var container = document.getElementById('diff-container');
-    if (!modal || !container) { showToast('Diff viewer not available', 'error'); return; }
-    container.innerHTML = '<p class="text-xs text-text-muted">Loading diff...</p>';
-    modal.classList.remove('hidden');
-
-    fetch('/api/mutation/' + candidateId + '/diff')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (!data.ok) { container.innerHTML = '<p class="text-xs text-negative">Error: ' + escapeHtml(data.error) + '</p>'; return; }
-            window._diffData = data;
-            renderDiff('side-by-side');
-        });
-}
-
-function renderDiff(mode) {
-    var container = document.getElementById('diff-container');
-    var data = window._diffData;
-    if (mode === 'unified') {
-        var lines = data.unified.split('\n');
-        var html = '<pre class="text-xs font-mono whitespace-pre overflow-x-auto">';
-        for (var i = 0; i < lines.length; i++) {
-            var cls = lines[i].startsWith('+') ? 'text-positive' : lines[i].startsWith('-') ? 'text-negative' : 'text-text-secondary';
-            html += '<span class="' + cls + '">' + lines[i].replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>\n';
-        }
-        html += '</pre>';
-        container.innerHTML = html;
-    } else {
-        var rows = data.diff_rows || [];
-        var html = '<table class="w-full text-xs font-mono"><tbody>';
-        for (var i = 0; i < rows.length; i++) {
-            var r = rows[i];
-            var rowClass = escapeHtml(r['class'] || '');
-            html += '<tr class="' + rowClass + '"><td class="px-2 py-0.5 border-r border-border whitespace-pre">' + escapeHtml(r.baseline || '') + '</td><td class="px-2 py-0.5 whitespace-pre">' + escapeHtml(r.candidate || '') + '</td></tr>';
-        }
-        html += '</tbody></table>';
-        container.innerHTML = html;
     }
-    document.getElementById('btn-sbs').className = mode === 'side-by-side'
-        ? 'px-3 py-1.5 text-xs rounded-xl bg-surface-overlay text-white font-medium' : 'px-3 py-1.5 text-xs rounded-xl border border-border text-text-secondary font-medium';
-    document.getElementById('btn-unified').className = mode === 'unified'
-        ? 'px-3 py-1.5 text-xs rounded-xl bg-surface-overlay text-white font-medium' : 'px-3 py-1.5 text-xs rounded-xl border border-border text-text-secondary font-medium';
-}
-
-function copyDiffText(side) {
-    var data = window._diffData;
-    var text = side === 'baseline' ? data.baseline : data.candidate;
-    navigator.clipboard.writeText(text).then(function() {
-        showToast('Copied ' + side, 'success');
-    });
-}
-
-function closeDiffModal() {
-    document.getElementById('diff-modal').classList.add('hidden');
+    showToast("Saved", "success", 1200);
 }
 </script>
 
 <script>
 var currentProvider = '{{ inference.active }}';
-var providers = {{ inference.providers | tojson }};
+var currentMode = '{{ inference.mode }}';
+var localProviders = {{ inference.local_providers | tojson }};
+var cloudProviders = {{ inference.cloud_providers | tojson }};
+var allProviders = localProviders.concat(cloudProviders);
+
+function setInferenceMode(mode) {
+    currentMode = mode;
+    var localPanel = document.getElementById('inference-local-panel');
+    var cloudPanel = document.getElementById('inference-cloud-panel');
+
+    if (mode === 'local') {
+        localPanel.classList.remove('hidden');
+        cloudPanel.classList.add('hidden');
+        // Auto-select first local provider if current is cloud
+        var currentIsLocal = localProviders.some(function(p) { return p.id === currentProvider; });
+        if (!currentIsLocal && localProviders.length > 0) {
+            switchProvider(localProviders[0].id);
+        }
+    } else {
+        localPanel.classList.add('hidden');
+        cloudPanel.classList.remove('hidden');
+        // Auto-select first cloud provider if current is local
+        var currentIsCloud = cloudProviders.some(function(p) { return p.id === currentProvider; });
+        if (!currentIsCloud && cloudProviders.length > 0) {
+            switchProvider(cloudProviders[0].id);
+        }
+    }
+
+    // Update toggle visuals
+    document.querySelectorAll('.inference-mode-btn').forEach(function(btn) {
+        btn.classList.remove('bg-accent-soft', 'text-accent', 'text-text-muted', 'hover:text-text-primary', 'hover:bg-surface-sunken/50');
+        if (btn.dataset.mode === mode) {
+            btn.classList.add('bg-accent-soft', 'text-accent');
+        } else {
+            btn.classList.add('text-text-muted', 'hover:text-text-primary', 'hover:bg-surface-sunken/50');
+        }
+    });
+}
 
 function switchProvider(providerId) {
     fetch('/api/settings/inference/provider', {
@@ -684,94 +707,195 @@ function switchProvider(providerId) {
         if (data.ok) {
             currentProvider = providerId;
             document.getElementById('inference-active-label').textContent = providerId;
-
+            // Update radio button styles in both panels
             document.querySelectorAll('input[name="inference-provider"]').forEach(function(radio) {
                 var label = radio.closest('label');
                 if (radio.value === providerId) {
-                    label.className = label.className.replace(/border-border hover:border-border-subtle/, 'card-accent-blue');
+                    radio.checked = true;
+                    label.className = label.className.replace(/border-border hover:border-border-strong hover:bg-surface-sunken\/30/, 'border-accent bg-accent-soft');
                 } else {
-                    label.className = label.className.replace(/card-accent-blue/, 'border-border hover:border-border-subtle');
+                    radio.checked = false;
+                    label.className = label.className.replace(/border-accent bg-accent-soft/, 'border-border hover:border-border-strong hover:bg-surface-sunken/30');
                 }
             });
-
-            var cloudSettings = document.getElementById('inference-cloud-settings');
-            if (providerId === 'llama_server') {
-                cloudSettings.classList.add('hidden');
-            } else {
-                cloudSettings.classList.remove('hidden');
-                var prov = providers.find(function(p) { return p.id === providerId; });
-                if (prov) {
-                    document.getElementById('inference-model-input').value = prov.model || '';
-                }
+            // Update model input
+            var prov = allProviders.find(function(p) { return p.id === providerId; });
+            if (prov) {
+                var modelInput = document.getElementById('inference-model-input');
+                var cloudModelInput = document.getElementById('inference-cloud-model-input');
+                if (modelInput) modelInput.value = prov.model || '';
+                if (cloudModelInput) cloudModelInput.value = prov.model || '';
             }
-
             showToast('Switched to ' + providerId, 'success');
-        } else {
-            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-        }
-    }).catch(function(err) {
-        showToast('Switch failed: ' + err.message, 'error');
-    });
+        } else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
+    }).catch(function(err) { showToast('Failed', 'error'); });
 }
 
 function saveApiKey() {
     var key = document.getElementById('inference-api-key-input').value.trim();
-    if (!key) { showToast('Enter an API key first', 'error'); return; }
+    if (!key) { showToast('Enter an API key', 'error'); return; }
     fetch('/api/settings/inference/api-key', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({provider: currentProvider, api_key: key})
     }).then(function(r) { return r.json(); }).then(function(data) {
         if (data.ok) {
-            showToast('API key saved to keychain', 'success');
+            showToast('API key saved', 'success');
             document.getElementById('inference-api-key-input').value = '';
-            document.getElementById('inference-api-key-input').placeholder = '•••••••• (configured)';
-        } else {
-            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-        }
-    }).catch(function(err) { showToast('Save failed: ' + err.message, 'error'); });
+            document.getElementById('inference-api-key-input').placeholder = '(configured)';
+        } else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
+    }).catch(function(err) { showToast('Save failed', 'error'); });
 }
 
 function saveModel() {
-    var model = document.getElementById('inference-model-input').value.trim();
+    // Use the visible model input
+    var modelInput = currentMode === 'local'
+        ? document.getElementById('inference-model-input')
+        : document.getElementById('inference-cloud-model-input');
+    var model = modelInput ? modelInput.value.trim() : '';
     if (!model) { showToast('Enter a model name', 'error'); return; }
     fetch('/api/settings/inference/model', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({provider: currentProvider, model: model})
     }).then(function(r) { return r.json(); }).then(function(data) {
-        if (data.ok) {
-            showToast('Model updated: ' + model, 'success');
-        } else {
-            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-        }
-    }).catch(function(err) { showToast('Save failed: ' + err.message, 'error'); });
+        if (data.ok) showToast('Model updated', 'success');
+        else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
+    }).catch(function(err) { showToast('Save failed', 'error'); });
 }
 
 function testConnection() {
     var btn = document.getElementById('inference-test-btn');
     var result = document.getElementById('inference-test-result');
-    btn.disabled = true;
-    btn.textContent = 'Testing...';
-    result.textContent = '';
-    result.className = 'text-xs text-text-muted';
-
+    btn.disabled = true; btn.textContent = 'Testing...'; result.textContent = '';
     fetch('/api/settings/inference/test', {method: 'POST'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            result.textContent = data.ok
-                ? (data.message || 'Connection successful')
-                : (data.error || 'Connection failed');
-            result.className = data.ok ? 'text-xs text-positive' : 'text-xs text-negative';
+            result.textContent = data.ok ? 'Connected' : (data.error || 'Failed');
+            result.className = data.ok ? 'text-xs text-positive font-medium' : 'text-xs text-negative';
         })
-        .catch(function(err) {
-            result.textContent = err.message;
-            result.className = 'text-xs text-negative';
-        })
-        .finally(function() {
-            btn.disabled = false;
-            btn.textContent = 'Test Connection';
+        .catch(function(err) { result.textContent = 'Failed'; result.className = 'text-xs text-negative'; })
+        .finally(function() { btn.disabled = false; btn.textContent = 'Test'; });
+}
+</script>
+
+<script>
+// Budget
+function saveBudgetCaps() {
+    var dailyCap = parseFloat(document.getElementById('cost-daily-cap-input').value);
+    var monthlyCap = parseFloat(document.getElementById('cost-monthly-cap-input').value);
+    if (isNaN(dailyCap) || isNaN(monthlyCap) || dailyCap <= 0 || monthlyCap <= 0) {
+        showToast('Enter valid amounts', 'error'); return;
+    }
+    open_totp_modal({
+        actionId: 'settings.cost_caps',
+        description: 'Update budget caps: $' + dailyCap.toFixed(2) + '/day, $' + monthlyCap.toFixed(2) + '/month',
+        consequences: 'Lowering caps may block LLM calls mid-cycle.',
+        callbackUrl: '/api/settings/cost/caps',
+        extraPayload: {daily_cap: dailyCap, monthly_cap: monthlyCap},
+        onSuccess: function() {
+            showToast('Budget caps updated', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+function refreshPricing() {
+    fetch('/api/settings/cost/refresh-pricing', {method: 'POST'})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                showToast('Pricing refreshed', 'success');
+                setTimeout(function() { window.location.reload(); }, 800);
+            } else showToast('Failed', 'error');
+        }).catch(function() { showToast('Refresh failed', 'error'); });
+}
+</script>
+
+<!-- Mutation functions -->
+<script>
+function promoteMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.promote.' + candidateId,
+        description: 'Promote mutation: ' + candidateId,
+        consequences: 'Applied to production config. Monitored for 50 cycles.',
+        callbackUrl: '/api/mutation/promote',
+        onSuccess: function() {
+            showToast('Promoted', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+function rejectMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.reject.' + candidateId,
+        description: 'Reject mutation: ' + candidateId,
+        consequences: 'Permanently rejected.',
+        callbackUrl: '/api/mutation/reject',
+        onSuccess: function() {
+            showToast('Rejected', 'info');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+function rollbackMutation(candidateId) {
+    open_totp_modal({
+        actionId: 'mutation.rollback.' + candidateId,
+        description: 'Rollback mutation: ' + candidateId,
+        consequences: 'Config reverts to pre-mutation state.',
+        callbackUrl: '/api/mutation/rollback',
+        onSuccess: function() {
+            showToast('Rolled back', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+function viewDiff(candidateId) {
+    var modal = document.getElementById('diff-modal');
+    var container = document.getElementById('diff-container');
+    if (!modal || !container) { showToast('Diff viewer not available', 'error'); return; }
+    container.innerHTML = '<p class="text-xs text-text-muted p-4">Loading...</p>';
+    modal.classList.remove('hidden');
+    fetch('/api/mutation/' + candidateId + '/diff')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok) { container.innerHTML = '<p class="text-xs text-negative p-4">' + (data.error || 'Error') + '</p>'; return; }
+            window._diffData = data;
+            renderDiff('side-by-side');
         });
+}
+
+function renderDiff(mode) {
+    var container = document.getElementById('diff-container');
+    var data = window._diffData;
+    if (mode === 'unified') {
+        var lines = data.unified.split('\n');
+        var html = '<pre class="text-xs font-mono whitespace-pre overflow-x-auto p-4">';
+        for (var i = 0; i < lines.length; i++) {
+            var cls = lines[i].startsWith('+') ? 'text-positive' : lines[i].startsWith('-') ? 'text-negative' : 'text-text-secondary';
+            html += '<span class="' + cls + '">' + lines[i].replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>\n';
+        }
+        container.innerHTML = html + '</pre>';
+    } else {
+        var rows = data.diff_rows || [];
+        var html = '<table class="w-full text-xs font-mono"><tbody>';
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            html += '<tr class="' + (r['class'] || '') + '"><td class="px-3 py-0.5 border-r border-border whitespace-pre">' + (r.baseline || '') + '</td><td class="px-3 py-0.5 whitespace-pre">' + (r.candidate || '') + '</td></tr>';
+        }
+        container.innerHTML = html + '</tbody></table>';
+    }
+    document.getElementById('btn-sbs').className = mode === 'side-by-side'
+        ? 'px-3 py-1.5 text-xs rounded-lg bg-accent text-white font-medium' : 'px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary font-medium';
+    document.getElementById('btn-unified').className = mode === 'unified'
+        ? 'px-3 py-1.5 text-xs rounded-lg bg-accent text-white font-medium' : 'px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary font-medium';
+}
+
+function closeDiffModal() {
+    document.getElementById('diff-modal').classList.add('hidden');
 }
 </script>
 
@@ -781,16 +905,13 @@ function testConnection() {
         <div class="flex items-center justify-between px-4 py-3 border-b border-border">
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Mutation Diff</h3>
             <div class="flex items-center gap-2">
-                <button type="button" id="btn-sbs" onclick="renderDiff('side-by-side')" class="px-3 py-1.5 text-xs rounded-xl bg-surface-overlay text-white font-medium">Side by Side</button>
-                <button type="button" id="btn-unified" onclick="renderDiff('unified')" class="px-3 py-1.5 text-xs rounded-xl border border-border text-text-secondary font-medium">Unified</button>
+                <button type="button" id="btn-sbs" onclick="renderDiff('side-by-side')" class="px-3 py-1.5 text-xs rounded-lg bg-accent text-white font-medium">Side by Side</button>
+                <button type="button" id="btn-unified" onclick="renderDiff('unified')" class="px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary font-medium">Unified</button>
                 <span class="text-border mx-1">|</span>
-                <button type="button" onclick="copyDiffText('baseline')" class="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors">Copy Baseline</button>
-                <button type="button" onclick="copyDiffText('candidate')" class="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors">Copy Candidate</button>
-                <span class="text-border mx-1">|</span>
-                <button type="button" onclick="closeDiffModal()" class="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors">&times; Close</button>
+                <button type="button" onclick="closeDiffModal()" class="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary font-medium">Close</button>
             </div>
         </div>
-        <div id="diff-container" class="overflow-auto p-4 flex-1"></div>
+        <div id="diff-container" class="overflow-auto flex-1"></div>
     </div>
 </div>
 {% endif %}

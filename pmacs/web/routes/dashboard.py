@@ -14,18 +14,21 @@ router = APIRouter()
 
 
 def _check_backend_type() -> str:
-    """Check if the system is configured for cloud or local inference."""
+    """Check if the system is configured for cloud or local inference.
+
+    Uses model_registry.json as source of truth — the active backend's
+    api_key_ref determines whether it's cloud or local.
+    """
     try:
-        from pmacs.config import data_dir
-        db = data_dir() / "pmacs.db"
-        if not db.exists():
-            return "local"
-        conn = _sql_connect(db)
-        row = conn.execute(
-            "SELECT value FROM wizard_state WHERE key = ?", ("backend_type",)
-        ).fetchone()
-        conn.close()
-        return row[0] if row else "local"
+        import json
+        from pathlib import Path
+        registry_path = Path(__file__).resolve().parents[3] / "config" / "model_registry.json"
+        if registry_path.exists():
+            registry = json.loads(registry_path.read_text())
+            active = registry.get("active", "llama_server")
+            backend = registry.get("backends", {}).get(active, {})
+            return "local" if not backend.get("api_key_ref", "") else "cloud"
+        return "local"
     except Exception:
         return "local"
 

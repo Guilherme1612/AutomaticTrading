@@ -12,53 +12,71 @@
 {% include "components/error_state.html" %}
 {% else %}
 
-<!-- Current Ticker Panel — always first -->
-<div id="current-ticker-panel" class="card card-elevated {{ 'card-accent-blue' if is_cycle_running else '' }} mb-4 reveal" data-stagger>
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-            <span id="current-ticker-dot" class="w-2.5 h-2.5 rounded-full {{ 'bg-blue-500 anim-breathing' if is_cycle_running else 'bg-border-strong' }}"></span>
-            <h3 id="current-ticker-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">{{ 'Current Ticker' if is_cycle_running else 'Ready' }}</h3>
+<!-- Hero Status Panel -->
+<div id="current-ticker-panel" class="relative overflow-hidden rounded-2xl mb-4 sm:mb-6 reveal {{ 'bg-gradient-to-r from-accent/10 via-accent/5 to-transparent border border-accent/20' if is_cycle_running else 'card card-elevated' }}" data-stagger>
+    <div class="p-3 sm:p-5">
+        <div class="flex items-center justify-between gap-3 sm:gap-4">
+            <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+                <div class="relative shrink-0">
+                    <div id="current-ticker-dot" class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center {{ 'bg-accent/15' if is_cycle_running else 'bg-positive/10' if last_analyzed_ticker else 'bg-surface-sunken' }}">
+                        {% if is_cycle_running %}
+                        <svg class="w-4 h-4 sm:w-5 sm:h-5 text-accent animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 20" stroke-linecap="round"/></svg>
+                        {% elif last_analyzed_ticker %}
+                        <svg class="w-4 h-4 sm:w-5 sm:h-5 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        {% else %}
+                        <svg class="w-4 h-4 sm:w-5 sm:h-5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 8v4l2 2"/></svg>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="min-w-0">
+                    <h3 id="current-ticker-heading" class="text-[10px] sm:text-xs font-semibold text-text-muted uppercase tracking-widest mb-0.5">{{ 'Analyzing' if is_cycle_running else 'Last Analyzed' if last_analyzed_ticker else 'Ready' }}</h3>
+                    {% if current_ticker %}
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ current_ticker }}</span>
+                    {% elif last_analyzed_ticker %}
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ last_analyzed_ticker }}</span>
+                    {% else %}
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight hidden"></span>
+                    <span class="text-xs sm:text-sm text-text-muted">Start a cycle to begin analysis</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+                {% if next_ticker %}
+                <div id="next-up-panel" class="text-right hidden sm:block">
+                    <span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Next</span>
+                    <span id="next-ticker" class="font-mono text-sm font-semibold text-text-secondary block">{{ next_ticker }}</span>
+                </div>
+                {% else %}
+                <div id="next-up-panel" class="hidden"><span id="next-ticker" class="hidden"></span></div>
+                {% endif %}
+                <button type="button" id="run-full-cycle-btn" onclick="runCycleNow()"
+                        class="px-3 py-2 sm:px-5 sm:py-2.5 text-[11px] sm:text-xs font-semibold bg-accent text-white rounded-xl hover:bg-accent/90 transition-all shadow-sm hover:shadow-md whitespace-nowrap {{ 'hidden' if is_cycle_running else '' }}">
+                    {{ 'Run Full Cycle' if not last_analyzed_ticker else 'Re-analyze All' }}
+                </button>
+            </div>
         </div>
-        <span id="current-ticker" class="font-mono text-2xl font-bold text-accent truncate max-w-xs {{ '' if current_ticker else 'hidden' }}">{{ current_ticker or '' }}</span>
-        <button type="button" id="run-full-cycle-btn" onclick="runCycleNow()" class="px-4 py-1.5 text-xs bg-accent text-white rounded-xl hover:opacity-90 transition-opacity font-medium whitespace-nowrap {{ 'hidden' if current_ticker else '' }}">Run full cycle</button>
     </div>
 </div>
 
-<!-- Next Up Panel — second ticker in queue -->
-<div id="next-up-panel" class="card card-elevated mb-4 reveal" data-stagger>
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-border-strong"></span>
-            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Next Up</h3>
+<!-- Quick Research + Solo Analysis -->
+<div class="card card-elevated rounded-2xl mb-4 sm:mb-6 reveal" data-stagger>
+    <div class="flex items-center gap-2 sm:gap-3">
+        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0">
+            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
         </div>
-        {% if next_ticker %}
-        <span id="next-ticker" class="font-mono text-lg font-semibold text-text-secondary truncate max-w-xs block">{{ next_ticker }}</span>
-        {% else %}
-        <span id="next-ticker" class="text-sm text-text-muted">No ticker queued</span>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Solo Research Runner -->
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-        </svg>
-        <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Research</h3>
-        <span class="text-[10px] text-text-muted">Analyze a single ticker</span>
-    </div>
-    <div class="flex items-center gap-2">
-        <input id="solo-ticker-input" type="text" placeholder="e.g. AAPL, TSLA, NVDA"
-               class="flex-1 px-3 py-2 text-sm font-mono bg-surface-sunken border border-border-subtle rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
-               maxlength="10" autocomplete="off" spellcheck="false">
+        <input id="solo-ticker-input" type="text" placeholder="Research a ticker... (e.g. AAPL, NVDA)"
+               class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm font-mono bg-transparent border-none text-text-primary placeholder-text-muted/50 focus:outline-none"
+               maxlength="10" autocomplete="off" spellcheck="false"
+               onkeydown="if(event.key==='Enter')runSoloAnalysis()">
         <button type="button" id="solo-run-btn"
                 onclick="runSoloAnalysis()"
-                class="px-4 py-2 text-sm font-medium bg-accent text-white rounded-xl hover:opacity-90 transition-opacity whitespace-nowrap">
+                class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-violet-500/10 text-violet-500 rounded-xl hover:bg-violet-500/20 transition-colors whitespace-nowrap">
             Analyze
         </button>
     </div>
-    <div id="solo-status" class="hidden mt-2">
+    <div id="solo-status" class="hidden mt-2 pt-2 border-t border-border/30">
         <p class="text-xs text-text-muted" id="solo-status-text">Preparing...</p>
     </div>
 </div>
@@ -100,134 +118,194 @@
     </div>
 </div>
 
-<!-- 9 persona cards in a responsive grid -->
-<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+<!-- Persona Analysis Grid -->
+{# Icon/color map per agent — keeps cards visually distinct #}
+{% set agent_meta = {
+    'catalyst_summarizer': {'icon': 'bolt', 'color': 'blue'},
+    'growth_hunter': {'icon': 'trending', 'color': 'emerald'},
+    'moat_analyst': {'icon': 'shield', 'color': 'violet'},
+    'macro_regime': {'icon': 'globe', 'color': 'amber'},
+    'insider_activity': {'icon': 'eye', 'color': 'orange'},
+    'short_interest': {'icon': 'arrow-down', 'color': 'rose'},
+    'forensics': {'icon': 'search', 'color': 'cyan'},
+    'crucible': {'icon': 'fire', 'color': 'purple'},
+    'gatekeeper': {'icon': 'lock', 'color': 'slate'}
+} %}
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
     {% for persona in personas %}
-    {% set status_accent = 'blue' if persona.status == 'running' else 'green' if persona.status == 'complete' else 'red' if persona.status == 'error' else '' %}
-    <div class="card card-elevated {{ 'card-accent-' + status_accent if status_accent else '' }} reveal"
+    {% set _pu_header = persona.p_up | default(0.33) %}
+    {% set _pd_header = persona.p_down | default(0.33) %}
+    {% set _dir = 'bullish' if (_pu_header - _pd_header) > 0.1 else 'bearish' if (_pd_header - _pu_header) > 0.1 else 'neutral' %}
+    {% set _meta = agent_meta.get(persona.id, {'icon': 'bolt', 'color': 'slate'}) %}
+    {% set _clr = _meta.color %}
+    <div class="group relative bg-surface-elevated rounded-xl border border-border/40 hover:border-{{ _clr }}-400/40 transition-all duration-200 hover:shadow-lg overflow-hidden"
          data-stagger
          data-persona="{{ persona.id }}"
          aria-live="polite"
          role="region"
          aria-label="{{ persona.name }} analysis status">
 
-        <!-- Header: name + confidence + status -->
-        <div class="flex items-start justify-between mb-1.5 gap-2">
-            <h4 class="text-sm font-semibold text-text-primary leading-tight">{{ persona.name }}</h4>
-            <div class="flex items-center gap-1.5 shrink-0">
-                {% if persona.status == 'complete' and persona.confidence is defined %}
-                <span class="text-[10px] font-mono text-text-muted" data-confidence-badge>{{ "%.0f"|format(persona.confidence * 100) }}% conf</span>
-                {% endif %}
-                <span class="px-2 py-0.5 text-[10px] rounded-lg font-medium whitespace-nowrap
-                              {{ 'bg-positive-soft text-positive' if persona.status == 'complete' else '' }}
-                              {{ 'bg-accent-soft text-accent' if persona.status == 'running' else '' }}
-                              {{ 'bg-negative-soft text-negative' if persona.status == 'error' else '' }}
-                              {{ 'bg-surface-sunken text-text-muted' if persona.status not in ('running', 'complete', 'error') else '' }}"
-                      {{ 'anim-pulse-glow' if persona.status == 'running' else '' }}
-                      data-status-badge>
-                    {{ persona.status if persona.status in ('running', 'complete', 'error') else ('ready' if loop.index <= 3 else 'idle') }}
-                </span>
-            </div>
-        </div>
-        <p class="text-[11px] text-text-muted mb-2">{{ persona.role }}</p>
+        {# Left accent strip — unique color per agent #}
+        <div class="flex h-full">
+        <div class="w-1 shrink-0 rounded-l-xl
+            {% if persona.status == 'running' %}bg-{{ _clr }}-400 anim-breathing
+            {% elif persona.status == 'complete' %}{{ 'bg-positive' if _dir == 'bullish' else 'bg-negative' if _dir == 'bearish' else 'bg-' + _clr + '-400' }}
+            {% elif persona.status == 'error' %}bg-negative
+            {% else %}bg-{{ _clr }}-400/30
+            {% endif %}"></div>
 
-        <div class="border-t border-border-subtle pt-2.5">
+        <div class="flex-1 min-w-0 p-3">
+            {# Header: icon + name + status #}
+            <div class="flex items-center gap-2.5 mb-1">
+                <div class="w-7 h-7 rounded-lg bg-{{ _clr }}-500/10 flex items-center justify-center shrink-0">
+                    {% if _meta.icon == 'bolt' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    {% elif _meta.icon == 'trending' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                    {% elif _meta.icon == 'shield' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    {% elif _meta.icon == 'globe' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    {% elif _meta.icon == 'eye' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                    {% elif _meta.icon == 'arrow-down' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"/></svg>
+                    {% elif _meta.icon == 'search' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    {% elif _meta.icon == 'fire' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z"/></svg>
+                    {% elif _meta.icon == 'lock' %}
+                    <svg class="w-3.5 h-3.5 text-{{ _clr }}-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                    {% endif %}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5">
+                        <h4 class="text-[13px] font-bold text-text-primary leading-tight tracking-tight truncate">{{ persona.name }}</h4>
+                        {% if persona.status == 'complete' and (_pu_header - _pd_header)|abs > 0.06 %}
+                        <span class="text-[10px] font-mono font-bold shrink-0 {{ 'text-positive' if _dir == 'bullish' else 'text-negative' if _dir == 'bearish' else 'text-text-muted' }}">
+                            {{ '▲' if _dir == 'bullish' else '▼' if _dir == 'bearish' else '—' }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <p class="text-[10px] text-text-muted/70 truncate">{{ persona.role }}</p>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    {% if persona.status == 'complete' and persona.confidence is defined and persona.confidence > 0 %}
+                    <span class="text-[10px] font-mono font-semibold {{ 'text-positive' if persona.confidence >= 0.5 else 'text-text-muted' }}" data-confidence-badge>{{ "%.0f"|format(persona.confidence * 100) }}%</span>
+                    {% endif %}
+                    <span class="w-2.5 h-2.5 rounded-full shrink-0
+                                  {{ 'bg-positive' if persona.status == 'complete' else '' }}
+                                  {{ 'bg-accent anim-breathing' if persona.status == 'running' else '' }}
+                                  {{ 'bg-negative' if persona.status == 'error' else '' }}
+                                  {{ 'bg-border-strong/40' if persona.status not in ('running', 'complete', 'error') else '' }}"
+                          data-status-badge></span>
+                </div>
+            </div>
+
+            {# Status / progress area #}
+            <div class="mt-2">
             {% if persona.status == 'running' %}
-            <div class="persona-progress mb-2">
-                <div class="persona-progress-fill status-running {{ 'indeterminate' if not persona.progress else '' }}"
-                     style="width: {{ persona.progress | default(0) }}%"
-                     data-progress-bar></div>
-            </div>
-            <p class="text-xs text-text-secondary" data-status-text>Analyzing...</p>
+                <div class="persona-progress mb-1.5">
+                    <div class="persona-progress-fill status-running {{ 'indeterminate' if not persona.progress else '' }}"
+                         style="width: {{ persona.progress | default(0) }}%"
+                         data-progress-bar></div>
+                </div>
+                <p class="text-[11px] text-accent font-medium" data-status-text>Analyzing...</p>
             {% elif persona.status == 'complete' %}
-            <div class="persona-progress mb-1.5">
-                <div class="persona-progress-fill status-complete" style="width: 100%"></div>
-            </div>
-            <!-- Probability bar -->
-            <div class="flex gap-0.5 w-full h-2.5 rounded-md overflow-hidden mb-1">
-                <div class="bg-positive transition-all duration-500" style="width: {{ (persona.p_up | default(0.33)) * 100 | int }}%"></div>
-                <div class="bg-border-strong transition-all duration-500" style="width: {{ (persona.p_flat | default(0.34)) * 100 | int }}%"></div>
-                <div class="bg-negative transition-all duration-500" style="width: {{ (persona.p_down | default(0.33)) * 100 | int }}%"></div>
-            </div>
-            <div class="flex gap-3 text-xs font-mono mb-2.5">
-                <span class="text-positive font-medium">&uarr;{{ "%.0f"|format((persona.p_up | default(0.33)) * 100) }}%</span>
-                <span class="text-text-muted">&rarr;{{ "%.0f"|format((persona.p_flat | default(0.34)) * 100) }}%</span>
-                <span class="text-negative font-medium">&darr;{{ "%.0f"|format((persona.p_down | default(0.33)) * 100) }}%</span>
-            </div>
+                {% set _pu = persona.p_up | default(0.33) %}
+                {% set _pd = persona.p_down | default(0.33) %}
+                {% set _pf = persona.p_flat | default(0.34) %}
+                {% set _has_signal = (_pu - _pd)|abs > 0.06 or _pu > 0.45 or _pd > 0.45 %}
+                {% if _has_signal %}
+                <div class="flex gap-0.5 w-full h-2 rounded-md overflow-hidden mb-1.5">
+                    <div class="bg-positive transition-all duration-500" style="width: {{ (_pu * 100) | int }}%"></div>
+                    <div class="bg-border-strong/60 transition-all duration-500" style="width: {{ (_pf * 100) | int }}%"></div>
+                    <div class="bg-negative transition-all duration-500" style="width: {{ (_pd * 100) | int }}%"></div>
+                </div>
+                <div class="flex gap-3 text-[11px] font-mono">
+                    <span class="text-positive font-medium">&uarr;{{ "%.0f"|format(_pu * 100) }}%</span>
+                    <span class="text-text-muted">&rarr;{{ "%.0f"|format(_pf * 100) }}%</span>
+                    <span class="text-negative font-medium">&darr;{{ "%.0f"|format(_pd * 100) }}%</span>
+                </div>
+                {% else %}
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-text-muted/40 shrink-0"></span>
+                    <span class="text-[10px] text-text-muted font-medium">Neutral — no directional signal</span>
+                </div>
+                {% endif %}
             {% elif persona.status == 'error' %}
-            <div class="persona-progress mb-2">
-                <div class="persona-progress-fill status-error" style="width: 100%"></div>
-            </div>
-            <p class="text-xs text-negative font-medium">Error — see debug log</p>
+                <div class="persona-progress mb-1.5">
+                    <div class="persona-progress-fill status-error" style="width: 100%"></div>
+                </div>
+                <p class="text-[11px] text-negative font-medium">Error — see debug log</p>
             {% else %}
-            <div class="persona-progress mb-2">
-                <div class="persona-progress-fill status-running indeterminate" style="width: 0%" data-progress-bar></div>
-            </div>
-            <p class="text-xs text-text-muted" data-status-text>Waiting for cycle...</p>
+                <div class="persona-progress mb-1.5">
+                    <div class="persona-progress-fill" style="width: 0%" data-progress-bar></div>
+                </div>
+                <p class="text-[11px] text-text-muted" data-status-text>{{ 'Runs after all agents finish' if persona.id == 'gatekeeper' else 'Idle — waiting for cycle' }}</p>
             {% endif %}
+            </div>
 
-            <!-- Analysis block (shown when complete) -->
+            {# Analysis block (shown when complete) #}
             <div data-analysis-text class="overflow-hidden transition-all duration-300 ease-out
-                {% if persona.status == 'complete' and (persona.key_signal or persona.analysis or persona.evidence_cited) %}max-h-[400px]{% else %}max-h-0{% endif %}">
+                {% if persona.status == 'complete' and (persona.key_signal or persona.analysis or persona.evidence_cited) %}max-h-[400px] mt-2 pt-2 border-t border-border-subtle{% else %}max-h-0{% endif %}">
                 {% if persona.status == 'complete' %}
                     {% if persona.key_signal %}
-                    <p class="text-xs font-semibold text-text-primary mb-1.5 leading-snug">{{ persona.key_signal }}</p>
+                    <p class="text-[11px] font-semibold text-text-primary mb-1.5 leading-snug">{{ persona.key_signal }}</p>
                     {% endif %}
-
-                    <!-- Evidence list (numbers/data, most recent first) -->
                     {% if persona.evidence_cited %}
-                    <ul class="space-y-1 mb-2" data-evidence-list>
+                    <ul class="space-y-0.5 mb-1.5" data-evidence-list>
                         {% for ev in persona.evidence_cited[:3] %}
-                        <li class="flex gap-1.5 text-[11px] text-text-secondary leading-snug">
-                            <span class="text-accent shrink-0 mt-0.5 font-bold">·</span>
-                            <span>{{ ev }}</span>
+                        <li class="flex gap-1.5 text-[10px] text-text-secondary leading-snug">
+                            <span class="text-{{ _clr }}-400 shrink-0 mt-0.5 font-bold">·</span>
+                            <span class="line-clamp-2">{{ ev }}</span>
                         </li>
                         {% endfor %}
                     </ul>
                     {% endif %}
-
-                    <!-- Analysis text (truncated) -->
                     {% if persona.analysis %}
-                    <p class="text-[11px] text-text-muted leading-snug">{{ persona.analysis[:150] }}{% if persona.analysis|length > 150 %}&hellip;{% endif %}</p>
+                    <p class="text-[10px] text-text-muted leading-snug line-clamp-2">{{ persona.analysis[:150] }}{% if persona.analysis|length > 150 %}&hellip;{% endif %}</p>
                     {% endif %}
-
-                    <!-- Read more button (opens modal with full analysis + all evidence) -->
                     {% if persona.analysis|length > 150 or (persona.evidence_cited and persona.evidence_cited|length > 3) %}
                     <button type="button"
                         onclick='openAgentModal({{ persona.name | tojson | safe }}, {{ persona.analysis | tojson | safe }}, {{ (persona.evidence_cited or []) | tojson | safe }}, {{ persona.confidence | default(0) | tojson | safe }})'
-                        class="mt-1.5 text-[11px] text-accent hover:underline font-medium">
+                        class="mt-1 text-[10px] text-accent hover:underline font-medium">
                         View full analysis →
                     </button>
                     {% endif %}
                 {% endif %}
             </div>
             {% if persona.completed_at %}
-            <p class="text-[10px] text-text-muted/60 mt-2" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
+            <p class="text-[9px] text-text-muted/50 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
             {% endif %}
+        </div>
         </div>
     </div>
     {% endfor %}
 </div>
 
 <!-- Communication Layer -->
-<div id="comm-layer" class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-            <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Communication Layer</h3>
+<div id="comm-layer" class="rounded-2xl border border-border/40 bg-surface-elevated mb-8 reveal" data-stagger>
+    <div class="flex flex-wrap items-center justify-between gap-2 p-4 pb-0 mb-3">
+        <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">Signal Flow</h3>
         </div>
-        <div class="flex gap-1 bg-surface-sunken/50 rounded-xl p-0.5" role="group" aria-label="Visualization view selector">
+        <div class="flex gap-0.5 bg-surface-sunken/40 rounded-xl p-0.5" role="group" aria-label="Visualization view selector">
             <button type="button" data-comm-view="process"
-                    class="px-3 py-1.5 text-xs rounded-xl bg-accent-soft text-accent font-medium transition-colors"
+                    class="px-3 py-1.5 text-[11px] rounded-lg bg-accent/10 text-accent font-semibold transition-all"
                     aria-pressed="true">Process</button>
             <button type="button" data-comm-view="signals"
-                    class="px-3 py-1.5 text-xs rounded-xl text-text-muted hover:bg-surface-sunken transition-colors font-medium"
+                    class="px-3 py-1.5 text-[11px] rounded-lg text-text-muted hover:bg-surface-sunken/80 transition-all font-medium"
                     aria-pressed="false">Signals</button>
             <button type="button" data-comm-view="conviction"
-                    class="px-3 py-1.5 text-xs rounded-xl text-text-muted hover:bg-surface-sunken transition-colors font-medium"
+                    class="px-3 py-1.5 text-[11px] rounded-lg text-text-muted hover:bg-surface-sunken/80 transition-all font-medium"
                     aria-pressed="false">Conviction</button>
         </div>
     </div>
+    <div class="px-4 pb-4">
 
     <!-- Process tab: 5-step pipeline timeline -->
     <div id="viz-process" class="space-y-2 py-2">
@@ -327,13 +405,16 @@
             </div>
         </div>
     </div>
+    </div>
 </div>
 
-<!-- Session Stats — replaces old Cycle Log -->
-<div class="card card-elevated mb-8 reveal" data-stagger>
+<!-- Session Stats -->
+<div class="rounded-2xl border border-border/40 bg-surface-elevated p-4 mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+        <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            </div>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Session Stats</h3>
         </div>
         <span id="session-total" class="text-xs text-text-muted font-mono">{{ session_stats.total }} decisions</span>
@@ -370,25 +451,36 @@
     </div>
 
     <!-- Key metrics row -->
-    <div class="grid grid-cols-3 sm:grid-cols-3 gap-2 sm:gap-3">
+    <div class="grid grid-cols-3 gap-2 sm:gap-3">
         <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
-            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Avg Conv.</p>
+            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Avg Conviction</p>
             <p class="text-base sm:text-lg font-mono font-bold {{ 'text-positive' if session_stats.avg_conviction >= 0.3 else 'text-accent' if session_stats.avg_conviction >= 0.1 else 'text-text-muted' }}" id="session-avg-conviction">{{ "%.0f"|format(session_stats.avg_conviction * 100) }}%</p>
         </div>
         <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
             <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Best Ticker</p>
-            <p class="text-base sm:text-lg font-mono font-bold {{ 'text-positive' if session_stats.best_ticker else 'text-text-muted' }}" id="session-best-ticker">{{ session_stats.best_ticker or '—' }}</p>
-            <p class="text-[9px] sm:text-[10px] text-text-muted font-mono">{{ "%.0f"|format(session_stats.best_conviction * 100) + "%" if session_stats.best_ticker else '—' }}</p>
+            {% if session_stats.best_ticker %}
+            <p class="text-base sm:text-lg font-mono font-bold text-positive" id="session-best-ticker">{{ session_stats.best_ticker }}</p>
+            <p class="text-[9px] sm:text-[10px] text-text-muted font-mono">{{ "%.0f"|format(session_stats.best_conviction * 100) }}%</p>
+            {% else %}
+            <p class="text-base sm:text-lg font-mono font-bold text-text-muted" id="session-best-ticker">—</p>
+            <p class="text-[9px] sm:text-[10px] text-text-muted font-mono">no data yet</p>
+            {% endif %}
         </div>
         <div class="p-2 sm:p-3 bg-surface-sunken/50 rounded-xl text-center">
-            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Pipeline</p>
-            <p class="text-base sm:text-lg font-mono font-bold text-text-muted" id="session-pipeline-stage">Idle</p>
+            <p class="text-[9px] sm:text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1 truncate">Tickers Analyzed</p>
+            <p class="text-base sm:text-lg font-mono font-bold {{ 'text-accent' if session_stats.total > 0 else 'text-text-muted' }}" id="session-tickers-count">{{ session_stats.total }}</p>
         </div>
     </div>
 
-    <!-- Live activity feed (compact, 4 lines max) -->
-    <div id="cycle-log-feed" class="hidden mt-3 pt-3 border-t border-border-subtle max-h-24 overflow-y-auto space-y-0.5">
-        <div id="cycle-log-empty" class="hidden"></div>
+    <!-- Live activity feed -->
+    <div id="cycle-log-feed" class="mt-3 pt-3 border-t border-border-subtle">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Live Activity</span>
+            <span id="session-pipeline-stage" class="text-[10px] font-mono font-medium text-text-muted px-2 py-0.5 bg-surface-sunken rounded-lg">{{ 'Idle' if not is_cycle_running else 'Running' }}</span>
+        </div>
+        <div id="cycle-log-entries" class="max-h-24 overflow-y-auto space-y-0.5">
+            <p id="cycle-log-empty" class="text-[10px] text-text-muted/50 text-center py-2">Activity will appear here during cycles</p>
+        </div>
     </div>
 </div>
 
@@ -398,31 +490,33 @@
         <span class="w-2 h-2 rounded-full bg-green-500"></span>
         <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision Summary</h3>
     </div>
+    <div id="decision-summary-content">
     {% if decision_summary %}
     <div class="space-y-2">
         {% for d in decision_summary %}
         <a href="/memo/{{ d.ticker }}"
-           class="flex items-center gap-3 p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group"
+           class="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-2.5 sm:p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group"
            data-stagger>
             <span class="font-mono font-semibold text-sm text-text-primary">{{ d.ticker }}</span>
-            <span class="px-2.5 py-0.5 text-xs rounded-xl font-medium
+            <span class="px-2 py-0.5 text-[10px] sm:text-xs rounded-lg sm:rounded-xl font-medium
                          {{ 'bg-positive-soft text-positive' if d.verdict == 'STRONG_BUY' else '' }}
                          {{ 'bg-accent-soft text-accent' if d.verdict == 'BUY' else '' }}
                          {{ 'bg-crucible-soft text-crucible' if d.verdict == 'HOLD' else '' }}
                          {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
                 {{ d.verdict }}
             </span>
-            <span class="text-xs text-text-muted font-mono">Conviction: {{ "%.0f"|format([d.conviction * 100, 0]|max) if d.conviction else '0' }}%</span>
+            <span class="text-[10px] sm:text-xs text-text-muted font-mono">Conviction: {{ "%.0f"|format([d.conviction * 100, 0]|max) if d.conviction else '0' }}%</span>
             {% if d.decided_at %}
-            <span class="text-[10px] text-text-muted font-mono" data-time-ago="{{ d.decided_at }}">{{ d.decided_at }}</span>
+            <span class="text-[10px] text-text-muted font-mono hidden sm:inline" data-time-ago="{{ d.decided_at }}">{{ d.decided_at }}</span>
             {% endif %}
-            <a href="/memo/{{ d.ticker }}" class="text-[10px] text-accent hover:underline font-medium ml-auto">→ memo</a>
+            <span class="text-[10px] text-accent font-medium ml-auto shrink-0">→ memo</span>
         </a>
         {% endfor %}
     </div>
     {% else %}
     <p class="text-sm text-text-muted text-center py-8">No decisions this cycle</p>
     {% endif %}
+    </div>
 </div>
 
 <script>
@@ -838,6 +932,49 @@ function _stepSetStatus(stepId, status, timingMs) {
     }
 }
 
+// Clear all agent UI to idle/ready state (used after cycle close + solo research finish)
+function _clearAgentUI() {
+    _resetProcessSteps();
+    _resetReadyPanel();
+    // Reset all persona cards
+    document.querySelectorAll("[data-persona]").forEach(function(card) {
+        var badge = card.querySelector("[data-status-badge]");
+        var confBadge = card.querySelector("[data-confidence-badge]");
+        if (badge) { badge.textContent = "idle"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
+        if (confBadge) confBadge.remove();
+        var contentSection = card.querySelector(".border-t");
+        if (contentSection) {
+            contentSection.innerHTML =
+                '<div class="persona-progress mb-2">' +
+                    '<div class="persona-progress-fill" style="width:0%" data-progress-bar></div>' +
+                '</div>' +
+                '<p class="text-xs text-text-muted" data-status-text>Waiting for cycle...</p>' +
+                '<div data-analysis-text class="overflow-hidden transition-all duration-300 ease-out max-h-0"></div>';
+        }
+        card.classList.remove("card-accent-green", "card-accent-red");
+    });
+    // Clear signals + conviction
+    _pendingSignals = {};
+    _pendingCrucible = {};
+    _renderSignals([]);
+    _renderConviction(null, null);
+    // Clear decision summary
+    var dsc = document.getElementById("decision-summary-content");
+    if (dsc) dsc.innerHTML = '<p class="text-sm text-text-muted text-center py-8">No active cycle</p>';
+    // Clear result cards
+    var resultSection = document.getElementById("result-cards-section");
+    var resultTrack = document.getElementById("result-cards-track");
+    if (resultTrack) resultTrack.innerHTML = "";
+    if (resultSection) resultSection.classList.add("hidden");
+    // Clear ticker history
+    _tickerHistory = {};
+    _activeHistoryTicker = null;
+    var historyBar = document.getElementById("ticker-history-bar");
+    var historyPills = document.getElementById("ticker-history-pills");
+    if (historyPills) historyPills.innerHTML = "";
+    if (historyBar) historyBar.classList.add("hidden");
+}
+
 function _resetProcessSteps() {
     ["data_fetch","agents_running","crucible","arbitration","decision"].forEach(function(s) {
         _stepSetStatus(s, "pending");
@@ -866,10 +1003,20 @@ function _resetReadyPanel() {
     var dot = document.getElementById("current-ticker-dot");
     var heading = document.getElementById("current-ticker-heading");
     var panel = document.getElementById("current-ticker-panel");
-    if (tickerEl) { tickerEl.textContent = ""; tickerEl.classList.add("hidden"); }
-    if (btn) btn.classList.remove("hidden");
-    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-border-strong";
-    if (heading) heading.textContent = "Ready";
+    // Show "Last Analyzed: TICKER" instead of empty "Ready" when results exist
+    var lastTicker = tickerEl ? tickerEl.textContent.trim() : "";
+    if (lastTicker) {
+        // Keep the ticker visible but change styling to "last analyzed" state
+        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-green-500";
+        if (heading) heading.textContent = "Last Analyzed";
+        if (tickerEl) tickerEl.className = "font-mono text-2xl font-bold text-text-secondary truncate max-w-xs";
+        if (btn) { btn.classList.remove("hidden"); btn.textContent = "Re-analyze"; }
+    } else {
+        if (tickerEl) { tickerEl.textContent = ""; tickerEl.classList.add("hidden"); }
+        if (btn) { btn.classList.remove("hidden"); btn.textContent = "Run full cycle"; }
+        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-border-strong";
+        if (heading) heading.textContent = "Ready";
+    }
     if (panel) panel.classList.remove("card-accent-blue");
 }
 
@@ -1109,6 +1256,8 @@ function _applyAgentResultToCard(card, data) {
 }
 
 // ─── Solo Research Runner ──────────────────────────────────────────────────
+var _soloResearchTicker = null;  // Track active solo research ticker
+
 function runSoloAnalysis() {
     var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
@@ -1121,6 +1270,8 @@ function runSoloAnalysis() {
         if (typeof showToast === "function") showToast("Enter a valid ticker (1-10 letters)", "warning");
         return;
     }
+
+    _soloResearchTicker = ticker;
 
     // Optimistic UI: show running state IMMEDIATELY before fetch returns
     if (btn) { btn.disabled = true; btn.classList.add("opacity-60", "cursor-not-allowed"); btn.textContent = "Running..."; }
@@ -1138,8 +1289,12 @@ function runSoloAnalysis() {
     document.querySelectorAll("[data-persona]").forEach(function(card) {
         var badge = card.querySelector("[data-status-badge]");
         var bar = card.querySelector("[data-progress-bar]");
+        var statusText = card.querySelector("[data-status-text]");
+        var analysisEl = card.querySelector("[data-analysis-text]");
         if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
         if (bar) { bar.classList.add("indeterminate"); bar.style.width = "25%"; }
+        if (statusText) { statusText.textContent = "Queued..."; statusText.style.display = ""; }
+        if (analysisEl) { analysisEl.innerHTML = ""; analysisEl.style.maxHeight = "0"; }
         card.classList.add("card-accent-blue");
     });
 
@@ -1167,9 +1322,10 @@ function _resetSoloUI() {
     var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
     var statusDiv = document.getElementById("solo-status");
-    if (input) input.disabled = false;
+    if (input) { input.disabled = false; input.value = ""; }
     if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); btn.textContent = "Analyze"; }
     if (statusDiv) statusDiv.classList.add("hidden");
+    _soloResearchTicker = null;
 }
 
 // ─── Cycle Log (SSE feed) ─────────────────────────────────────────────────────
@@ -1192,64 +1348,58 @@ function _cycleLogAdd(eventType, description) {
     _cycleLogEntries.unshift({ts: ts, type: eventType, desc: description});
     if (_cycleLogEntries.length > _CYCLE_LOG_MAX) _cycleLogEntries.pop();
 
-    // Update pipeline stage indicator
+    // Update pipeline stage badge
     var stageEl = document.getElementById("session-pipeline-stage");
     if (stageEl) {
         var stageMap = {
-            "data_fetch_start": "Fetching", "data_fetch_done": "Data OK",
-            "agents_start": "Agents", "agents_done": "Agents OK",
-            "crucible_start": "Crucible", "crucible_done": "Crucible OK",
-            "arbitration": "Arbitration", "decision": "Deciding",
-            "memo": "Writing memo", "complete": "Done",
+            "data_fetch_start": "Fetching data", "data_fetch_done": "Data ready",
+            "agents_start": "Agents running", "agents_done": "Agents done",
+            "crucible_start": "Crucible testing", "crucible_done": "Crucible done",
+            "arbitration": "Arbitrating", "decision": "Deciding",
+            "memo": "Writing memo", "complete": "Complete",
         };
         var stage = description.split("→").pop().trim();
         if (stageMap[stage]) {
             stageEl.textContent = stageMap[stage];
-            stageEl.className = "text-lg font-mono font-bold text-accent";
+            stageEl.className = "text-[10px] font-mono font-medium text-accent px-2 py-0.5 bg-accent-soft rounded-lg";
         }
     }
 
-    var feed = document.getElementById("cycle-log-feed");
+    var feed = document.getElementById("cycle-log-entries");
     if (!feed) return;
-    feed.classList.remove("hidden");
     var empty = document.getElementById("cycle-log-empty");
-    if (empty) empty.classList.add("hidden");
+    if (empty) empty.style.display = "none";
 
-    // Trim excess DOM rows (keep MAX entries, not counting the placeholder)
+    // Trim excess DOM rows
     var domRows = Array.from(feed.children).filter(function(ch) { return ch.id !== "cycle-log-empty"; });
     while (domRows.length >= _CYCLE_LOG_MAX) { domRows[domRows.length - 1].remove(); domRows.pop(); }
 
     // Prepend newest entry at top
-    var typeColor = _LOG_TYPE_COLOR[eventType] || "bg-surface-sunken text-text-muted";
     var row = document.createElement("div");
-    row.className = "flex items-start gap-2 py-1 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+    row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
     row.innerHTML =
-        '<span class="text-[10px] font-mono text-text-muted shrink-0">' + escapeHtml(ts) + '</span>' +
-        '<span class="text-[11px] text-text-secondary leading-snug">' + escapeHtml(description) + '</span>';
+        '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(ts.slice(0, 5)) + '</span>' +
+        '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(description) + '</span>';
     var firstChild = feed.querySelector(":not(#cycle-log-empty)");
     feed.insertBefore(row, firstChild || null);
 }
 
 function _cycleLogRender() {
-    // Full rebuild — only called when log is externally cleared.
-    var feed = document.getElementById("cycle-log-feed");
+    var feed = document.getElementById("cycle-log-entries");
     var empty = document.getElementById("cycle-log-empty");
     if (!feed) return;
     Array.from(feed.children).forEach(function(ch) { if (ch.id !== "cycle-log-empty") ch.remove(); });
     if (_cycleLogEntries.length === 0) {
-        if (empty) empty.classList.remove("hidden");
+        if (empty) empty.style.display = "";
         return;
     }
-    if (empty) empty.classList.add("hidden");
-    // Render newest-first (already unshifted order)
+    if (empty) empty.style.display = "none";
     _cycleLogEntries.forEach(function(entry) {
-        var typeColor = _LOG_TYPE_COLOR[entry.type] || "bg-surface-sunken text-text-muted";
         var row = document.createElement("div");
-        row.className = "flex items-start gap-2 py-1.5 px-2 rounded-lg hover:bg-surface-sunken/40 transition-colors";
+        row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
         row.innerHTML =
-            '<span class="text-[10px] font-mono text-text-muted shrink-0 mt-0.5">' + escapeHtml(entry.ts) + '</span>' +
-            '<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ' + typeColor + '">' + escapeHtml(entry.type) + '</span>' +
-            '<span class="text-[11px] text-text-secondary leading-snug">' + escapeHtml(entry.desc) + '</span>';
+            '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(entry.ts.slice(0, 5)) + '</span>' +
+            '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(entry.desc) + '</span>';
         feed.appendChild(row);
     });
 }
@@ -1287,7 +1437,8 @@ function _initAgentsPageUI() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             // Seed cycle ticker list so Next Up works even on mid-cycle page loads
-            if (d.cycle_tickers && d.cycle_tickers.length > 0) {
+            // IMPORTANT: only activate "Current Ticker" panel when a cycle is actually running
+            if (d.is_running && d.cycle_tickers && d.cycle_tickers.length > 0) {
                 _cycleTickers = d.cycle_tickers;
                 // Seed Next Up from current processing position
                 var activeTicker = d.current_ticker_processing || d.ticker || "";
@@ -1334,9 +1485,12 @@ document.addEventListener("htmx:afterSettle", function(e) {
 });
 
 // Register SSE handlers once only (guard against HTMX re-execution accumulation)
-if (!window._agentsSSERegistered && typeof onSSE === "function") {
+// Wrapped in a function because on full page load, app.js (which defines onSSE)
+// loads AFTER this inline script. DOMContentLoaded defers until app.js is ready.
+function _registerAgentsSSE() {
+    if (window._agentsSSERegistered || typeof onSSE !== "function") return;
     window._agentsSSERegistered = true;
-    if (typeof onSSE === "function") {
+    {
         onSSE("cycle", function (data) {
             if (data.event_type === "ticker_progress") {
                 if (data.ticker) { _updateReadyPanelActive(data.ticker); }
@@ -1353,13 +1507,37 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 };
                 var stepOrder = ["data_fetch","agents_running","crucible","arbitration","decision"];
                 if (data.step === "data_fetch_start") {
-                    // New ticker starting — reset UI
+                    // New ticker starting — full UI reset
                     _activeHistoryTicker = null;
                     _resetProcessSteps();
-                    document.querySelectorAll("[data-analysis-text]").forEach(function(el) {
-                        el.innerHTML = "";
-                        el.style.maxHeight = "0";
+                    // Reset ALL agent persona cards to queued state
+                    // Replace the entire content section to handle server-rendered "complete" cards
+                    // which lack data-progress-bar and data-status-text attributes
+                    document.querySelectorAll("[data-persona]").forEach(function(card) {
+                        var badge = card.querySelector("[data-status-badge]");
+                        var confBadge = card.querySelector("[data-confidence-badge]");
+                        if (badge) { badge.textContent = "queued"; badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-surface-sunken text-text-muted"; }
+                        if (confBadge) confBadge.remove();
+                        // Replace the content section (inside border-t div) with clean queued state
+                        var contentSection = card.querySelector(".border-t");
+                        if (contentSection) {
+                            contentSection.innerHTML =
+                                '<div class="persona-progress mb-2">' +
+                                    '<div class="persona-progress-fill status-running indeterminate" style="width:25%" data-progress-bar></div>' +
+                                '</div>' +
+                                '<p class="text-xs text-text-muted" data-status-text>Queued...</p>' +
+                                '<div data-analysis-text class="overflow-hidden transition-all duration-300 ease-out max-h-0"></div>';
+                        }
+                        card.classList.remove("card-accent-green", "card-accent-red");
                     });
+                    // Clear signals + conviction tabs for new ticker
+                    _pendingSignals = {};
+                    _pendingCrucible = {};
+                    _renderSignals([]);
+                    _renderConviction(null, null);
+                    // Clear stale decision summary
+                    var dsc = document.getElementById("decision-summary-content");
+                    if (dsc) dsc.innerHTML = '<p class="text-sm text-text-muted text-center py-8">Analyzing ' + escapeHtml(data.ticker || '') + '...</p>';
                     _renderTickerHistoryPills();
                     // Update Next Up: show ticker after the current one
                     if (data.ticker && _cycleTickers.length > 0) {
@@ -1413,17 +1591,10 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 var nextEl = document.getElementById("next-ticker");
                 if (nextEl) { nextEl.textContent = "No ticker queued"; nextEl.className = "text-sm text-text-muted"; }
                 var pipelineStage = document.getElementById("session-pipeline-stage");
-                if (pipelineStage) { pipelineStage.textContent = "Idle"; pipelineStage.className = "text-lg font-mono font-bold text-text-muted"; }
+                if (pipelineStage) { pipelineStage.textContent = "Idle"; pipelineStage.className = "text-[10px] font-mono font-medium text-text-muted px-2 py-0.5 bg-surface-sunken rounded-lg"; }
                 _resetSoloUI();
-                // Reset steps + READY panel after a brief pause so user sees completion
-                setTimeout(function() { _resetProcessSteps(); _resetReadyPanel(); }, 2000);
-                // Refresh signals + conviction from server
-                setTimeout(function() {
-                    fetch("/agents/sankey-data").then(function(r) { return r.json(); }).then(function(d) {
-                        _renderSignals(d.personas || []);
-                        _renderConviction(d.arbitration_result, d.crucible_result);
-                    }).catch(function() {});
-                }, 800);
+                // Reset all agent UI after a brief pause so user sees completion
+                setTimeout(_clearAgentUI, 2000);
             }
             if (data.event_type === "decision.arbitrated") {
                 _stepSetStatus("arbitration", "done");
@@ -1452,6 +1623,10 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                 _stepSetStatus("decision", "done");
                 var desc = (data.ticker || "") + " → " + (data.verdict || "") + (data.conviction ? " (" + Math.round(data.conviction*100) + "%)" : "");
                 _cycleLogAdd("decision.final", desc);
+                // Reset solo research UI when the researched ticker's decision arrives
+                if (_soloResearchTicker && data.ticker === _soloResearchTicker) {
+                    setTimeout(function() { _resetSoloUI(); _clearAgentUI(); }, 2000);
+                }
                 if (data.ticker) {
                     _pushResultCard(data);
                     // Save into ticker history
@@ -1459,6 +1634,28 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                     _tickerHistory[data.ticker].verdict = data.verdict;
                     _tickerHistory[data.ticker].conviction = data.conviction || 0;
                     _renderTickerHistoryPills();
+                    // Live-update Decision Summary
+                    var dsc = document.getElementById("decision-summary-content");
+                    if (dsc) {
+                        // If it was the placeholder, reset to a list container
+                        if (!dsc.querySelector(".space-y-2")) {
+                            dsc.innerHTML = '<div class="space-y-2"></div>';
+                        }
+                        var list = dsc.querySelector(".space-y-2");
+                        var vMap = {"STRONG_BUY":"bg-positive-soft text-positive","BUY":"bg-accent-soft text-accent","HOLD":"bg-crucible-soft text-crucible","SKIP":"bg-negative-soft text-negative"};
+                        var vClass = vMap[data.verdict] || "bg-surface-sunken text-text-muted";
+                        var convPct = data.conviction ? Math.round(data.conviction * 100) : 0;
+                        var row = document.createElement("a");
+                        row.href = "/memo/" + encodeURIComponent(data.ticker);
+                        row.className = "flex items-center gap-3 p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group";
+                        row.innerHTML =
+                            '<span class="font-mono font-semibold text-sm text-text-primary">' + escapeHtml(data.ticker) + '</span>' +
+                            '<span class="px-2.5 py-0.5 text-xs rounded-xl font-medium ' + vClass + '">' + escapeHtml(data.verdict) + '</span>' +
+                            '<span class="text-xs text-text-muted font-mono">Conviction: ' + convPct + '%</span>' +
+                            '<span class="text-[10px] text-text-muted font-mono">just now</span>' +
+                            '<span class="text-[10px] text-accent hover:underline font-medium ml-auto">&rarr; memo</span>';
+                        list.appendChild(row);
+                    }
                 }
             }
             if (data.event_type === "agent.queued" || data.event === "cycle_start") {
@@ -1491,8 +1688,14 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                          status === "error" ? "bg-negative-soft text-negative" :
                          "bg-surface-sunken text-text-muted");
                 }
+                // Update status text to reflect current state
+                var statusText = card.querySelector("[data-status-text]");
+                if (statusText) {
+                    statusText.textContent = status === "running" ? "Analyzing..." :
+                                             status === "queued" ? "Queued..." : statusText.textContent;
+                }
                 if (bar && status === "running") {
-                    bar.classList.remove("indeterminate");
+                    bar.classList.add("indeterminate");
                     bar.style.width = (data.progress || 50) + "%";
                 } else if (bar && status === "complete") {
                     bar.classList.remove("indeterminate", "status-running");
@@ -1542,6 +1745,7 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                         var _badge = _card.querySelector("[data-status-badge]");
                         var _bar = _card.querySelector("[data-progress-bar]");
                         var _analysisEl = _card.querySelector("[data-analysis-text]");
+                        var _statusText = _card.querySelector("[data-status-text]");
                         if (_badge) {
                             _badge.textContent = "complete";
                             _badge.className = "px-2.5 py-0.5 text-xs rounded-xl font-medium bg-positive-soft text-positive";
@@ -1551,6 +1755,8 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
                             _bar.classList.add("status-complete");
                             _bar.style.width = "100%";
                         }
+                        // Hide "Waiting for cycle..." text — analysis block replaces it
+                        if (_statusText) { _statusText.style.display = "none"; }
                         if (!_analysisEl) return;
                         var pUp = (_data.scores && _data.scores.p_up) || 0;
                         var pDown = (_data.scores && _data.scores.p_down) || 0;
@@ -1669,6 +1875,10 @@ if (!window._agentsSSERegistered && typeof onSSE === "function") {
         });
     }
 }
+// Try immediately (works when navigating via HTMX since app.js already loaded)
+_registerAgentsSSE();
+// Defer for initial full page load (app.js loads after this inline script)
+document.addEventListener("DOMContentLoaded", _registerAgentsSSE);
 </script>
 {% endif %}
 {% endblock %}

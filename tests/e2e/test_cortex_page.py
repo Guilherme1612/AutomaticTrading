@@ -147,7 +147,7 @@ class TestProcessStatusPanel:
         resp = client.get("/cortex")
         assert ":8080" in resp.text  # inference
         assert ":8000" in resp.text  # nervous
-        assert ":8001" in resp.text  # dashboard
+        assert ":8000" in resp.text  # dashboard
 
 
 class TestDiskClockNetworkPanel:

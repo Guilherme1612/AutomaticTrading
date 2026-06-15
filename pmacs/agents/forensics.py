@@ -35,7 +35,7 @@ class ForensicsRunner(PersonaRunner):
             persona_name="forensics",
             grammar_name="forensics",
             temperature=0.2,
-            max_tokens=3072,
+            max_tokens=5120,
             cycle_id=cycle_id,
             audit_writer=audit_writer,
             simulation_mode=simulation_mode,

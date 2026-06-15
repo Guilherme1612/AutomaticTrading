@@ -1,168 +1,93 @@
-# PMACS Cross-Phase Review — All Phases
+---
+scope: all uncommitted changes (47 files, +2084/-1049)
+reviewers: [codex/gpt-5.5]
+reviewed_at: 2026-06-12T17:16:00Z
+skipped: claude (self - running inside Claude Code)
+unavailable: gemini, opencode, qwen, cursor
+---
 
-**Reviewer:** Claude Code (sole available CLI)
-**Date:** 2026-05-26
-**Scope:** 11 GSD phases (Phase 1–16), 11 PLAN.md files, spec compliance, implementation quality
-**Per-phase details:** See `CROSS-REVIEW.md` in each phase directory
+# Cross-AI Code Review — Uncommitted Changes
+
+## Codex Review (GPT-5.5)
+
+**Summary**
+
+This change set improves evidence discipline, determinism, UI clarity, SSE reliability, cloud-backend accessibility, and memo richness. The LLM-facing changes move in the right direction by anchoring outputs to evidence and adding Python-side probability snapping/extraction, but there are brittle parsing choices, inconsistent comments, and places where LLM-derived or regex-derived data could be displayed as if authoritative. Overall, this is a useful product/UI and analysis-quality iteration with a few medium-severity items to address.
+
+**Strengths**
+
+- Evidence anchoring and determinism are much stronger in prompts and schemas: probability grid snapping, data-availability confidence rules, and explicit "do not fabricate" constraints reduce LLM variance.
+- Python remains the source of arbitrated probabilities, conviction, EV multiple, and verdict fields in memo generation, which respects the "LLMs do narrative, Python does math" boundary.
+- SSE publisher changes are well-motivated: timestamp-based IDs plus `loop.call_soon_threadsafe()` address stale `Last-Event-ID` and worker-thread queue wakeup issues.
+- API-key error sanitization in `settings.py` is a good security hardening step.
+- Universe template adds CSRF headers for several write operations, which is a positive direction.
+- Memo generation now preserves engine-authoritative values in stored memo JSON, improving auditability and making memo pages less dependent on LLM text.
+- Data fetch timeout and socket timeout handling reduce cycle hangs from external libraries.
+
+**Concerns**
+
+- **MEDIUM: Cloud backends are now allowed, but local-only assumptions remain partially encoded.** Some UI and comments were updated, but architecture/security controls for cloud inference are not visible here: telemetry, prompt leakage, API key handling, model provenance, and audit distinction between local/cloud need explicit treatment.
+- **MEDIUM: JSON extraction via regex is brittle.** `_call_openai_compatible()` extracts `r'\{[\s\S]*\}'`, which can capture too much if reasoning contains braces before/after the JSON. Prefer a balanced JSON extraction parser or strict response validation with retry.
+- **MEDIUM: Probability snapping before sum validation can silently distort distributions.** Snapping `p_up`, `p_flat`, and `p_down` independently and allowing `+-0.03` tolerance means accepted outputs may not sum exactly to 1. Downstream code may assume exact normalization.
+- **MEDIUM: Comment drift in `_arbitrate()`.** It says `_CLAMP_THRESHOLD=0.50`, but code uses `0.25`. This is minor technically but dangerous in a risk engine because reviewers will misunderstand calibration behavior.
+- **MEDIUM: KPI extraction may promote weak data to authoritative UI.** Regex scans LLM analysis and `[KNOWLEDGE]` text, not only structured evidence. Memo UI may present extracted KPIs as concrete facts even when they came from model narrative.
+- **MEDIUM: Data-dependent agent gating only runs when `fundamentals` is truthy.** If `fundamentals == ""`, `required_markers and fundamentals` is false, so insider/short-interest agents still call the LLM despite missing required data.
+- **LOW/MEDIUM: Static ticker knowledge is stale-risky.** Hard-coded company metrics like market share, profiles, customer count, and margins can age quickly and may be mistaken for evidence.
+- **LOW: `model_registry.json` loses trailing newline.** Minor hygiene issue.
+**Security Review**
+
+CSRF coverage is incomplete based on the diff. Universe writes gained CSRF headers, but other write paths need server-side CSRF verification confirmed. Client-side headers alone are not protection unless every write endpoint validates them.
+
+XSS risk looks mostly controlled in templates because Jinja autoescaping and `escapeHtml()` are used in many dynamic JS insertions. However, memo fields, agent analysis, evidence strings, and KPI values are LLM/data-source derived and displayed broadly. Avoid any future use of `|safe` on those fields, and validate that `showToast()` escapes content.
+
+API-key leakage handling improved in the connection-test route, but cloud backend enablement increases prompt/data exfiltration risk by design. Audit logs should record provider/model and whether the request left the machine.
+
+**Architecture Review**
+
+The LLM/math/signing boundaries are mostly preserved. LLM outputs are parsed, constrained, and then Python performs arbitration, conviction, and final engine-authoritative probability fields. No LLM trade signing introduced.
+
+Hash-chaining is not materially addressed in this diff. New stateful actions and memo fields should ensure audit events still include `prev_sha256`; the diff does not show new audit coverage for cloud provider switching, memo generation changes, or mutation actions beyond existing logs.
+
+Cloud backends being allowed is a changed constraint. That needs an explicit policy layer: allowed providers, redaction rules, prompt retention assumptions, cost tracking, and audit labels.
+
+**Suggestions**
+
+- Add server-side CSRF validation tests for every POST/PUT/DELETE route, especially settings, cortex, universe, and mutation routes.
+- Fix `_arbitrate()` comment to match `_CLAMP_THRESHOLD=0.25`.
+- Change data-dependent gate to run even when `fundamentals` is empty.
+- Normalize probabilities after snapping so stored/returned values sum exactly to 1.0.
+- Replace greedy JSON regex extraction with balanced JSON object extraction or a strict decoder scan.
+- Split KPI extraction into `source=evidence|agent|knowledge` and only render evidence-derived values as hard KPIs.
+- Add tests for missing-fundamentals agent neutralization, probability normalization, SSE cross-thread publish, and cloud error sanitization.
+- Add audit events for provider/model changes and API mode activation.
+
+**Risk Assessment**
+
+**MEDIUM risk**. The analysis-quality and UI changes are broadly useful. The main concerns are around brittle JSON parsing, probability normalization gaps, and incomplete CSRF coverage. These are fixable without architectural changes.
 
 ---
 
-## Executive Summary
+## Consensus Summary
 
-| Phase | PMACS Scope | Score | Verdict |
-|-------|-------------|-------|---------|
-| Phase 1 | Foundation + Data | **4/5** | Solid, but state machine diverges from spec in 7 places |
-| Phase 2 | Inference + Processes | **4/5** | Strong, ROLLING_5D_LOSS stub + disengage gap |
-| Phase 5 | Monitoring + Dashboard | **4/5** | Engines excellent, SSE proxy is a stub |
-| Phase 6 | Calibration + FDE | **3/5** plan / **5/5** impl | Plan stale — all gaps already closed |
-| Phase 8 | Polish (LIVE-READY) | **3.5/5** | Anti-patterns enforced, empirical validation deferred |
-| Phase 9 | Core Orchestration | **3.5/5** | Step ordering violates spec, crash resume untested |
-| Phase 10 | Broker Integration + Ops | **3/5** | Wizard spec drift (12 vs 11 steps), embedding mismatch |
-| Phase 11 | Polish + Operator Exp | **3/5** | 5 dashboard spec gaps, axe-core CI missing |
-| Phase 12 | Spec Gap Closure | **3.5/5** | Impl strong (4/5), plan severely stale (2/5) |
-| Phase 13 | UI Polish | **3.5/5** | Focus traps partial, exit tests unverified |
-| Phase 16 | Token-Cost Accounting | **3/5** | 2 critical bugs — monthly budget never fires |
+### Agreed Strengths
+- Evidence anchoring and determinism improvements are well-designed
+- LLM/math/signing boundaries remain intact
+- SSE reliability fixes are well-motivated
+- API-key error sanitization is good hardening
 
-**Weighted average: 3.5/5**
+### Top Concerns (by severity)
+1. **MEDIUM** — Cloud backend enablement lacks explicit security/audit policy
+2. **MEDIUM** — Brittle JSON regex extraction in LLM response parsing
+3. **MEDIUM** — Probability snapping may break normalization invariant
+4. **MEDIUM** — Comment drift in `_arbitrate()` threshold constant
+5. **MEDIUM** — Data-dependent agent gating bypassed on empty string
 
----
-
-## Critical Issues (Must Fix Before Live)
-
-### CR-01: Phase 16 — Monthly Budget Kill Switch Never Fires
-- **File:** `pmacs/cortex/kill_switch.py:638`
-- **Bug:** `_get_period_total(conn, "month")` passes `"month"` but the SQL expects `"this_month"`. Monthly budget threshold is never checked.
-- **Impact:** Operator has no monthly spend protection. Token costs could spiral unchecked.
-
-### CR-02: Phase 16 — Settings Cost API Queries Wrong Table/Column
-- **File:** `pmacs/web/routes/settings.py:715, 623-670`
-- **Bug:** Queries nonexistent `actual_costs` table instead of DuckDB `api_usage`. Uses `created_at` column but schema has `called_at`. Every settings cost endpoint fails.
-- **Impact:** Cost dashboard shows nothing. Operator cannot monitor spend.
-
-### CR-03: Phase 1 — State Machine INTERRUPTED Deadlock
-- **File:** `pmacs/schemas/state_machine.py`
-- **Bug:** `INTERRUPTED` is in `TERMINAL_STATES` but spec defines outgoing transitions (→ ACTIVE, PANIC_EXIT, DELISTED). Those transitions are also missing from `VALID_TRANSITIONS`. Creates an unrecoverable state.
-- **Impact:** If a holding is interrupted (e.g., news halt), it can never resume. Requires manual DB surgery.
-
-### CR-04: Phase 1 — VALID_TRANSITIONS Diverges from Spec (7 places)
-- **File:** `pmacs/schemas/state_machine.py`
-- **Bug:** `APPROVED_PENDING` missing `ABORTED_LLM`/`ABORTED_PRE_LLM` aborts. `HALTED` has `CANDIDATE` (not in spec) but missing `DELISTED`/`PANIC_EXIT`. 5 other transitions don't match spec Architecture.md §8.2.
-- **Impact:** Spec-required state transitions are blocked. Conviction < 0.3 aborts can't fire.
-
-### CR-05: Phase 10 — Wizard Smoke-Test Cycle Missing
-- **File:** `pmacs/web/routes/wizard.py`
-- **Bug:** Implementation has 12 steps; spec (Source.md §12) requires 11. The smoke-test cycle (Step 10) that validates the full pipeline before PAPER promotion is absent.
-- **Impact:** System promotes to PAPER without end-to-end verification. Could run broken pipeline with real paper money.
-
-### CR-06: Phase 10 — Embedding Model Mismatch
-- **File:** Wizard verification step
-- **Bug:** Checks for `all-MiniLM-L6-v2` (384-dim) but spec requires `BAAI/bge-base-en-v1.5` (768-dim).
-- **Impact:** Qdrant dimension mismatch at runtime. Vector search silently fails.
-
----
-
-## High-Priority Warnings
-
-### H-01: Phase 9 — Step Ordering Violates Architecture.md §12
-- The orchestrator runs kill switch (step 4) and flywheel health (step 5) BEFORE FX snapshot (step 2) and corporate actions (step 3).
-- Spec explicitly orders: FX → corp actions → kill switch → flywheel.
-- Flywheel health snapshot may use stale FX data.
-
-### H-02: Phase 2 — ROLLING_5D_LOSS Kill Switch Is a Stub
-- `pmacs/cortex/kill_switch.py:440-472` reads `total_value_usd` but never compares to 5-day-prior value. Always returns `triggered=False`.
-- One of 10 spec-required kill switch triggers is effectively disabled.
-
-### H-03: Phase 2 — Kill Switch Disengage Doesn't Verify Condition Resolution
-- `disengage()` only checks TOTP validity. Architecture.md §13.2 requires "Cortex confirms underlying condition resolved."
-- Allows premature resumption under unsafe conditions.
-
-### H-04: Phase 9 — Crash Resume Untested End-to-End
-- Idempotency/checkpoint is the primary defense against crash corruption.
-- No test simulates a mid-cycle crash and verifies resume.
-- Existing tests only verify checkpoints exist after a full cycle.
-
-### H-05: Phase 11 — axe-core CI Integration Missing
-- `spec/Source.md §13.7` explicitly requires "verified in CI via axe-core."
-- `test_a11y.py` uses TestClient structural checks only. No automated WCAG validation in CI.
-
-### H-06: Phase 13 — Focus Traps Only Wired for Cmd-K
-- TOTP modal and blocking modal have `aria-modal="true"` but no programmatic Tab containment.
-- 2 WCAG compliance gaps.
-
----
-
-## Cross-Cutting Patterns
-
-### 1. Stale Plans (Phases 6, 12, 8)
-Three phases have plans that significantly lag implementation. Phase 6 plan is at 0% remaining but marked REPLAN. Phase 12 plan targets ~80% already-completed work. This creates confusion about what's actually left.
-
-**Recommendation:** Audit all PLAN.md files against current codebase. Mark completed items. Update status to reflect reality.
-
-### 2. Spec Divergence Accumulating
-Multiple phases show implementation drifting from spec (state machine transitions, wizard step count, dashboard metrics, step ordering). The 7,100-line spec is the source of truth but isn't being checked systematically.
-
-**Recommendation:** Add a pre-commit or CI check that validates key spec contracts (state machine transitions, step counts, required fields).
-
-### 3. Untested Critical Paths
-- Crash resume (Phase 9)
-- Monthly budget enforcement (Phase 16)
-- Kill switch condition resolution (Phase 2)
-- Smoke-test cycle (Phase 10)
-- SSE real-time events (Phase 5)
-
-**Recommendation:** Prioritize E2E tests for these 5 paths. Each represents a safety-critical feature.
-
-### 4. SSE Still a Stub
-Architecture.md §4.4 defines SSE as the central UI communication mechanism. Phase 5's SSE proxy sends pings only. Phase 16 notes no SSE cost events. Dashboard cannot receive real-time updates.
-
-**Recommendation:** Wire SSE proxy as a cross-cutting priority. Blocks real-time dashboard functionality across multiple phases.
-
----
-
-## Score Distribution
-
-```
-5/5 ████████                  Phase 6 (implementation)
-4/5 ██████████████            Phase 1, Phase 2, Phase 5
-3.5/5██████████████           Phase 8, Phase 9, Phase 12, Phase 13
-3/5 ████████████████████████  Phase 10, Phase 11, Phase 16
-```
-
----
-
-## Priority Fix List (Ranked)
-
-| # | Phase | Issue | Effort | Impact |
-|---|-------|-------|--------|--------|
-| 1 | 16 | Monthly budget kill switch period name bug | S | Critical safety |
-| 2 | 16 | Settings cost queries wrong table/column | S | Cost visibility |
-| 3 | 1 | INTERRUPTED deadlock + transition table reconciliation | M | Holding lifecycle |
-| 4 | 10 | Embedding model mismatch (MiniLM vs bge-base) | S | Vector search |
-| 5 | 10 | Add smoke-test wizard step (12→11 alignment) | M | Pre-PAPER validation |
-| 6 | 2 | Wire ROLLING_5D_LOSS trigger logic | M | Risk management |
-| 7 | 9 | Fix step ordering to match Architecture.md §12 | M | Cycle correctness |
-| 9 | 5 | Wire SSE proxy (currently ping-only) | L | Dashboard real-time |
-| 8 | 2 | Add condition-resolution check to disengage | S | Kill switch safety |
-| 10 | 9 | Add crash-resume E2E test | M | Crash recovery |
-| 11 | 11 | Add axe-core CI integration | M | WCAG compliance |
-| 12 | 13 | Wire focus traps for TOTP + blocking modals | S | WCAG compliance |
-
-**S** = < 1 hour, **M** = 1–4 hours, **L** = 4+ hours
-
----
-
-## Per-Phase Review Files
-
-| Phase | File |
-|-------|------|
-| Phase 1 | `.planning/phases/phase-1/CROSS-REVIEW.md` |
-| Phase 2 | `.planning/phases/phase-2/CROSS-REVIEW.md` |
-| Phase 5 | `.planning/phases/phase-5/CROSS-REVIEW.md` |
-| Phase 6 | `.planning/phases/phase-6/CROSS-REVIEW.md` |
-| Phase 8 | `.planning/phases/phase-8/CROSS-REVIEW.md` |
-| Phase 9 | `.planning/phases/phase-9/CROSS-REVIEW.md` |
-| Phase 10 | `.planning/phases/phase-10/CROSS-REVIEW.md` |
-| Phase 11 | `.planning/phases/phase-11/CROSS-REVIEW.md` |
-| Phase 12 | `.planning/phases/phase-12/CROSS-REVIEW.md` |
-| Phase 13 | `.planning/phases/phase-13/CROSS-REVIEW.md` |
-| Phase 16 | `.planning/phases/phase-16/CROSS-REVIEW.md` |
+### Actionable Items
+| # | Severity | Issue | File(s) |
+|---|----------|-------|---------|
+| 1 | MEDIUM | Fix `_arbitrate()` comment drift (0.50 vs 0.25) | `pmacs/agents/base.py` |
+| 2 | MEDIUM | Normalize probabilities after snapping to sum=1.0 | `pmacs/schemas/personas.py` |
+| 3 | MEDIUM | Replace greedy JSON regex with balanced extraction | `pmacs/agents/base.py` |
+| 4 | MEDIUM | Fix data-dependent agent gating for empty string | `pmacs/agents/base.py` |
+| 5 | MEDIUM | Source-tag KPI extraction (evidence vs narrative) | `pmacs/web/routes/pipeline.py` |
+| 6 | LOW | Add trailing newline to model_registry.json | `config/model_registry.json` |

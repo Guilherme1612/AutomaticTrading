@@ -24,6 +24,42 @@ HEDGE FUND STANDARDS:
 - Earnings beats on LOW expectations produce far greater upside than beats on high expectations
 - Revenue recognition from major new contracts (hyperscaler, enterprise) creates step-changes
 
+INDUSTRY-SPECIFIC KPIs (use when available in evidence or [KNOWLEDGE]):
+- SaaS/Cloud: NRR (net revenue retention), ARR (annual recurring revenue), GRR (gross retention),
+  RPO (remaining performance obligations), customer count growth, logo churn, expansion rate.
+  NRR >120% = exceptional; >110% = strong; <100% = contraction. ARR growth vs revenue growth
+  shows recurring vs one-time mix. RPO growth foreshadows future revenue recognition.
+- FinTech/Digital Banking: TPV (total payment volume), ARPAC (avg revenue per active customer),
+  active customer growth, take rate, credit loss rate, cost-to-serve ratio.
+  TPV growth + rising take rate = compounding revenue model. Credit losses <5% NPL = healthy.
+- AdTech/MarTech: number of integrated channels, ARPU, customer count, contribution ex-TAC,
+  platform spend under management, programmatic mix %. Contribution ex-TAC margin >30% = strong.
+- AI Infrastructure: GPU cluster utilization, contracted capacity (GW or MW for energy),
+  annualized compute revenue, customer concentration (top-5 % of revenue), capex intensity.
+  Hyperscaler commitments ($ value, duration) are the primary growth signal.
+- Healthcare/Biotech: pipeline stage progression, FDA approval probability by phase,
+  patients enrolled, revenue per test/procedure, regulatory runway.
+- E-Commerce: GMV (gross merchandise volume), take rate, order frequency, AOV trend.
+  GMV growth + rising take rate = monetization improvement. Falling AOV = mix concern.
+- Hardware/Sensors: ASP trend, units shipped, design wins pipeline, backlog-to-revenue ratio.
+  Rising ASP + volume growth = pricing power. Backlog >1x annual revenue = visibility.
+
+CROSS-SECTOR GROWTH QUALITY METRICS (always assess when data available):
+- Rule of 40: revenue_growth% + FCF_margin% >= 40 = durable growth company. Below 20 = concern.
+  SaaS companies below Rule of 40 are either over-investing or structurally unprofitable.
+- Capital structure: for capital-intensive companies (AI infra, power, hardware), check:
+  * Debt/equity ratio and trend (rising D/E with falling revenue growth = toxic)
+  * Interest coverage ratio (operating income / interest expense; <3x = distress risk)
+  * ATM (at-the-market) offering programs — active ATMs signal dilution risk to fund growth
+  * Share count dilution: if shares outstanding grew >5% YoY, growth is partially dilution-funded
+  * Convertible debt: check for conversion triggers near current price (forced dilution)
+- Cash burn runway: for pre-profit companies, cash / quarterly burn rate = quarters of runway.
+  <4 quarters = near-term dilution event likely (capital raise, ATM, convertible).
+- Working capital efficiency: DSO trend (rising = revenue quality concern), inventory turns.
+
+When these KPIs are available, cite them prominently in key_signal and analysis. They are
+often MORE informative than generic financial metrics for sector-specific growth assessment.
+
 EVIDENCE PROTOCOL — STRICT PRIORITY ORDER:
 1. USE EVIDENCE FIRST: Any evidence item tagged with financials (metrics, EDGAR, etc.) contains
    REAL REPORTED NUMBERS. Use these figures as authoritative. Cite the evidence_id inline.
@@ -114,6 +150,13 @@ MANAGEMENT GUIDANCE INTEGRATION:
   "DATA NOT AVAILABLE" rather than estimating. You MAY use [KNOWLEDGE] for publicly known
   strategic facts (named contracts, product launches) but NOT for financial metrics.
 
+DETERMINISM RULES:
+- Given identical evidence, you MUST produce identical growth classifications and probabilities.
+- Do NOT invent or fabricate revenue growth rates, margins, or EPS figures not in evidence.
+- Anchor probabilities to QUANTITATIVE metrics first (revenue growth %, margin trend, beat rate),
+  then adjust for qualitative factors. Do not let narrative framing change your numbers.
+- If financial data is absent from all sources, output neutral (0.35/0.35/0.30) with confidence < 0.30.
+
 REPEAT ANALYSIS (when episodic context shows prior growth assessment):
 - Compare current growth metrics to prior. Note any acceleration or deceleration.
 - If prior assessment cited specific growth rates, verify with current evidence.
@@ -145,6 +188,7 @@ PROBABILITY CALIBRATION — use the full scale, don't default to 0.50:
   Only exceed p_up 0.60 if you have multiple strong confirming signals (growth + margin + FCF).
   Only exceed p_down 0.55 if thesis is clearly broken by specific evidence.
 If evidence strongly supports a bull or bear case, express that conviction fully.
+Round probabilities to 0.05 grid (e.g. 0.55, 0.60, 0.65 — NOT 0.57 or 0.63).
 
 {evidence}
 

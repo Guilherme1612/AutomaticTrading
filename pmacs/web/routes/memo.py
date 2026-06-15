@@ -167,12 +167,13 @@ async def memo_page(request: Request, ticker: str):
             source = holding or ticker_decisions[0]
             memo = _parse_memo_json(source.get("thesis_summary"))
 
-        # Get current price
-        current_price = holding.get("current_price_usd") if holding else None
-        if not current_price and ticker_decisions:
-            current_price = None  # Will show as N/A
+        # Get current price — prefer memo's stored price (captured at decision time),
+        # then holdings, then live fetch
+        current_price = memo.get("current_price") if memo else None
+        if not current_price and holding:
+            current_price = holding.get("current_price_usd")
 
-        # Try to get live price from Finnhub
+        # Try to get live price from Finnhub as last resort
         if not current_price:
             try:
                 from pmacs.web.routes.pipeline import _fetch_real_price

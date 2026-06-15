@@ -17,6 +17,33 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+def _coerce_optional_float(v: object) -> float | None:
+    """Coerce LLM string values like 'DATA NOT AVAILABLE' to None for optional floats."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+
+def _snap_to_grid(v: float, grid: float = 0.05) -> float:
+    """Snap a probability to the nearest 0.05 grid point for determinism."""
+    return round(round(v / grid) * grid, 2)
+
+
+def _normalize_probs(p_up: float, p_flat: float, p_down: float) -> tuple[float, float, float]:
+    """Normalize three probabilities to sum exactly to 1.0 after grid-snapping."""
+    total = p_up + p_flat + p_down
+    if total == 0:
+        return (0.35, 0.35, 0.30)
+    return (round(p_up / total, 2), round(p_flat / total, 2), round(p_down / total, 2))
+
+
 class MacroRegimeOutput(BaseModel):
     """MacroRegime persona output — macro regime classification.
 
@@ -30,20 +57,30 @@ class MacroRegimeOutput(BaseModel):
         "REGIME_SHIFT", "UNCERTAIN",
     ]
     regime_confidence: float = Field(ge=0.0, le=1.0)
-    regime_reasoning: str = Field(max_length=500)
+    regime_reasoning: str = Field(max_length=800)
     yield_curve_signal: Literal["NORMAL", "FLAT", "INVERTED"]
     vix_regime: Literal["LOW", "MODERATE", "ELEVATED", "CRISIS"]
-    sector_rotation_summary: str = Field(max_length=300)
+    sector_rotation_summary: str = Field(max_length=600)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_prob_sum(self) -> MacroRegimeOutput:
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:  # Reject wildly broken distributions
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         return self
 
 
@@ -56,7 +93,7 @@ class CatalystEntry(BaseModel):
         "earnings", "fda_decision", "product_launch", "regulatory_ruling",
         "ma_close", "partnership", "guidance_update",
     ]
-    description: str = Field(max_length=200)
+    description: str = Field(max_length=400)
     expected_date: str | None = None
     status: Literal["PENDING", "RESOLVED_UP", "RESOLVED_DOWN", "RESOLVED_FLAT", "RESOLVED_MIXED"]
     thesis_impact: Literal[
@@ -75,17 +112,27 @@ class CatalystSummarizerOutput(BaseModel):
 
     ticker: str
     catalysts: list[CatalystEntry] = Field(max_length=10)
-    net_catalyst_outlook: str = Field(max_length=300)
+    net_catalyst_outlook: str = Field(max_length=600)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_prob_sum(self) -> CatalystSummarizerOutput:
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         return self
 
 
@@ -100,7 +147,7 @@ class MoatComponent(BaseModel):
     ]
     strength: float = Field(ge=0.0, le=1.0)
     trajectory: Literal["WIDENING", "STABLE", "NARROWING"]
-    reasoning: str = Field(max_length=300)
+    reasoning: str = Field(max_length=600)
     evidence_ids: list[str] = Field(min_length=1)
 
 
@@ -116,18 +163,28 @@ class MoatAnalystOutput(BaseModel):
     moat_components: list[MoatComponent] = Field(min_length=1, max_length=6)
     moat_strength: float = Field(ge=0.0, le=1.0)
     competitive_entry_risk: Literal["LOW", "MODERATE", "HIGH"]
-    competitive_entry_reasoning: str = Field(max_length=200)
+    competitive_entry_reasoning: str = Field(max_length=500)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_invariants(self) -> MoatAnalystOutput:
         # Probability sum
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
 
         # moat_strength should be consistent with component average
         if self.moat_components:
@@ -174,18 +231,33 @@ class GrowthHunterOutput(BaseModel):
     gross_margin_trend: Literal["EXPANDING", "STABLE", "CONTRACTING", "UNKNOWN"]
     tam_penetration_pct: float | None = None
     growth_durability: Literal["HIGH", "MODERATE", "LOW", "UNKNOWN"]
-    growth_durability_reasoning: str = Field(max_length=300)
-    key_risk_to_growth: str = Field(max_length=200)
+    growth_durability_reasoning: str = Field(max_length=600)
+    key_risk_to_growth: str = Field(max_length=500)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("revenue_yoy_pct", "gross_margin_pct", "tam_penetration_pct", mode="before")
+    @classmethod
+    def _coerce_floats(cls, v: object) -> float | None:
+        return _coerce_optional_float(v)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_prob_sum(self) -> "GrowthHunterOutput":
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         return self
 
 
@@ -226,17 +298,27 @@ class InsiderActivityOutput(BaseModel):
         "CLUSTER_BUY", "CLUSTER_SELL", "LARGE_BUY", "LARGE_SELL",
         "CEO_BUY", "ROUTINE", "NO_SIGNAL", "INSUFFICIENT_DATA",
     ]
-    signal_reasoning: str = Field(max_length=300)
+    signal_reasoning: str = Field(max_length=600)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_prob_sum(self) -> "InsiderActivityOutput":
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         return self
 
 
@@ -260,17 +342,32 @@ class ShortInterestOutput(BaseModel):
     days_to_cover: float | None = None
     short_change_pct: float | None = None
     anomaly: Literal["SPIKE_UP", "SPIKE_DOWN", "HIGH_SUSTAINED", "NORMAL", "INSUFFICIENT_DATA"]
-    anomaly_reasoning: str = Field(max_length=300)
+    anomaly_reasoning: str = Field(max_length=600)
     p_up: float = Field(ge=0.0, le=1.0)
     p_flat: float = Field(ge=0.0, le=1.0)
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("short_pct_float", "days_to_cover", "short_change_pct", mode="before")
+    @classmethod
+    def _coerce_floats(cls, v: object) -> float | None:
+        return _coerce_optional_float(v)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_prob_sum(self) -> "ShortInterestOutput":
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         return self
 
 
@@ -289,7 +386,7 @@ class RedFlag(BaseModel):
         "MARGIN_ANOMALY", "GOODWILL_RISK",
     ]
     severity: float = Field(ge=0.0, le=1.0)
-    description: str = Field(max_length=300)
+    description: str = Field(max_length=600)
     evidence_ids: list[str] = Field(min_length=1)
 
 
@@ -316,12 +413,22 @@ class ForensicsOutput(BaseModel):
     p_down: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
     @model_validator(mode="after")
     def _check_consistency(self) -> "ForensicsOutput":
         # Probability sum check
         total = self.p_up + self.p_flat + self.p_down
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 0.10:
             raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
         # red_flag_count must match len(red_flags)
         if self.red_flag_count != len(self.red_flags):
             raise ValueError(
@@ -348,7 +455,7 @@ class CrucibleAttack(BaseModel):
         "OVERLOOKED_RISK", "BASE_RATE_NEGLECT",
     ]
     severity: float = Field(ge=0.0, le=1.0)
-    description: str = Field(max_length=400)
+    description: str = Field(max_length=800)
     evidence_ids: list[str]
     missing_evidence: str | None = None
 
@@ -366,7 +473,7 @@ class CrucibleOutput(BaseModel):
     attack_count: int
     severity: float = Field(ge=0.0, le=1.0)
     thesis_survives: bool
-    summary: str = Field(max_length=500)
+    summary: str = Field(max_length=800)
     rewrite_cycle: int = Field(ge=1, le=2)
 
     @model_validator(mode="after")
@@ -411,10 +518,10 @@ class MemoWriterOutput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ticker: str = ""
-    verdict_line: str = Field(default="", max_length=200)
+    verdict_line: str = Field(default="", max_length=400)
 
     # Core thesis — field is "thesis" (NOT "thesis_summary") to match DB/template
-    thesis: str = Field(default="", max_length=2000)
+    thesis: str = Field(default="", max_length=3000)
 
     # Valuation
     fair_value: float | None = None
@@ -424,6 +531,7 @@ class MemoWriterOutput(BaseModel):
     # Business deep-dive (all optional — LLM may omit on error)
     business_model: str | None = None
     financial_snapshot: dict = Field(default_factory=dict)
+    industry_kpis: dict = Field(default_factory=dict)  # sector-specific KPIs extracted programmatically
     growth_drivers: list[dict] = Field(default_factory=list)
     competitive_position: dict = Field(default_factory=dict)
     risk_factors: list[dict] = Field(default_factory=list)

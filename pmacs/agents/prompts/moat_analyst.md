@@ -34,6 +34,31 @@ HEDGE FUND QUALITY BARS:
 - Tier-2 moat (score 0.4-0.7): Real advantage but erosion possible
 - Tier-3 moat (score < 0.4): Thin or contested, rely on execution not structure
 
+INDUSTRY-SPECIFIC MOAT SIGNALS (cite these when available):
+- SaaS/Cloud: NRR >120% = strong switching cost evidence; GRR >90% = low churn proves stickiness;
+  RPO growth rate exceeding revenue growth = expanding lock-in. Multi-year contracts = visibility.
+- FinTech/Banking: Active customer growth + rising ARPAC = network effects compounding;
+  regulatory licenses in multiple jurisdictions = intangible moat; cost-to-serve declining = scale.
+- AdTech/MarTech: unique data assets (1st-party data volume), number of integrated channels,
+  programmatic spend share; data flywheel where more spend → better targeting → more spend.
+- AI Infrastructure: contracted capacity (GW/MW), hyperscaler commit values, GPU cluster size,
+  proprietary model architectures; customer concentration risk (top-5 > 50% = fragile moat).
+- E-Commerce: GMV market share in core geography, logistics infrastructure investment,
+  seller base growth, cross-border penetration, fintech attach rate (payments/credit).
+- Hardware/Sensors: design wins with Tier-1 OEMs, patent portfolio depth, ASP premium vs peers,
+  manufacturing yield advantage, certification barriers (automotive ASIL, mil-spec).
+
+MOAT DURABILITY QUANTITATIVE TESTS (always compute when data exists):
+- Rule of 40: revenue_growth% + FCF_margin% >= 40 indicates a durable growth business with
+  sustainable economics. Below 25 = moat may not translate to shareholder value. For SaaS
+  companies, this is the single best proxy for moat monetization quality.
+- Gross margin stability: consistent gross margins (±2pp over 4 quarters) = pricing power.
+  Volatile or declining gross margins = competitive pressure eroding moat.
+- Customer concentration: if top customer is >20% of revenue, moat depends on one relationship.
+  Top-5 customers >50% = fragile moat regardless of other signals.
+- Capex intensity: capex/revenue >30% for non-infra companies = capital-intensive model
+  that requires constant reinvestment to maintain moat (less durable than asset-light moats).
+
 RULES:
 - Do not include duplicate moat types
 - moat_strength must be consistent with the average of your component strengths
@@ -110,6 +135,20 @@ PROBABILITY CALIBRATION — use the full scale, don't default to 0.50:
   Only exceed p_up 0.60 if you have multi-layered moat evidence with specific metrics.
   Only exceed p_down 0.55 if a named well-funded competitor is actively eroding share.
 If the company has a clear multi-layered durable moat, express that with p_up ≥ 0.68.
+Round probabilities to 0.05 grid (e.g. 0.55, 0.60, 0.65 — NOT 0.57 or 0.63).
+
+CONFIDENCE CALIBRATION:
+  confidence >= 0.55: Financial evidence (margins, revenue) + strategic evidence (partnerships, team)
+  confidence 0.40-0.54: Financial evidence present but limited strategic context
+  confidence 0.25-0.39: Only basic metrics available, moat assessment mostly [KNOWLEDGE]
+  confidence < 0.25: No meaningful evidence for moat assessment
+  Confidence reflects DATA COMPLETENESS, not moat strength. A company with a weak moat
+  assessed from strong evidence should have HIGH confidence (you are confident it's weak).
+
+DETERMINISM RULE: Given identical evidence, you MUST produce identical moat_strength scores
+and probability outputs. Anchor your moat_strength to QUANTITATIVE metrics first (gross margin
+level, NRR, churn rate), then adjust for qualitative factors. Do not let narrative framing
+change your numbers when the underlying data hasn't changed.
 
 {evidence}
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from pmacs.web.templating import templates
 from pmacs.storage.sqlite import connect as _sql_connect
@@ -39,12 +39,34 @@ def _db_path() -> Path:
     return data_dir() / "pmacs.db"
 
 
+def _has_existing_config() -> bool:
+    """Check if model_registry.json has an active cloud backend configured."""
+    import json as _json
+    config_dir = Path(__file__).resolve().parents[3] / "config"
+    registry_path = config_dir / "model_registry.json"
+    if not registry_path.exists():
+        return False
+    try:
+        registry = _json.loads(registry_path.read_text())
+        active = registry.get("active", "")
+        # If active backend is a cloud provider, config already exists
+        return active in ("openrouter", "anthropic", "openai")
+    except Exception:
+        return False
+
+
 def _read_wizard_state() -> dict:
     """Read wizard state from SQLite wizard_state table.
 
     Backward-compatible: if the system has mode_history entries (existing install),
-    treats wizard as already completed.
+    treats wizard as already completed. Also detects existing model_registry.json
+    with an active cloud backend.
     """
+    # If config already has an active cloud backend, wizard is done
+    if _has_existing_config():
+        _mark_wizard_completed()
+        return {"current_step": TOTAL_STEPS, "completed": True}
+
     db = _db_path()
     if not db.exists():
         return {"current_step": 1, "completed": False}
@@ -175,6 +197,10 @@ async def wizard_home(request: Request):
     """Render step 1 or resume from checkpoint."""
     state = _get_wizard_state(request)
     step = state["current_step"]
+
+    if state.get("completed"):
+        # Already configured — go to dashboard
+        return RedirectResponse(url="/", status_code=303)
 
     if step > 1:
         # Resume: render current step

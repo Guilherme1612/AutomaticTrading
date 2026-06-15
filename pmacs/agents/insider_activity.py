@@ -34,7 +34,7 @@ class InsiderActivityRunner(PersonaRunner):
             persona_name="insider_activity",
             grammar_name="insider_activity",
             temperature=0.2,
-            max_tokens=3072,
+            max_tokens=5120,
             cycle_id=cycle_id,
             audit_writer=audit_writer,
             simulation_mode=simulation_mode,

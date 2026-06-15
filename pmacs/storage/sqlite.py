@@ -342,6 +342,8 @@ CREATE TABLE IF NOT EXISTS memos (
     conviction_score REAL NOT NULL DEFAULT 0.0,
     memo_json TEXT NOT NULL,
     raw_text TEXT,
+    memo_score REAL,
+    memo_grade TEXT,
     decided_at TEXT NOT NULL,
     FOREIGN KEY (cycle_id) REFERENCES cycles(cycle_id)
 );
@@ -455,6 +457,12 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             [month_start, now, month_start],
         )
 
+    # memos migrations — memo quality scoring columns
+    if not _column_exists(conn, "memos", "memo_score"):
+        conn.execute("ALTER TABLE memos ADD COLUMN memo_score REAL")
+    if not _column_exists(conn, "memos", "memo_grade"):
+        conn.execute("ALTER TABLE memos ADD COLUMN memo_grade TEXT")
+
     # Wizard state table (wizard-first startup)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wizard_state (
@@ -488,6 +496,19 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 def get_connection(path: str | Path, read_only: bool = False) -> sqlite3.Connection:
     """Get a connection to the SQLite database.
 
-    Thin wrapper around :func:`connect` for backward compatibility.
+    Auto-initializes the schema if tables are missing (fresh or partial DB).
     """
+    p = Path(path)
+    needs_init = not p.exists()
+    if not needs_init and not read_only:
+        # Check if core tables exist
+        conn = sqlite3.connect(str(p))
+        has_cycles = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cycles'"
+        ).fetchone()[0]
+        conn.close()
+        if not has_cycles:
+            needs_init = True
+    if needs_init and not read_only:
+        return init_db(p)
     return connect(path, read_only=read_only)

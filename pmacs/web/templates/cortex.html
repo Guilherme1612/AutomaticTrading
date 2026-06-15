@@ -142,8 +142,10 @@
             <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2 py-0.5 rounded-lg">{{ processes | selectattr('status', '==', 'running') | list | length }}/{{ processes | length }}</span>
         </div>
         {% set inference_proc = processes | selectattr('name', '==', 'pmacs-inference') | list | first %}
-        {% if inference_proc and inference_proc.status != 'running' %}
+        {% if inference_proc and inference_proc.status != 'running' and not active_backend %}
         <p class="text-[10px] text-amber-500 mb-2">Simulation mode — no inference model loaded</p>
+        {% elif active_backend %}
+        <p class="text-[10px] text-positive mb-2">{{ backend_mode }} — {{ active_backend }}</p>
         {% endif %}
         <ul class="space-y-2.5 text-body">
             {% for proc in processes %}

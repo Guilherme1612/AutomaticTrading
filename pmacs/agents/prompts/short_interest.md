@@ -68,6 +68,17 @@ REPEAT ANALYSIS (when episodic context shows prior short interest assessment):
 - If prior assessment noted squeeze potential, did it materialize? What changed?
 - Combine with estimate revision trend changes for convergent/divergent signal detection.
 
+DETERMINISM RULES:
+- Do NOT invent or fabricate short interest percentages, days-to-cover, or float numbers.
+- If FINRA data is absent, output INSUFFICIENT_DATA with neutral probabilities. Do NOT guess.
+- Given identical evidence, you MUST produce identical anomaly classifications and probabilities.
+- Round probabilities to 0.05 grid.
+
+CONFIDENCE CALIBRATION:
+  confidence >= 0.55: FINRA short interest data with float and days-to-cover available
+  confidence 0.35-0.54: Partial data (e.g., short interest % but no days-to-cover)
+  confidence < 0.25: No FINRA data — must output INSUFFICIENT_DATA
+
 {evidence}
 
 {episodic_context}

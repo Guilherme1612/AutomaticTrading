@@ -1,0 +1,68 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  darkMode: 'class',
+  content: [
+    './pmacs/web/templates/**/*.html',
+  ],
+  theme: {
+    extend: {
+      colors: {
+        'surface': 'var(--surface)',
+        'surface-elevated': 'var(--surface-elevated)',
+        'surface-sunken': 'var(--surface-sunken)',
+        'surface-overlay': 'var(--surface-overlay)',
+        'surface-glass': 'var(--surface-glass)',
+        'border-default': 'var(--border)',
+        'border-subtle': 'var(--border-subtle)',
+        'border-strong': 'var(--border-strong)',
+        'text-primary': 'var(--text-primary)',
+        'text-secondary': 'var(--text-secondary)',
+        'text-muted': 'var(--text-muted)',
+        'accent': 'var(--accent)',
+        'accent-soft': 'var(--accent-soft)',
+        'accent-ring': 'var(--accent-ring)',
+        'positive': 'var(--positive)',
+        'positive-soft': 'var(--positive-soft)',
+        'negative': 'var(--negative)',
+        'negative-soft': 'var(--negative-soft)',
+        'warning': 'var(--warning)',
+        'strong-buy': 'var(--strong-buy)',
+        'crucible': 'var(--crucible)',
+        'crucible-soft': 'var(--crucible-soft)',
+        'viz-blue': 'var(--viz-blue)',
+        'viz-emerald': 'var(--viz-emerald)',
+        'viz-amber': 'var(--viz-amber)',
+        'viz-rose': 'var(--viz-rose)',
+        'viz-violet': 'var(--viz-violet)',
+        'viz-slate': 'var(--viz-slate)',
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+      },
+      fontSize: {
+        'caption': ['12px', { lineHeight: '16px' }],
+        'body': ['14px', { lineHeight: '20px' }],
+        'subhead': ['16px', { lineHeight: '24px' }],
+        'head': ['20px', { lineHeight: '28px' }],
+        'page-title': ['28px', { lineHeight: '36px' }],
+        'display': ['36px', { lineHeight: '44px' }],
+      },
+      spacing: {
+        'page-gutter': '32px',
+        'card-pad': '24px',
+        'section-gap': '16px',
+        'table-row': '12px',
+      },
+      screens: {
+        'xs': '480px',
+        'dash-md': '1440px',
+      },
+      borderRadius: {
+        'xl': '16px',
+        '2xl': '20px',
+      },
+    },
+  },
+  plugins: [],
+}

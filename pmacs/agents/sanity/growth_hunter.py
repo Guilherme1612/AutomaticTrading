@@ -1,7 +1,7 @@
 """GrowthHunter sanity validator — persona-specific checks (Agents.md §8).
 
 Checks:
-- revenue_yoy_pct range: -100 to 500 (if provided)
+- revenue_yoy_pct range: -100 to 2000 (if provided; hyper-growth stocks can exceed 500%)
 - gross_margin_pct range: -50 to 100 (if provided)
 - evidence_ids resolve to provided packets
 - growth_durability_reasoning non-empty
@@ -23,10 +23,10 @@ class GrowthHunterSanity(BaseSanityValidator):
         # revenue_yoy_pct range
         rev = output.get("revenue_yoy_pct")
         if rev is not None:
-            if rev < -100 or rev > 500:
+            if rev < -100 or rev > 2000:
                 return SanityResult(
                     passed=False,
-                    reason=f"revenue_yoy_pct {rev} out of range [-100, 500]",
+                    reason=f"revenue_yoy_pct {rev} out of range [-100, 2000]",
                 )
 
         # gross_margin_pct range

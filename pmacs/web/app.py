@@ -322,13 +322,23 @@ async def sse_events(request: Request):
     last_id_str = request.query_params.get("last_event_id", "")
     last_id = int(last_id_str) if last_id_str.isdigit() else 0
 
+    # Detect stale last_event_id from a previous server session — if the
+    # client's last ID is higher than the publisher's current sequence, the
+    # server restarted and those IDs are meaningless.  Reset to 0 so all
+    # new events flow through instead of being silently dropped.
+    if last_id and last_id > _publisher.last_event_id:
+        last_id = 0
+
     client_id, queue = _publisher.subscribe()
 
     async def generate():
         try:
+            # Send initial comment to establish the stream — without this,
+            # Starlette's request.is_disconnected() may return True immediately
+            # before the first chunk is sent.
+            yield ": connected\n\n"
+
             while True:
-                if await request.is_disconnected():
-                    break
                 try:
                     frame = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:

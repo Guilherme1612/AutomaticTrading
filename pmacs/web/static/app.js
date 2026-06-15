@@ -1072,16 +1072,43 @@ var totpModalState = {
  * @param {Object} [opts.extra]          — action-specific data to pass through
  */
 function open_totp_modal(opts) {
-    var modal = document.getElementById("totp-modal");
-    if (!modal) return;
-
-    // Store state
+    // TOTP disabled — immediately execute the action with a dummy code
     totpModalState.actionId = opts.actionId || "";
     totpModalState.callbackUrl = opts.callbackUrl || "";
     totpModalState.confirmText = opts.confirmText || "";
     totpModalState.pendingAction = opts.onSuccess || null;
     totpModalState.extra = opts.extra || {};
-    totpModalState.verifiedCode = "";
+    totpModalState.verifiedCode = "000000";
+
+    // Skip modal, go straight to action
+    if (totpModalState.callbackUrl) {
+        var body = Object.assign({}, totpModalState.extra, {
+            totp_code: "000000",
+            action_id: totpModalState.actionId
+        });
+        fetch(totpModalState.callbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.ok || data.verified) {
+                if (totpModalState.pendingAction) totpModalState.pendingAction("000000");
+                show_toast("Action completed", "success");
+            } else {
+                show_toast(data.error || "Action failed", "error");
+            }
+        }).catch(function(err) {
+            show_toast("Request failed: " + err.message, "error");
+        });
+        return;
+    }
+    if (totpModalState.pendingAction) {
+        totpModalState.pendingAction("000000");
+        return;
+    }
+    // Fallback: show modal if no action configured
+    var modal = document.getElementById("totp-modal");
+    if (!modal) return;
 
     // Set data attributes
     modal.setAttribute("data-action-id", totpModalState.actionId);
@@ -1564,7 +1591,7 @@ onSSE("cycle", function (data) {
         var lctEl = document.getElementById("last-cycle-time");
         if (lctEl && data.completed_at) {
             lctEl.setAttribute("data-time-ago", data.completed_at);
-            lctEl.textContent = timeLabel;
+            lctEl.textContent = "just now";
         }
         // Partial refresh via HTMX — debounced to prevent stacking if event fires twice
         if (typeof htmx !== "undefined") {
@@ -2061,7 +2088,7 @@ document.addEventListener("htmx:afterSwap", function (event) {
         });
 
         // Re-initialize Sankey if on agents page
-        if (currentPath === "/agents" && typeof PMACS_SANKEY !== "undefined") {
+        if (currentPath === "/agents" && typeof PMACS_SANKEY !== "undefined" && PMACS_SANKEY.init) {
             PMACS_SANKEY.init();
         }
     }

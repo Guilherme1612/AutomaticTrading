@@ -62,6 +62,30 @@ _COMPANY_SECTORS: dict[str, str] = {
     "AMZN": "Technology",
 }
 
+# Static subsector lookup — provides meaningful subsector when DB value is empty
+_COMPANY_SUBSECTORS: dict[str, str] = {
+    "NBIS": "AI Infrastructure",
+    "PLTR": "Enterprise AI / Analytics",
+    "NET": "Cloud / CDN",
+    "CRWD": "Cybersecurity",
+    "PANW": "Cybersecurity",
+    "MSFT": "Cloud / Enterprise",
+    "NVDA": "Semiconductors / AI",
+    "ZETA": "MarTech / AdTech",
+    "TEM": "AI Diagnostics",
+    "HIMS": "Telehealth / DTC",
+    "INMD": "Medical Devices",
+    "MELI": "E-Commerce / FinTech",
+    "CELH": "Beverages / Energy",
+    "KOD": "Autonomous Vehicles",
+    "ONDS": "Wireless / Drones",
+    "NU": "Digital Banking",
+    "OUST": "LiDAR / Sensors",
+    "GOOGL": "Search / Cloud / AI",
+    "META": "Social / Metaverse / AI",
+    "AMZN": "E-Commerce / Cloud",
+}
+
 
 class TickerActionRequest(BaseModel):
     """Request body for TOTP-gated universe actions."""
@@ -105,7 +129,7 @@ async def universe_page(request: Request):
                 "symbol": t["ticker"],
                 "name": _COMPANY_NAMES.get(t["ticker"], t["ticker"]),
                 "sector": _COMPANY_SECTORS.get(t["ticker"]) or t.get("sector") or "--",
-                "subsector": t.get("subsector") or "",
+                "subsector": t.get("subsector") or _COMPANY_SUBSECTORS.get(t["ticker"], ""),
                 "catalyst_type": t.get("catalyst_type") or "",
                 "status": _compute_status(t, t["ticker"] in active_tickers),
                 "has_position": t["ticker"] in active_tickers,
@@ -260,7 +284,8 @@ async def universe_add(req: TickerActionRequest):
 
         db = data_layer.get_readwrite_db(cfg.sqlite_path)
         try:
-            from pmacs.data.universe import UniverseEntry, add_ticker
+            from pmacs.data.universe import UniverseEntry, add_ticker, init_universe_table
+            init_universe_table(db)
             add_ticker(db, UniverseEntry(ticker=ticker, sector=sector or None, subsector=subsector or None))
         finally:
             db.close()

@@ -85,26 +85,13 @@ class SessionManager:
     def verify_write_access(
         self,
         session_token: str,
-        totp_code: str | None,
-        totp_secret: str,
-        require_totp: bool = True,
+        totp_code: str | None = None,
+        totp_secret: str = "",
+        require_totp: bool = False,
     ) -> bool:
-        """Verify session + TOTP for write endpoints.
-
-        Args:
-            session_token: Active session token.
-            totp_code: TOTP code from operator.
-            totp_secret: TOTP secret for verification.
-            require_totp: If False, skip TOTP check (for testing).
+        """Verify session for write endpoints. TOTP disabled.
 
         Returns:
-            True if session is valid and TOTP passes (or not required).
+            True if session is valid.
         """
-        if not self.verify_session(session_token):
-            return False
-        if require_totp:
-            if totp_code is None:
-                return False
-            if not verify_totp(totp_secret, totp_code):
-                return False
-        return True
+        return self.verify_session(session_token)

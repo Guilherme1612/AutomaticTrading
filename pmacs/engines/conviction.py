@@ -42,11 +42,16 @@ def compute_conviction(
         # should have aborted before reaching here.
         maturity_factor = max(0.25, min(arb.matured_sources_used / 4.0, 1.0))
 
-    # Crucible amplification: high severity is MORE punitive than linear.
-    # severity^0.7 makes severity 0.66 → effective 0.735 (factor 0.265 vs linear 0.34).
-    # Models the reality that agents often miss what crucible catches.
-    amplified_severity = crucible_severity ** 0.7
-    crucible_factor = max(0.0, 1.0 - amplified_severity)
+    # Crucible penalty: piecewise by thesis survival.
+    # Below 0.50 (thesis survives): linear penalty — severity 0.41 → factor 0.59.
+    #   A thesis that passed adversarial review deserves proportional, not amplified, penalty.
+    # Above 0.50 (thesis rejected): amplified penalty (^0.7) — severity 0.66 → factor 0.27.
+    #   Rejected theses get extra punishment because agents often miss what crucible catches.
+    if crucible_severity <= 0.50:
+        effective_severity = crucible_severity
+    else:
+        effective_severity = crucible_severity ** 0.7
+    crucible_factor = max(0.0, 1.0 - effective_severity)
     # Clamp ev_factor to [0, 1]: negative EV means no edge; we suppress conviction
     # to 0 rather than inverting it (which would produce a false BUY for bearish setups).
     ev_factor = max(0.0, min(ev_multiple / 1.5, 1.0))

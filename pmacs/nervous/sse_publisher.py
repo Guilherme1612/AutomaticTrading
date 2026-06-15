@@ -30,9 +30,16 @@ class SSEPublisher:
     def __init__(self) -> None:
         self._clients: dict[int, asyncio.Queue[str]] = {}
         self._lock = threading.Lock()
-        self._next_id: int = 1
+        # Use millisecond timestamp so IDs survive server restarts and never
+        # collide with stale last_event_id values cached by browser clients.
+        self._next_id: int = int(time.time() * 1000)
         # Ring buffer: list of (event_id_int, frame_str) for Last-Event-ID resume
         self._event_log: list[tuple[int, str]] = []
+        # Event loop reference for thread-safe publishing.
+        # asyncio.Queue.put_nowait() from a non-event-loop thread does not
+        # properly wake up async consumers.  We store the loop and use
+        # call_soon_threadsafe() when publishing from background threads.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _next_event_id(self) -> str:
         with self._lock:
@@ -46,6 +53,12 @@ class SSEPublisher:
         with self._lock:
             cid = id(queue)
             self._clients[cid] = queue
+            # Capture the event loop on first subscribe (always called from async context)
+            if self._loop is None:
+                try:
+                    self._loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
         return cid, queue
 
     def unsubscribe(self, client_id: int) -> None:
@@ -56,7 +69,10 @@ class SSEPublisher:
     def publish(self, stream: str, event_type: str, data: dict[str, Any]) -> str:
         """Emit an event to all connected clients.
 
-        Thread-safe — can be called from any thread.
+        Thread-safe — can be called from any thread.  When called from a
+        background thread (e.g. ThreadPoolExecutor running LLM agents),
+        uses ``loop.call_soon_threadsafe()`` so that the asyncio.Queue
+        consumers are properly woken up.
 
         Args:
             stream: Stream category (cycle, agent, decision, trade, mutation, system).
@@ -76,6 +92,14 @@ class SSEPublisher:
         }
         frame = json.dumps(event, separators=(",", ":"))
 
+        # Detect whether we are inside the event loop or in a worker thread.
+        in_loop = False
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            pass
+
         with self._lock:
             # Append to ring buffer for Last-Event-ID resume
             self._event_log.append((int(event_id), frame))
@@ -85,8 +109,17 @@ class SSEPublisher:
             dead: list[int] = []
             for cid, queue in self._clients.items():
                 try:
-                    queue.put_nowait(frame)
+                    if in_loop or self._loop is None:
+                        # Same thread as the event loop — direct put is safe
+                        queue.put_nowait(frame)
+                    else:
+                        # Background thread — schedule put on the event loop
+                        # so the async consumer is properly notified.
+                        self._loop.call_soon_threadsafe(queue.put_nowait, frame)
                 except asyncio.QueueFull:
+                    dead.append(cid)
+                except RuntimeError:
+                    # Loop closed or queue issue — skip this client
                     dead.append(cid)
             for cid in dead:
                 self._clients.pop(cid, None)

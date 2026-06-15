@@ -159,6 +159,29 @@ _TICKER_KNOWLEDGE: dict[str, list[str]] = {
         "[KNOWLEDGE] Kodiak Robotics is an autonomous trucking company. Pre-revenue with "
         "military contracts (DOD) and partnership with Atlas Energy.",
     ],
+    "ZETA": [
+        "[KNOWLEDGE] Zeta Global is an AI-powered MarTech/AdTech platform (CDP + DSP) serving "
+        "enterprise advertisers. Key metric is ARPU per integrated customer — higher platform "
+        "consolidation drives higher ARPU. Contribution ex-TAC margin is the core profitability "
+        "metric for AdTech companies (revenue minus traffic acquisition costs).",
+        "[KNOWLEDGE] Zeta's data cloud processes 1T+ signals per day across 240M+ identifiable "
+        "profiles. This data moat compounds with each new customer integration. LiveIntent "
+        "acquisition (2024) expanded publisher-side inventory and programmatic capabilities.",
+        "[KNOWLEDGE] Zeta went public via IPO in 2021. The company has ~500 enterprise customers "
+        "with growing integrated platform adoption. Management targets 20%+ organic revenue growth "
+        "and contribution ex-TAC margin expansion toward 65-70% over time.",
+    ],
+    "CELH": [
+        "[KNOWLEDGE] Celsius Holdings is a fitness-oriented energy drink brand. Distribution "
+        "partnership with PepsiCo (Aug 2022) gives access to 500K+ retail locations in the US.",
+        "[KNOWLEDGE] Celsius has ~12% US energy drink market share, up from ~5% in 2022. "
+        "International expansion (UK, Canada, Australia) is the next growth lever.",
+    ],
+    "INMD": [
+        "[KNOWLEDGE] InMode is a profitable medical aesthetics company (70%+ gross margin) "
+        "based in Israel. Minimally-invasive body contouring and facial devices. "
+        "Net cash position with no debt — rare for a growth company.",
+    ],
 }
 
 

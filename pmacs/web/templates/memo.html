@@ -70,11 +70,22 @@
 <!-- Price Target Section -->
 {% if fair_value %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Fair Value Estimate</h2>
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Fair Value Estimate</h2>
+        </div>
+        {% if memo.memo_score is defined and memo.memo_score is not none %}
+        <span class="text-xs font-mono font-semibold {{ 'text-positive' if memo.memo_score >= 70 else 'text-warning' if memo.memo_score >= 50 else 'text-negative' }}">SCORE: {{ "%.0f"|format(memo.memo_score) }}</span>
+        {% endif %}
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        {% if valuation_range and valuation_range.get("low") %}
+        <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
+            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Bear Case</p>
+            <p class="text-xl font-mono font-bold text-negative">${{ valuation_range.low }}</p>
+        </div>
+        {% endif %}
         <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
             <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Fair Value</p>
             <p class="text-2xl font-mono font-bold {{ 'text-positive' if upside_pct and upside_pct > 0 else 'text-negative' if upside_pct and upside_pct < 0 else 'text-text-primary' }}">
@@ -86,36 +97,56 @@
             </p>
             {% endif %}
         </div>
-        {% if valuation_range and (valuation_range.get("low") or valuation_range.get("high")) %}
+        {% if valuation_range and valuation_range.get("high") %}
         <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Valuation Range</p>
-            <div class="flex items-center justify-center gap-2 text-sm font-mono">
-                <span class="text-negative">${{ valuation_range.low or "—" }}</span>
-                <span class="text-text-muted">—</span>
-                <span class="text-text-primary font-semibold">${{ valuation_range.base or "—" }}</span>
-                <span class="text-text-muted">—</span>
-                <span class="text-positive">${{ valuation_range.high or "—" }}</span>
-            </div>
-        </div>
-        {% endif %}
-        {% if memo.valuation_methodology %}
-        <div class="p-4 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Methodology</p>
-            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.valuation_methodology }}</p>
+            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Bull Case</p>
+            <p class="text-xl font-mono font-bold text-positive">${{ valuation_range.high }}</p>
         </div>
         {% endif %}
     </div>
+    {% if memo.valuation_methodology %}
+    <div class="mt-4 p-4 bg-surface-sunken/50 rounded-xl">
+        <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Methodology</p>
+        <p class="text-sm text-text-secondary leading-relaxed">{{ memo.valuation_methodology }}</p>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
-<!-- Business Model -->
-{% if memo.business_model %}
+
+
+<!-- Business Model & Strategy -->
+{% if memo.business_model or memo.revenue_model or memo.key_acquisitions or memo.company_vision %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
+    <div class="flex items-center gap-2 mb-4">
         <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Business Model</h2>
+        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Business Model & Strategy</h2>
     </div>
-    <p class="text-sm text-text-secondary leading-relaxed">{{ memo.business_model }}</p>
+    <div class="space-y-4">
+        {% if memo.revenue_model %}
+        <div>
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">How They Make Money</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.revenue_model }}</p>
+        </div>
+        {% elif memo.business_model %}
+        <div>
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">How They Make Money</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.business_model }}</p>
+        </div>
+        {% endif %}
+        {% if memo.key_acquisitions %}
+        <div>
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Key Acquisitions & Partnerships</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.key_acquisitions }}</p>
+        </div>
+        {% endif %}
+        {% if memo.company_vision %}
+        <div>
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Vision & Strategy</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.company_vision }}</p>
+        </div>
+        {% endif %}
+    </div>
 </div>
 {% endif %}
 
@@ -206,6 +237,37 @@
             <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.peg_ratio }}</p>
         </div>
         {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Industry-Specific KPIs -->
+{% if memo.industry_kpis and memo.industry_kpis|length > 0 %}
+<div class="card card-elevated mb-8 reveal" data-stagger>
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Industry KPIs</h2>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+        {% set kpi_labels = {
+            'nrr': 'Net Revenue Retention', 'arr': 'Annual Recurring Revenue', 'grr': 'Gross Retention',
+            'rpo': 'RPO (Backlog)', 'customer_count': 'Customers', 'logo_churn': 'Logo Churn',
+            'tpv': 'Total Payment Volume', 'active_customers': 'Active Customers',
+            'arpac': 'Revenue / Customer', 'take_rate': 'Take Rate', 'npl_rate': 'NPL Rate',
+            'cost_to_serve': 'Cost-to-Serve',
+            'arpu': 'ARPU', 'contribution_ex_tac': 'Contrib. ex-TAC', 'platform_spend': 'Platform Spend',
+            'contracted_capacity': 'Contracted Capacity', 'hyperscaler_commitments': 'Hyperscaler Commits',
+            'gpu_utilization': 'GPU Utilization',
+            'gmv': 'GMV', 'order_frequency': 'Order Frequency',
+            'asp': 'Avg Selling Price', 'units_shipped': 'Units Shipped',
+            'design_wins': 'Design Wins', 'backlog': 'Backlog'
+        } %}
+        {% for key, value in memo.industry_kpis.items() %}
+        <div class="p-3 bg-surface-sunken/50 rounded-xl border border-violet-500/20">
+            <p class="text-[10px] text-violet-400 uppercase tracking-widest mb-0.5">{{ kpi_labels.get(key, key|replace('_', ' ')|title) }}</p>
+            <p class="text-sm font-mono font-semibold text-text-primary">{{ value }}</p>
+        </div>
+        {% endfor %}
     </div>
 </div>
 {% endif %}
@@ -390,130 +452,106 @@
 {% endif %}
 
 <!-- Agent Signals -->
-{% if agent_results and agent_results|length > 0 %}
+{% set _agents = agent_results if (agent_results and agent_results|length > 0) else (memo.agent_signals if (memo.agent_signals and memo.agent_signals|length > 0) else []) %}
+{% if _agents|length > 0 %}
+{# Filter: only show agents with confidence >= 0.30 #}
+{% set ns_shown = namespace(agents=[]) %}
+{% for sig in _agents %}
+    {% if sig.confidence|default(0) >= 0.30 %}
+        {% set ns_shown.agents = ns_shown.agents + [sig] %}
+    {% endif %}
+{% endfor %}
+{% if ns_shown.agents|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
         <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Agent Signals</h2>
+        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Agent Insights ({{ ns_shown.agents|length }})</h2>
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {% for agent in agent_results %}
-        <div class="p-4 bg-surface-sunken/50 rounded-xl">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-sm font-semibold text-text-primary">{{ agent.persona|default('')|replace('_', ' ')|title }}</p>
-                <span class="text-xs font-mono {{ 'text-positive' if agent.p_up > agent.p_down else 'text-negative' }}">
-                    {{ "%.0f"|format(agent.p_up * 100) }}% up
-                </span>
-            </div>
-            <p class="text-xs text-text-secondary mb-2">{{ agent.key_signal|default('') }}</p>
-            {% if agent.analysis %}
-            <p class="text-xs text-text-muted leading-relaxed">{{ agent.analysis[:200] }}{% if agent.analysis|length > 200 %}...{% endif %}</p>
+
+    <div class="space-y-3">
+        {% for sig in ns_shown.agents %}
+        {% set p_up_val = sig.p_up|default(0.33) %}
+        {% set p_down_val = sig.p_down|default(0.33) %}
+        {% set conf_val = sig.confidence|default(0) %}
+        {% set direction = p_up_val - p_down_val %}
+        {% set signal_text = sig.signal|default(sig.key_signal|default('')) %}
+        {% set analysis_text = sig.analysis|default('') %}
+        {# Determine verdict based on direction and confidence #}
+        {% if conf_val >= 0.50 %}
+            {% if direction > 0.10 %}
+                {% set agent_verdict = "Bullish" %}
+                {% set verdict_class = "text-positive" %}
+            {% elif direction < -0.10 %}
+                {% set agent_verdict = "Bearish" %}
+                {% set verdict_class = "text-negative" %}
+            {% else %}
+                {% set agent_verdict = "Neutral" %}
+                {% set verdict_class = "text-text-muted" %}
             {% endif %}
-            <div class="mt-2 flex gap-2 text-xs font-mono">
-                <span class="text-positive">&uarr;{{ "%.0f"|format(agent.p_up * 100) }}%</span>
-                <span class="text-text-muted">&rarr;{{ "%.0f"|format(agent.p_flat * 100) }}%</span>
-                <span class="text-negative">&darr;{{ "%.0f"|format(agent.p_down * 100) }}%</span>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% elif memo.agent_signals and memo.agent_signals|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Agent Signals</h2>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {% for sig in memo.agent_signals %}
-        <div class="p-4 bg-surface-sunken/50 rounded-xl">
-            <div class="flex items-center justify-between mb-2">
+        {% else %}
+            {% set agent_verdict = "Low Confidence" %}
+            {% set verdict_class = "text-text-muted" %}
+        {% endif %}
+        <div class="flex items-start gap-3 p-3 bg-surface-sunken/50 rounded-xl">
+            <div class="shrink-0 w-28">
                 <p class="text-sm font-semibold text-text-primary">{{ sig.persona|default('')|replace('_', ' ')|title }}</p>
-                {% if sig.p_up is defined %}
-                <span class="text-xs font-mono {{ 'text-positive' if sig.p_up > sig.p_down else 'text-negative' }}">
-                    {{ "%.0f"|format(sig.p_up * 100) }}% up
-                </span>
+                <span class="text-xs font-mono {{ verdict_class }}">{{ agent_verdict }}</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                {% if signal_text %}
+                <p class="text-sm text-text-secondary leading-relaxed">{{ signal_text }}</p>
+                {% endif %}
+                {% if analysis_text and conf_val >= 0.50 %}
+                <details class="mt-1.5">
+                    <summary class="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary list-none flex items-center gap-1">
+                        <svg class="w-3 h-3 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        Full analysis
+                    </summary>
+                    <p class="text-xs text-text-muted leading-relaxed mt-1.5 pl-4">{{ analysis_text }}</p>
+                </details>
                 {% endif %}
             </div>
-            <p class="text-xs text-text-secondary mb-2">{{ sig.signal|default('') }}</p>
-            {% if sig.p_up is defined %}
-            <div class="flex gap-0.5 w-24 h-1.5 rounded overflow-hidden">
-                <div class="bg-positive" style="width: {{ (sig.p_up|default(0.33))*100 }}%"></div>
-                <div class="bg-border-strong" style="width: {{ (sig.p_flat|default(0.34))*100 }}%"></div>
-                <div class="bg-negative" style="width: {{ (sig.p_down|default(0.33))*100 }}%"></div>
-            </div>
-            <div class="mt-1 flex gap-2 text-xs font-mono">
-                <span class="text-positive">&uarr;{{ "%.0f"|format(sig.p_up * 100) }}%</span>
-                <span class="text-text-muted">&rarr;{{ "%.0f"|format(sig.p_flat|default(0) * 100) }}%</span>
-                <span class="text-negative">&darr;{{ "%.0f"|format(sig.p_down * 100) }}%</span>
-            </div>
-            {% endif %}
         </div>
         {% endfor %}
     </div>
 </div>
 {% endif %}
+{% endif %}
 
 <!-- Crucible Review -->
 {% if crucible_result or (memo.crucible_attacks and memo.crucible_attacks|length > 0) %}
+{% set sev = crucible_result.severity if crucible_result else memo.crucible_severity|default(0) %}
+{% set survives = crucible_result.thesis_survives if crucible_result else (sev < 0.50) %}
+{% set summary = crucible_result.summary if crucible_result else memo.crucible_summary|default('') %}
+{% set attacks = crucible_result.attacks if (crucible_result and crucible_result.attacks) else memo.crucible_attacks|default([]) %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-red-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Crucible Adversarial Review</h2>
-    </div>
-    {% if crucible_result %}
-    <div class="mb-3">
-        <div class="flex items-center gap-3 mb-2">
-            <span class="text-sm font-mono {{ 'text-positive' if crucible_result.thesis_survives else 'text-negative' }}">
-                Severity: {{ "%.0f"|format(crucible_result.severity * 100) }}%
-            </span>
-            <span class="px-2.5 py-0.5 text-xs rounded-xl {{ 'bg-positive-soft text-positive' if crucible_result.thesis_survives else 'bg-negative-soft text-negative' }}">
-                {{ "Thesis survives" if crucible_result.thesis_survives else "Thesis rejected" }}
-            </span>
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full {{ 'bg-positive' if survives else 'bg-negative' }}"></span>
+            <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Adversarial Review</h2>
         </div>
-        {% if crucible_result.summary %}
-        <p class="text-sm text-text-secondary mb-3">{{ crucible_result.summary }}</p>
-        {% endif %}
-        {% if crucible_result.attacks and crucible_result.attacks|length > 0 %}
-        <div class="space-y-2">
-            {% for atk in crucible_result.attacks %}
+        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-xl {{ 'bg-positive-soft text-positive' if survives else 'bg-negative-soft text-negative' }}">
+            {{ "Thesis Survives" if survives else "Thesis Challenged" }}
+        </span>
+    </div>
+    {% if summary %}
+    <p class="text-sm text-text-secondary leading-relaxed mb-3">{{ summary }}</p>
+    {% endif %}
+    {% if attacks and attacks|length > 0 %}
+    <details>
+        <summary class="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary list-none flex items-center gap-1">
+            <svg class="w-3 h-3 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            {{ attacks|length }} attack{{ 's' if attacks|length > 1 }} tested
+        </summary>
+        <div class="mt-2 space-y-2">
+            {% for atk in attacks %}
             {% set atk_text = atk if atk is string else (atk.get('text') or atk.get('attack') or atk.get('description') or atk|string) %}
-            <details class="border border-border-subtle rounded-xl overflow-hidden">
-                <summary class="cursor-pointer p-3 text-xs font-medium text-text-primary flex items-center justify-between hover:bg-surface-sunken/50 list-none">
-                    <span class="flex items-center gap-2">
-                        <span class="text-negative shrink-0">&#9888;</span>
-                        <span><span class="text-text-muted mr-1.5">Attack {{ loop.index }}</span>{{ atk_text[:80] }}{% if atk_text|length > 80 %}…{% endif %}</span>
-                    </span>
-                    <svg class="w-3.5 h-3.5 text-text-muted shrink-0 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                </summary>
-                <div class="px-3 pb-3 text-xs text-text-secondary leading-relaxed border-t border-border-subtle pt-2 mt-0">{{ atk_text }}</div>
-            </details>
+            <div class="p-2.5 bg-surface-sunken/30 rounded-lg">
+                <p class="text-xs text-text-secondary leading-relaxed">{{ atk_text }}</p>
+            </div>
             {% endfor %}
         </div>
-        {% endif %}
-    </div>
-    {% elif memo.crucible_attacks %}
-    <div class="space-y-2">
-        {% set sev = memo.crucible_severity|default(0) %}
-        <div class="flex items-center gap-3 mb-2">
-            <span class="text-sm font-mono {{ 'text-positive' if sev < 0.4 else 'text-crucible' if sev < 0.7 else 'text-negative' }}">
-                Severity: {{ "%.0f"|format(sev * 100) }}%
-            </span>
-        </div>
-        {% for atk in memo.crucible_attacks %}
-        {% set atk_text = atk if atk is string else (atk.get('text') or atk.get('attack') or atk.get('description') or atk|string) %}
-        <details class="border border-border-subtle rounded-xl overflow-hidden">
-            <summary class="cursor-pointer p-3 text-xs font-medium text-text-primary flex items-center justify-between hover:bg-surface-sunken/50 list-none">
-                <span class="flex items-center gap-2">
-                    <span class="text-negative shrink-0">&#9888;</span>
-                    <span><span class="text-text-muted mr-1.5">Attack {{ loop.index }}</span>{{ atk_text[:80] }}{% if atk_text|length > 80 %}…{% endif %}</span>
-                </span>
-                <svg class="w-3.5 h-3.5 text-text-muted shrink-0 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            </summary>
-            <div class="px-3 pb-3 text-xs text-text-secondary leading-relaxed border-t border-border-subtle pt-2 mt-0">{{ atk_text }}</div>
-        </details>
-        {% endfor %}
-    </div>
+    </details>
     {% endif %}
 </div>
 {% endif %}
@@ -525,7 +563,17 @@
         <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Position Sizing</h2>
     </div>
-    <p class="text-sm text-text-secondary leading-relaxed">{{ memo.position_sizing_note }}</p>
+    <div class="flex items-center gap-4 flex-wrap">
+        {% if memo.conviction is defined %}
+        <div class="text-center p-3 bg-surface-sunken/50 rounded-xl">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-0.5">Conviction</p>
+            <p class="text-lg font-mono font-bold text-text-primary">{{ "%.0f"|format(memo.conviction * 100) }}%</p>
+        </div>
+        {% endif %}
+        <div class="flex-1 min-w-0">
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.position_sizing_note }}</p>
+        </div>
+    </div>
 </div>
 {% endif %}
 

@@ -1,5 +1,7 @@
 """Agents route — persona analysis page with Communication Layer visualization."""
 
+import sqlite3
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -33,9 +35,12 @@ async def agents_page(request: Request):
             queue = data_layer.get_queue_status(db)
             decisions = data_layer.get_recent_decisions(db, limit=10)
             holdings = data_layer.get_active_holdings(db)
-            running_row = db.execute(
-                "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' ORDER BY opened_at DESC LIMIT 1"
-            ).fetchone()
+            try:
+                running_row = db.execute(
+                    "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' ORDER BY opened_at DESC LIMIT 1"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                running_row = None
         finally:
             db.close()
 
@@ -50,22 +55,27 @@ async def agents_page(request: Request):
         )
 
         # Derive current/next ticker from the live cycle state, not the queue table
+        last_analyzed_ticker = None  # shown when idle with prior results
         if is_cycle_running and _current_ticker_processing:
             current_ticker = _current_ticker_processing
             idx = _current_cycle_tickers.index(_current_ticker_processing) if _current_ticker_processing in _current_cycle_tickers else -1
             next_ticker = _current_cycle_tickers[idx + 1] if idx >= 0 and idx + 1 < len(_current_cycle_tickers) else None
         else:
-            # No cycle running — don't show stale queue ticker as "current"
+            # No cycle running — show last analyzed ticker for context
             current_ticker = None
             next_ticker = None
+            if _last_cycle_agent_results:
+                last_analyzed_ticker = list(_last_cycle_agent_results.keys())[-1]
+            elif decisions:
+                last_analyzed_ticker = decisions[0].get("ticker")
 
-        # Build lookup: persona_id → agent result for the active/last ticker
+        # Build lookup: persona_id → agent result for the active ticker ONLY.
+        # When no cycle is running, show clean idle state — no stale data.
         last_ticker_results = {}
         last_crucible = None
-        has_active_cycle = current_ticker is not None or is_cycle_running
 
-        if has_active_cycle and _last_cycle_agent_results:
-            # Prefer results for the currently-processing ticker; fall back to last completed
+        if is_cycle_running and _last_cycle_agent_results:
+            # Only show results when a cycle is actively running
             if _current_ticker_processing and _current_ticker_processing in _last_cycle_agent_results:
                 last_key = _current_ticker_processing
             else:
@@ -74,29 +84,13 @@ async def agents_page(request: Request):
                 last_ticker_results[r["persona"]] = r
             last_crucible = _last_cycle_crucible_results.get(last_key)
 
-        # Query most-recent decided_at per persona from the memos table as DB fallback
         _persona_last_run: dict[str, str] = {}
-        try:
-            db2 = data_layer.get_readonly_db(cfg.sqlite_path)
-            try:
-                rows = db2.execute(
-                    "SELECT ticker, MAX(decided_at) as last_run FROM memos GROUP BY ticker"
-                ).fetchall()
-                # Use the most recently decided ticker's timestamp as a proxy for all personas
-                if rows:
-                    latest_ts = max(r[1] for r in rows if r[1])
-                    for p in PERSONAS:
-                        _persona_last_run[p["id"]] = latest_ts
-            finally:
-                db2.close()
-        except Exception:
-            pass
 
         enriched_personas = []
         for p in PERSONAS:
             pid = p["id"]
             result = last_ticker_results.get(pid)
-            if has_active_cycle and result and not result.get("error"):
+            if result and not result.get("error"):
                 enriched_personas.append({
                     **p,
                     "status": "complete",
@@ -109,7 +103,7 @@ async def agents_page(request: Request):
                     "evidence_cited": result.get("evidence_cited", []),
                     "completed_at": result.get("completed_at") or result.get("decided_at") or _persona_last_run.get(pid),
                 })
-            elif has_active_cycle and pid == "crucible" and last_crucible:
+            elif pid == "crucible" and last_crucible:
                 enriched_personas.append({
                     **p,
                     "status": "complete",
@@ -163,6 +157,7 @@ async def agents_page(request: Request):
                 "personas": enriched_personas,
                 "queue": queue,
                 "current_ticker": current_ticker,
+                "last_analyzed_ticker": last_analyzed_ticker,
                 "next_ticker": next_ticker,
                 "is_cycle_running": is_cycle_running,
                 "cycle_log": decisions,

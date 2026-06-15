@@ -18,11 +18,23 @@ RED FLAG CATEGORIES:
 
 FORENSIC STANDARDS:
 - The single most predictive red flag: operating cash flow consistently below net income (accruals)
+- ACCRUAL RATE = (Net Income - Operating Cash Flow) / Total Assets. This is the #1 quantitative
+  predictor of accounting manipulation. Rate >10% = aggressive accounting. Rate >15% = high risk.
+  Rate <0% (OCF exceeds NI) = conservative/clean books. Always compute and report when data exists.
 - Second most predictive: revenue growth + declining gross margins simultaneously
 - Third: rapid receivables growth outpacing revenue growth (revenue pull-forward)
 - Clean signal: free cash flow > net income consistently (earnings are real)
 - Guidance credibility signal: if beat_rate = 4/4 quarters with avg >5% positive surprise,
   management is systematically conservative — a CLEAN signal worth noting as p_up support
+
+DEBT QUALITY ASSESSMENT (critical for capital-intensive companies):
+- Interest coverage = operating income / interest expense. Below 3x = distress risk.
+- Debt maturity: near-term maturities (within 12 months) without cash to cover = refinancing risk.
+- Toxic debt indicators: high interest rates (>8%), onerous covenants, mandatory conversions.
+- ATM (at-the-market) offerings: if company has active ATM program, note dilution risk.
+- Convertible notes near conversion price = imminent dilution (check conversion trigger vs price).
+- Secured vs unsecured debt ratio: heavy secured debt = lenders demand collateral (concern).
+- When debt/equity >2.0x for non-financial companies, always flag as a risk factor.
 
 SEVERITY SCORING (0.0-1.0):
 - 0.0-0.2: No meaningful red flag
@@ -91,15 +103,40 @@ ANALYSIS FIELD RULE: 2-3 crisp sentences. Must include at least 1 specific numbe
   the single strongest clean-books indicator. DSO increased 8 days YoY to 71 days (ev-6),
   a watchlist item that warrants monitoring but is not yet thesis-breaking."
 
-PROBABILITY CALIBRATION — use the full scale:
-  0.33/0.33 = truly neutral (accounting data absent, no flags detected)
-  p_up ≥ 0.65: Clean books confirmed — FCF > net income, no red flags, strong quality
-  p_up 0.50-0.64: Good quality — minor watchlist items only, fundamentally clean
-  p_up 0.36-0.49: Neutral / unknown — insufficient data or minor ambiguity
-  p_down 0.50-0.64: Watchlist concern — 1-2 material red flags worth monitoring
-  p_down ≥ 0.65: Clear forensic concern — earnings quality materially in question
-  Only exceed p_down 0.60 if you found specific, evidence-backed anomalies (not just absence of data).
-If books are clean and you have no red flags, output p_up ≥ 0.55 (not just the default 0.36).
+PROBABILITY CALIBRATION — MECHANICAL RULES (follow these exactly for determinism):
+  Use the derived metrics from evidence to determine your probability range. Do NOT
+  override these rules with narrative — the same numbers must produce the same output.
+
+  STEP 1: Check earnings_quality from edgar_*_cashflow:
+    HIGH (OCF/NI >= 1.0)  → START at p_up = 0.55
+    MODERATE              → START at p_up = 0.40
+    LOW (OCF/NI < 0.7)   → START at p_down = 0.50
+    NOT AVAILABLE         → START at 0.36/0.34/0.30 (slight bullish lean = no red flags found)
+
+  STEP 2: Adjust ±0.05-0.10 based on additional signals:
+    +0.05 p_up: fcf_to_net_income > 1.2 consistently
+    +0.05 p_up: operating_leverage > 1.2x
+    +0.05 p_up: beat_rate 4/4 with avg surprise > 5% (management conservative)
+    -0.05 shift to p_down: DSO increasing > 15% YoY
+    -0.05 shift to p_down: revenue growing but gross margins declining
+    -0.10 shift to p_down: auditor change (Big4 → smaller firm)
+    -0.10 shift to p_down: restatement or late filing
+
+  STEP 3: Apply ceiling/floor:
+    p_up max = 0.65 (even pristine books have some risk)
+    p_down max = 0.70 (reserve for thesis-breaking fraud indicators)
+    If ALL financial data is flagged unreliable: 0.36/0.34/0.30, confidence = 0.15
+
+  0.33/0.33 = truly neutral (should be rare — most companies have SOME forensic signal)
+  If books are clean and you have no red flags, output p_up ≥ 0.55 (not just the default 0.36).
+  Round probabilities to 0.05 grid (e.g. 0.55, 0.60, 0.65 — NOT 0.57 or 0.63).
+
+CONFIDENCE CALIBRATION:
+  confidence >= 0.60: EDGAR + Finnhub/Yahoo data available, derived metrics computed
+  confidence 0.40-0.59: Partial data — some metrics available but gaps exist
+  confidence 0.20-0.39: Only Finnhub free-tier data, no EDGAR
+  confidence < 0.20: No financial data at all
+  Confidence reflects DATA COMPLETENESS, not severity of findings.
 
 {evidence}
 

@@ -31,7 +31,7 @@ repos:
       # Anti-pattern: No secrets in log output
       - id: no-secrets-in-logs
         name: "Anti-pattern: no secret logging"
-        entry: bash -c "grep -rn 'api_key\|secret\|password\|token' --include='*.py' pmacs/ | grep -i 'log\|print\|debug' | grep -v 'error_code\|canonical\|# \|prompt_tokens\|completion_tokens\|Keyring lookup' && exit 1 || exit 0"
+        entry: bash -c "grep -rn 'api_key\|secret\|password\|token' --include='*.py' pmacs/ | grep -i 'log\|print\|debug' | grep -v 'error_code\|canonical\|# \|prompt_tokens\|completion_tokens\|max_tokens\|Keyring lookup' && exit 1 || exit 0"
         language: system
         pass_filenames: false
         types: [python]

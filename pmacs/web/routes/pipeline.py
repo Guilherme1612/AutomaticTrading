@@ -431,64 +431,90 @@ def _fetch_real_price(ticker: str) -> float | None:
         return None
 
 
-def _call_openrouter(prompt: str, max_tokens: int = 1024, temperature: float = 0.2,
-                     system_prompt: str | None = None) -> str:
-    """Call OpenRouter API directly using model_registry.json config."""
+def _call_llm(prompt: str, max_tokens: int = 1024, temperature: float = 0.2,
+              system_prompt: str | None = None) -> str:
+    """Call the active LLM backend from model_registry.json.
+
+    Supports: ollama, openrouter, openai, anthropic.
+    Falls back to ollama localhost if config unreadable.
+    """
     import json as _json
     import logging
 
     import httpx
 
-    api_key = None
-    try:
-        import keyring
-        api_key = keyring.get_password("pmacs.credentials", "pmacs.credentials.openrouter_api_key")
-    except ImportError:
-        pass  # Fall through to macOS Keychain fallback
-    if not api_key:
-        # Fallback: macOS Keychain via security(1) — no Python deps required
-        try:
-            from pmacs.storage.keychain import get_api_key as _keychain_get
-            api_key = _keychain_get("pmacs.credentials", "pmacs.credentials.openrouter_api_key")
-        except Exception:
-            pass
-    if not api_key:
-        raise RuntimeError(
-            "OpenRouter API key not found. Tried: Python keyring, macOS Keychain. "
-            "Run: security add-generic-password -s pmacs.credentials "
-            "-a pmacs.credentials.openrouter_api_key -w <YOUR_KEY>"
-        )
+    _log = logging.getLogger("pmacs.web")
 
+    # --- Load active backend from model_registry.json ---
+    active_name = "ollama"
+    backend_cfg: dict = {}
     try:
         from pathlib import Path
         registry_path = Path(__file__).resolve().parents[3] / "config" / "model_registry.json"
         with open(registry_path) as f:
             registry = _json.load(f)
-        backend = registry.get("backends", {}).get("openrouter", {})
-        model = backend.get("default_model", "deepseek/deepseek-v4-flash")
-        base_url = backend.get("base_url", "https://openrouter.ai/api").rstrip("/")
+        active_name = registry.get("active", "ollama")
+        backend_cfg = registry.get("backends", {}).get(active_name, {})
     except Exception:
-        model = "deepseek/deepseek-v4-flash"
-        base_url = "https://openrouter.ai/api/v1"
+        pass
 
+    model = backend_cfg.get("default_model", "qwen3.6:35b-a3b-coding-mxfp8")
+    base_url = backend_cfg.get("base_url", "http://127.0.0.1:11434/v1").rstrip("/")
+    api_key_ref = backend_cfg.get("api_key_ref", "")
+
+    # --- Resolve API key (cloud backends only) ---
+    api_key = ""
+    if api_key_ref:
+        try:
+            import keyring
+            api_key = keyring.get_password("pmacs.credentials", api_key_ref) or ""
+        except ImportError:
+            pass
+        if not api_key:
+            try:
+                from pmacs.storage.keychain import get_api_key as _keychain_get
+                parts = api_key_ref.rsplit(".", 1)
+                if len(parts) == 2:
+                    api_key = _keychain_get(parts[0], parts[1])
+            except Exception:
+                pass
+        if not api_key:
+            raise RuntimeError(
+                f"API key not found for backend '{active_name}' (ref: {api_key_ref}). "
+                f"Set it via Settings page or keyring."
+            )
+
+    # --- Anthropic uses a different API format ---
+    if active_name == "anthropic":
+        return _call_anthropic_api(prompt, system_prompt, model, base_url, api_key,
+                                   max_tokens, temperature, _log)
+
+    # --- OpenAI-compatible path (ollama, openrouter, openai, llama_server) ---
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    body = {
+    body: dict = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
     }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-    }
+    # Only request json_object format for backends that support it
+    if active_name in ("openrouter", "openai", "ollama"):
+        body["response_format"] = {"type": "json_object"}
 
-    timeout = max(60, max_tokens // 50)  # scale timeout with output size
+    headers: dict = {"content-type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # Ollama with large models needs longer timeouts (35B can take 5+ min)
+    if active_name in ("ollama", "llama_server"):
+        timeout = max(600, max_tokens // 5)
+    else:
+        timeout = max(60, max_tokens // 50)
+
     with httpx.Client(timeout=float(timeout)) as client:
         response = client.post(f"{base_url}/chat/completions", json=body, headers=headers)
         response.raise_for_status()
@@ -498,11 +524,11 @@ def _call_openrouter(prompt: str, max_tokens: int = 1024, temperature: float = 0
 
     usage = data.get("usage", {})
     if usage:
-        logging.getLogger("pmacs.web").info(
-            "OpenRouter: model=%s prompt=%d completion=%d tokens",
-            model, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+        _log.info(
+            "LLM [%s]: model=%s prompt=%d completion=%d tokens",
+            active_name, model, usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
         )
-        # Silent token ledger — not shown in UI. Read with: python ops/token_usage.py
         try:
             import datetime as _dt
             from pathlib import Path as _Path
@@ -513,14 +539,62 @@ def _call_openrouter(prompt: str, max_tokens: int = 1024, temperature: float = 0
                 "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
-                "caller": _call_openrouter.__name__,
+                "caller": f"_call_llm:{active_name}",
             })
             with open(_ledger, "a") as _f:
                 _f.write(_entry + "\n")
         except Exception:
-            pass  # never block a cycle over telemetry
+            pass
 
     return content
+
+
+def _call_anthropic_api(prompt: str, system_prompt: str | None, model: str,
+                        base_url: str, api_key: str, max_tokens: int,
+                        temperature: float, _log) -> str:
+    """Anthropic Messages API (non-OpenAI-compatible)."""
+    import httpx
+
+    messages = [{"role": "user", "content": prompt}]
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if system_prompt:
+        body["system"] = system_prompt
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    url = f"{base_url.rstrip('/')}/v1/messages"
+    timeout = max(120, max_tokens // 30)
+    with httpx.Client(timeout=float(timeout)) as client:
+        response = client.post(url, json=body, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    content = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            content += block.get("text", "")
+
+    usage = data.get("usage", {})
+    if usage:
+        _log.info(
+            "LLM [anthropic]: model=%s input=%d output=%d tokens",
+            model, usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+        )
+
+    return content
+
+
+# Keep old name as alias for backwards compatibility during transition
+_call_openrouter = _call_llm
 
 
 def _parse_json_safe(raw: str) -> dict | None:
@@ -623,13 +697,18 @@ def _fetch_ticker_fundamentals(ticker: str) -> str:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 return json.loads(resp.read())
 
-        # Fetch metrics and profile in parallel using threads
+        # Fetch metrics, profile, and insider transactions in parallel
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             f_metrics = pool.submit(_get, f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={api_key}")
             f_profile = pool.submit(_get, f"https://finnhub.io/api/v1/stock/profile2?symbol={ticker}&token={api_key}")
+            f_insider = pool.submit(_get, f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={api_key}")
             raw_m = f_metrics.result(timeout=10)
             raw_p = f_profile.result(timeout=10)
+            try:
+                raw_insider = f_insider.result(timeout=10)
+            except Exception:
+                raw_insider = {}
 
         metrics = raw_m.get("metric", {}) if raw_m else {}
         profile = raw_p if raw_p else {}
@@ -696,6 +775,55 @@ def _fetch_ticker_fundamentals(ticker: str) -> str:
                     for e in recent
                 )
                 lines.append(f"  Annual {label} (recent→oldest): {vals}")
+
+        # Insider transactions (Form 4 filings from Finnhub)
+        insider_txns = raw_insider.get("data", []) if raw_insider else []
+        if insider_txns:
+            lines.append("")
+            lines.append(f"### form4_{ticker}_insider_transactions")
+            lines.append(f"Form 4 insider transactions (last 90 days):")
+            # Sort by date descending, take last 20
+            sorted_txns = sorted(insider_txns, key=lambda x: x.get("transactionDate", ""), reverse=True)[:20]
+            buys = []
+            sells = []
+            for txn in sorted_txns:
+                name = txn.get("name", "Unknown")
+                change = txn.get("change", 0)
+                price = txn.get("transactionPrice", 0)
+                date = txn.get("transactionDate", "N/A")
+                code = txn.get("transactionCode", "")
+                shares = abs(change) if change else 0
+                value = shares * price if price else 0
+
+                # P = open-market purchase, S = open-market sale
+                # M = options exercise, F = tax withholding
+                if code == "P":
+                    buys.append(txn)
+                    lines.append(f"  BUY: {name} purchased {shares:,.0f} shares @ ${price:.2f} "
+                                 f"(${value:,.0f}) on {date}")
+                elif code == "S":
+                    sells.append(txn)
+                    lines.append(f"  SELL: {name} sold {shares:,.0f} shares @ ${price:.2f} "
+                                 f"(${value:,.0f}) on {date}")
+                elif code == "M":
+                    lines.append(f"  EXERCISE: {name} exercised options for {shares:,.0f} shares on {date}")
+                elif code == "F":
+                    lines.append(f"  TAX_WITHHOLD: {name} surrendered {shares:,.0f} shares for tax on {date}")
+                elif code:
+                    lines.append(f"  {code}: {name} — {shares:,.0f} shares @ ${price:.2f} on {date}")
+
+            lines.append(f"  Summary: {len(buys)} open-market buys, {len(sells)} open-market sells "
+                         f"out of {len(sorted_txns)} total transactions")
+            total_buy_val = sum(abs(t.get("change", 0)) * (t.get("transactionPrice", 0) or 0) for t in buys)
+            total_sell_val = sum(abs(t.get("change", 0)) * (t.get("transactionPrice", 0) or 0) for t in sells)
+            if total_buy_val > 0:
+                lines.append(f"  Total open-market buy value: ${total_buy_val:,.0f}")
+            if total_sell_val > 0:
+                lines.append(f"  Total open-market sell value: ${total_sell_val:,.0f}")
+        else:
+            lines.append("")
+            lines.append(f"### insider_{ticker}_no_data")
+            lines.append(f"No insider transaction data available for {ticker}.")
 
         return "\n".join(lines)
 
@@ -923,14 +1051,44 @@ def _run_single_agent(persona: str, ticker: str, price: float, news: list[dict],
         f"  - evidence_cited: list of specific data points with numbers from the evidence above. Most recent quarter first. Include at least 3 items.\n"
         f"\nIMPORTANT RULES:\n"
         f"  - If your persona's key data source is MISSING (e.g., no FINRA short interest, no Form 4 filings), "
-        f"set confidence below 0.30 and keep p_up/p_down close to 0.33 (neutral). "
-        f"Do NOT produce extreme probabilities from insufficient data.\n"
+        f"set confidence below 0.20 and keep p_up/p_down at exactly 0.33 (neutral). "
+        f"Do NOT produce directional probabilities from insufficient data.\n"
         f"  - Base probabilities ONLY on the evidence provided. Do not speculate beyond the data.\n"
-        f"  - Be consistent: the same evidence should produce the same probabilities.\n"
+        f"  - DETERMINISM: Given the same evidence, you must produce the same probabilities. "
+        f"Round probabilities to the nearest 0.05 (e.g., 0.35, 0.40, 0.45, not 0.37 or 0.42). "
+        f"This ensures consistency across repeated analyses.\n"
         f"Probabilities must sum to 1.0."
         f"{evidence_section}"
         f"{news_text}"
     )
+
+    # Evidence-presence check: agents that depend on a specific data source
+    # should return neutral when that data is absent, rather than asking the
+    # LLM to guess — guessing creates run-to-run variance from hallucinated signals.
+    _DATA_DEPENDENT_AGENTS: dict[str, list[str]] = {
+        "insider_activity": ["form4_", "insider_"],
+        "short_interest": ["finra_", "short_interest_"],
+    }
+    # Soft-gate: macro_regime without dedicated macro data should cap confidence
+    # (the prompt now handles this via CRITICAL DETERMINISM RULE — EVIDENCE ANCHORING)
+    required_markers = _DATA_DEPENDENT_AGENTS.get(persona, [])
+    if required_markers:
+        fund_lower = fundamentals.lower() if fundamentals else ""
+        has_data = bool(fund_lower) and any(marker in fund_lower for marker in required_markers)
+        if not has_data:
+            _log.info("[%s] %s: key data missing (need %s) — returning neutral",
+                      ticker, persona, required_markers)
+            return {
+                "persona": persona,
+                "p_up": 0.33, "p_flat": 0.34, "p_down": 0.33,
+                "analysis": f"No {persona.replace('_', ' ')} data available for {ticker}. "
+                            f"Required evidence markers ({', '.join(required_markers)}) not found in evidence.",
+                "key_signal": "INSUFFICIENT_DATA",
+                "confidence": 0.0,
+                "evidence_cited": [],
+                "error": None,
+                "attempt_count": 0,
+            }
 
     # Retry logic: attempt up to 2 times before falling back to uninformed defaults.
     # Second attempt uses slightly higher temperature to avoid repeating the same
@@ -950,6 +1108,25 @@ def _run_single_agent(persona: str, ticker: str, price: float, news: list[dict],
 
             p_up = float(data.get("p_up", 0.33))
             p_down = float(data.get("p_down", 0.33))
+            confidence = float(data.get("confidence", 0.5))
+
+            # Post-hoc confidence clamping: only neutralize truly data-starved
+            # agents (conf < 0.25). Agents at 0.25+ have meaningful analysis —
+            # their influence is already scaled by confidence-weighted averaging
+            # in _arbitrate. Previous threshold of 0.50 combined with double-
+            # neutralization in _arbitrate suppressed legitimate signals.
+            _CLAMP_THRESHOLD = 0.25
+            if confidence < _CLAMP_THRESHOLD:
+                blend = confidence / _CLAMP_THRESHOLD  # 0.0 → 0.0, 0.25 → 1.0
+                p_up = 0.33 + (p_up - 0.33) * blend
+                p_down = 0.33 + (p_down - 0.33) * blend
+                _log.info("[%s] %s: confidence=%.2f < %.2f, clamped p_up=%.2f p_down=%.2f",
+                          ticker, persona, confidence, _CLAMP_THRESHOLD, p_up, p_down)
+
+            # Snap to 0.05 grid for determinism — reduces variance from
+            # LLM outputting 0.42 vs 0.43 on identical evidence.
+            p_up = round(p_up * 20) / 20
+            p_down = round(p_down * 20) / 20
             p_flat = max(0.0, 1.0 - p_up - p_down)
 
             return {
@@ -959,7 +1136,7 @@ def _run_single_agent(persona: str, ticker: str, price: float, news: list[dict],
                 "p_down": min(1.0, max(0.0, p_down)),
                 "analysis": str(data.get("analysis", ""))[:1000],
                 "key_signal": str(data.get("key_signal", ""))[:200],
-                "confidence": float(data.get("confidence", 0.5)),
+                "confidence": confidence,
                 "evidence_cited": data.get("evidence_cited", []),
                 "error": None,
                 "attempt_count": _attempt + 1,
@@ -1091,19 +1268,11 @@ def _arbitrate(agent_results: list[dict]) -> dict:
         return {"p_up": 0.33, "p_down": 0.33, "p_flat": 0.34, "direction": 0.0,
                 "confidence": 0.0, "agents_used": 0, "veto_triggered": False, "veto_personas": []}
 
-    # Low-confidence neutralization: agents with confidence < 0.30 are operating on
-    # insufficient data. Blend their p_up/p_down toward neutral (0.33) proportionally
-    # to how low their confidence is. This prevents an uninformed agent from producing
-    # extreme signals (e.g. short_interest with no FINRA data outputting p_down=0.75)
-    # which can trigger veto thresholds and cause massive run-to-run variance.
-    _NEUTRAL_CONF_THRESHOLD = 0.30
-    for r in valid:
-        conf = r.get("confidence", 0.5)
-        if conf < _NEUTRAL_CONF_THRESHOLD:
-            blend = conf / _NEUTRAL_CONF_THRESHOLD  # 0.0 at conf=0, 1.0 at threshold
-            r["p_up"] = r["p_up"] * blend + 0.33 * (1.0 - blend)
-            r["p_down"] = r["p_down"] * blend + 0.33 * (1.0 - blend)
-            r["p_flat"] = max(0.0, 1.0 - r["p_up"] - r["p_down"])
+    # NOTE: Low-confidence neutralization is already applied in the agent runner
+    # (_run_single_agent, _CLAMP_THRESHOLD=0.25). Do NOT re-neutralize here — that
+    # caused double-suppression where a conf=0.15 agent retained only 15% of its
+    # original signal (0.30 * 0.50). The confidence-weighted averaging below is
+    # sufficient to limit low-confidence agents' influence on the combined result.
 
     # Confidence-weighted averaging: agents with INSUFFICIENT_DATA (low confidence)
     # contribute less than agents with genuine analysis. Floor at 0.10 so no agent
@@ -1160,11 +1329,229 @@ def _arbitrate(agent_results: list[dict]) -> dict:
 # --- Conviction + Verdict: delegated to pmacs.engines.conviction -------------
 
 
+# --- Industry KPI extraction (programmatic, no LLM dependency) ---------------
+
+def _extract_industry_kpis(ticker: str, fundamentals: str, agent_results: list[dict]) -> dict:
+    """Extract sector-specific KPIs from fundamentals text and agent analysis.
+
+    Parses structured evidence text and agent outputs using regex to find
+    industry metrics like NRR, ARR, active customers, hyperscaler commitments, etc.
+    Returns a dict of {kpi_key: formatted_string_value} for memo.html rendering.
+
+    Patterns are calibrated against real agent output text (e.g. "100M+ customers",
+    "$46.4B in compute capacity", "cost-to-serve ~$0.80").
+    """
+    import re
+
+    kpis: dict[str, str] = {}
+    # Scan evidence text (structured data sources) separately from agent narrative.
+    # KPIs from evidence are authoritative; agent-derived ones are tagged as estimates.
+    evidence_text = fundamentals or ""
+    agent_text = ""
+    for r in agent_results:
+        agent_text += "\n" + (r.get("analysis") or "")
+        agent_text += "\n" + (r.get("key_signal") or "")
+    all_text = evidence_text + "\n" + agent_text
+
+    # --- Dollar amount helper: matches $46.4B, 46.4B, $1.2T, $180M ---
+    # Requires digit start to avoid false positives like ", b" matching [\d,.]+[B]
+    _AMT = r'\$?(\d[\d,.]*\s*[BMTK](?:illion|n)?)'
+
+    # === SaaS / Cloud ===
+    # Preposition helper: matches "of", "is", "at", ":", or whitespace before values
+    _OF = r'(?:\s+(?:of|is|at|grew\s+to)\s+|[:\s]+)'
+
+    m = re.search(r'(?:NRR|net\s+revenue\s+retention)' + _OF + r'(\d{2,3}[.\d]*%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["nrr"] = m.group(1)
+
+    m = re.search(r'(?:ARR|annual\s+recurring\s+revenue)' + _OF + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["arr"] = "$" + m.group(1).strip()
+
+    m = re.search(r'(?:GRR|gross\s+(?:revenue\s+)?retention)' + _OF + r'(\d{2,3}%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["grr"] = m.group(1)
+
+    m = re.search(r'(?:RPO|remaining\s+performance\s+obligations?)' + _OF + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["rpo"] = "$" + m.group(1).strip()
+
+    # Customer count — handles "100M+ customers", "12,400 enterprise customers", "85M customers"
+    m = re.search(r'([\d,.]+\s*[KMBkmb]?\+?)\s+(?:active\s+)?(?:enterprise\s+)?(?:customers?|users?|logos?)', all_text, re.IGNORECASE)
+    if m:
+        val = m.group(1).strip()
+        # Filter out small numbers (< 100) that are likely false positives
+        raw_num = re.sub(r'[,KMBkmb+\s]', '', val)
+        try:
+            if float(raw_num) >= 100 or any(c in val.upper() for c in ('K', 'M', 'B')):
+                kpis["customer_count"] = val
+        except ValueError:
+            pass
+
+    # Logo churn
+    m = re.search(r'(?:logo\s+churn|customer\s+churn)[:\s]*([\d.]+%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["logo_churn"] = m.group(1)
+
+    # === FinTech / Banking ===
+    # Active customers — "105M active customers", "85 million active users"
+    m = re.search(r'([\d,.]+\s*[MBmb](?:illion)?\+?)\s+active\s+(?:customers?|users?)', all_text, re.IGNORECASE)
+    if m:
+        kpis["active_customers"] = m.group(1).strip()
+
+    # TPV
+    m = re.search(r'(?:TPV|total\s+payment\s+volume)[:\s]*' + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["tpv"] = "$" + m.group(1).strip()
+
+    # ARPAC — "ARPAC of $12.40", "ARPAC grew to $12.40"
+    m = re.search(r'ARPAC\s+(?:of\s+|grew\s+to\s+|is\s+|at\s+)?\$?([\d,.]+)', all_text, re.IGNORECASE)
+    if m:
+        kpis["arpac"] = "$" + m.group(1).strip()
+
+    # Take rate
+    m = re.search(r'take\s+rate\s+(?:of\s+|is\s+|at\s+)?([\d.]+%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["take_rate"] = m.group(1)
+
+    # NPL rate
+    m = re.search(r'(?:NPL|non[- ]performing\s+loan)\s*(?:rate)?\s*(?:of\s+|is\s+|at\s+)?([\d.]+%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["npl_rate"] = m.group(1)
+
+    # Cost-to-serve (FinTech specific) — "cost-to-serve ~$0.80"
+    m = re.search(r'cost[- ]to[- ]serve\s*(?:~|of\s+|is\s+)?\$?([\d,.]+)', all_text, re.IGNORECASE)
+    if m:
+        kpis["cost_to_serve"] = "$" + m.group(1).strip()
+
+    # === AdTech / MarTech ===
+    # ARPU — "ARPU of $42", "ARPU $42"
+    m = re.search(r'ARPU\s+(?:of\s+|is\s+|at\s+)?\$?([\d,.]+)', all_text, re.IGNORECASE)
+    if m:
+        kpis["arpu"] = "$" + m.group(1).strip()
+
+    # Contribution ex-TAC — "contribution ex-TAC margin at 35%", "contribution ex-TAC of $200M"
+    m = re.search(r'contribution\s+ex[- ]TAC\s+(?:margin\s+)?(?:of\s+|at\s+|is\s+)?\$?([\d,.]+\s*[BMK%]?)', all_text, re.IGNORECASE)
+    if m:
+        kpis["contribution_ex_tac"] = m.group(1).strip()
+
+    # Platform spend
+    m = re.search(r'platform\s+spend\s+(?:of\s+|reached\s+|is\s+|at\s+)?' + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["platform_spend"] = "$" + m.group(1).strip()
+
+    # === AI Infra ===
+    # Contracted/compute capacity — "2.1 GW", "compute capacity", "contracted capacity of 2.1 GW"
+    m = re.search(r'(?:contracted|compute|power)\s+capacity\s*(?:of\s+|is\s+|at\s+)?([\d,.]+\s*(?:GW|MW))', all_text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'([\d,.]+\s*(?:GW|MW))\s+(?:of\s+)?(?:contracted|compute|power)\s+capacity', all_text, re.IGNORECASE)
+    if m:
+        kpis["contracted_capacity"] = m.group(1).strip()
+
+    # Hyperscaler commitments — "$46.4B in compute capacity", "hyperscaler deal... $46.4B"
+    # Pattern 1: "hyperscaler deal/commitment... valued at $X" or "hyperscaler... $X"
+    m = re.search(r'hyperscal\w+\s+(?:deal|commitment|contract)\w*[^.]{0,60}?' + _AMT, all_text, re.IGNORECASE)
+    if not m:
+        # Pattern 2: "$46.4B ... hyperscaler" or "$46.4B for compute"
+        m = re.search(_AMT + r'\s+(?:in\s+|for\s+)?(?:hyperscal|compute\s+capacity)', all_text, re.IGNORECASE)
+    if not m:
+        # Pattern 3: "committed $46.4B"
+        m = re.search(r'committed\s+' + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["hyperscaler_commitments"] = "$" + m.group(1).strip()
+
+    # GPU utilization
+    m = re.search(r'GPU\s+utilization\s*(?:of\s+|at\s+|is\s+)?([\d.]+%)', all_text, re.IGNORECASE)
+    if m:
+        kpis["gpu_utilization"] = m.group(1)
+
+    # === E-Commerce ===
+    m = re.search(r'(?:GMV|gross\s+merchandise\s+volume)\s*(?:of\s+|is\s+|at\s+|reached\s+)?' + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["gmv"] = "$" + m.group(1).strip()
+
+    # === Hardware / Sensors ===
+    m = re.search(r'(?:ASP|average\s+selling\s+price)\s*(?:of\s+|is\s+|at\s+)?\$?([\d,.]+)', all_text, re.IGNORECASE)
+    if m:
+        kpis["asp"] = "$" + m.group(1).strip()
+
+    m = re.search(r'(\d+)\s+design\s+wins?', all_text, re.IGNORECASE)
+    if m:
+        kpis["design_wins"] = m.group(1)
+
+    m = re.search(r'([\d,.]+\s*[KMk]?)\s+units?\s+shipped', all_text, re.IGNORECASE)
+    if m:
+        kpis["units_shipped"] = m.group(1).strip()
+
+    m = re.search(r'(?:backlog|order\s+book)\s*(?:of\s+|is\s+|at\s+)?' + _AMT, all_text, re.IGNORECASE)
+    if m:
+        kpis["backlog"] = "$" + m.group(1).strip()
+
+    # === Healthcare ===
+    m = re.search(r'([\d,.]+\s*[KMk]?)\s+patients?\s+enrolled', all_text, re.IGNORECASE)
+    if m:
+        kpis["patients_enrolled"] = m.group(1).strip()
+
+    # === Structured evidence extraction ===
+    # Parse tagged evidence lines (e.g. "short_pct_float: 13.71") that regex
+    # patterns miss because they look for natural language, not key:value pairs.
+    # Short interest (available from Yahoo for all tickers)
+    if not kpis.get("short_pct_float"):
+        m = re.search(r'short_pct_float["\s:]+(\d+\.?\d*)', all_text)
+        if m:
+            kpis["short_pct_float"] = m.group(1) + "%"
+    if not kpis.get("short_ratio"):
+        m = re.search(r'short_ratio["\s:]+(\d+\.?\d*)', all_text)
+        if m:
+            kpis["short_ratio"] = m.group(1) + " days"
+    # Institutional ownership
+    if not kpis.get("institutional_ownership"):
+        m = re.search(r'institutional_ownership_pct["\s:]+(\d+\.?\d*)', all_text)
+        if m:
+            kpis["institutional_ownership"] = m.group(1) + "%"
+    # Enterprise customers / advertisers (AdTech/MarTech)
+    if not kpis.get("customer_count"):
+        m = re.search(r'~?(\d{2,4}\+?)\s+(?:enterprise\s+)?(?:customers?|advertisers?|brands?)', all_text, re.IGNORECASE)
+        if m:
+            kpis["customer_count"] = m.group(1)
+    # Identifiable profiles (AdTech data moat metric)
+    m = re.search(r'([\d,.]+\s*[BMT]\+?)\s+(?:identifiable\s+)?profiles?', all_text, re.IGNORECASE)
+    if m:
+        kpis["data_profiles"] = m.group(1).strip()
+    # Signals processed per day (AdTech/data platform)
+    m = re.search(r'([\d,.]+\s*[BTM]\+?)\s+signals?\s+per\s+day', all_text, re.IGNORECASE)
+    if m:
+        kpis["daily_signals"] = m.group(1).strip()
+
+    # Deduplicate: if customer_count and active_customers have same value, keep active_customers
+    if kpis.get("customer_count") and kpis.get("active_customers"):
+        if kpis["customer_count"].rstrip("+") in kpis["active_customers"]:
+            del kpis["customer_count"]
+
+    # Clean trailing punctuation from values (e.g. "$42." → "$42")
+    for k in kpis:
+        kpis[k] = kpis[k].rstrip(".,;:")
+
+    # Source-tag KPIs: check if each value appears in structured evidence vs only
+    # in agent narrative. Evidence-derived values are authoritative; agent-derived
+    # values are estimates that should be displayed with lower confidence.
+    if evidence_text:
+        ev_lower = evidence_text.lower()
+        for k, v in list(kpis.items()):
+            # Strip $ and % for matching
+            match_val = v.lstrip("$").rstrip("%").strip().lower()
+            if match_val and match_val not in ev_lower:
+                kpis[k] = v + " (est.)"
+
+    return kpis
+
+
 # --- Memo generation ---------------------------------------------------------
 
 def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
                         crucible: dict, verdict: str, conviction: float,
-                        arb: dict) -> str:
+                        arb: dict, fundamentals: str = "") -> str:
     """Generate structured investment memo with price target and deep business analysis.
 
     Returns a JSON string stored in thesis_summary containing:
@@ -1185,6 +1572,47 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
         "true value, growth trajectory, and risks. Be specific with numbers and estimates."
     )
 
+    # Inject episodic context into memo_writer system prompt (same as agents)
+    if system_prompt and "{episodic_context}" in system_prompt:
+        episodic_text = ""
+        try:
+            from pmacs.web.config import get_config
+            from pmacs.storage.sqlite import get_connection
+            cfg = get_config()
+            edb = get_connection(cfg.sqlite_path)
+            try:
+                prior = edb.execute(
+                    "SELECT verdict, conviction_score, memo_json, decided_at "
+                    "FROM memos WHERE ticker = ? ORDER BY id DESC LIMIT 1",
+                    (ticker,),
+                ).fetchone()
+                if prior:
+                    import json as _j
+                    prior_memo = _j.loads(prior[2] or "{}")
+                    prior_fv = prior_memo.get("fair_value")
+                    prior_range = prior_memo.get("valuation_range", {})
+                    episodic_text = (
+                        f"PRIOR ANALYSIS ({prior[3]}):\n"
+                        f"  Verdict: {prior[0]}, Conviction: {prior[1]:.4f}\n"
+                        f"  Fair Value: ${prior_fv}" if prior_fv else ""
+                    )
+                    if prior_fv:
+                        episodic_text += f"\n  Valuation Range: low=${prior_range.get('low')}, base=${prior_range.get('base')}, high=${prior_range.get('high')}"
+                    episodic_text += (
+                        f"\n  Thesis: {prior_memo.get('thesis', '')[:300]}\n"
+                        f"  ANCHORING: Your fair_value should be within 20% of the prior unless "
+                        f"material new evidence justifies a larger revision. State what changed."
+                    )
+            finally:
+                edb.close()
+        except Exception:
+            episodic_text = ""
+        system_prompt = system_prompt.replace("{episodic_context}", episodic_text)
+
+    # Also replace {evidence} placeholder in system prompt
+    if system_prompt and "{evidence}" in system_prompt:
+        system_prompt = system_prompt.replace("{evidence}", "(Evidence provided in user message below)")
+
     agent_summary = "\n".join(
         f"## {r['persona']}\n"
         f"Signal: {r['key_signal']}\n"
@@ -1193,11 +1621,16 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
         for r in agent_results
     )
 
+    fundamentals_block = ""
+    if fundamentals:
+        fundamentals_block = f"=== FINANCIAL DATA (from data sources — use these numbers, do NOT hallucinate) ===\n{fundamentals}\n\n"
+
     prompt = (
         f"You are writing a deep investment research memo for {ticker}, currently trading at ${price:.2f}.\n\n"
         f"System verdict: {verdict} | Conviction: {conviction:.0%}\n"
         f"Arbitrated probabilities: P(up)={arb['p_up']:.0%} P(down)={arb['p_down']:.0%}\n"
         f"EV multiple: {arb.get('ev_multiple', 'N/A')} | Crucible severity: {crucible['severity']:.0%}\n\n"
+        f"{fundamentals_block}"
         f"=== AGENT ANALYSES ===\n{agent_summary}\n\n"
         f"=== CRUCIBLE ADVERSARIAL REVIEW (severity={crucible['severity']:.0%}) ===\n"
         f"{crucible.get('summary', '')}\n"
@@ -1210,8 +1643,16 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
         f"Low = bear case DCF/comps, base = most likely, high = bull case.\n\n"
         f"3. valuation_methodology (string): 2-3 sentences explaining how you arrived at the fair value "
         f"(e.g., DCF with X% WACC, comparable company analysis using Y multiples, etc.)\n\n"
-        f"4. business_model (string): 4-6 sentences explaining what the company does, how it makes money, "
-        f"its revenue streams, customer segments, and unit economics.\n\n"
+        f"4. business_model (string): 1-2 sentences on how the company makes money (brief summary).\n\n"
+        f"4b. revenue_model (string): 2-4 sentences explaining revenue generation in detail — "
+        f"name the products/services, revenue splits (subscription vs transactional vs licensing), "
+        f"customer segments (enterprise vs SMB vs consumer), geographic mix, and unit economics "
+        f"(ARPU, take rate, ASP). Be specific with percentages where available.\n\n"
+        f"4c. key_acquisitions (string): 1-3 sentences on significant acquisitions, mergers, or "
+        f"strategic partnerships that shaped the company. Include deal size if known. "
+        f"Omit if no notable acquisitions.\n\n"
+        f"4d. company_vision (string): 1-3 sentences on management's stated strategy and direction. "
+        f"What are they building toward? Source from earnings calls or investor presentations.\n\n"
         f"5. financial_snapshot (object): Key financial metrics with fields: "
         f"revenue (string, e.g. '$12.5B'), revenue_growth (string, e.g. '+25% YoY'), "
         f"gross_margin (string), operating_margin (string), net_margin (string), "
@@ -1231,7 +1672,9 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
         f"11. key_evidence (array of 3-5 strings): Strongest data points supporting the thesis.\n\n"
         f"12. key_risks (array of 2-4 strings): Biggest risks to the thesis.\n\n"
         f"13. bear_case_response (string): 2-3 sentences addressing the strongest bear case.\n\n"
-        f"14. position_sizing_note (string): Suggested sizing rationale given conviction and risk.\n\n"
+        f"14. position_sizing_note (string): Simple plain-English recommendation. "
+        f"Example: 'Full-size position (20%) — high conviction supports max allocation.' "
+        f"Do NOT dump raw numbers or formulas. Just the decision and brief rationale.\n\n"
         f"15. verdict_line (string): One-line verdict summary, max 150 chars.\n\n"
         f"CRITICAL: The fair_value must be a realistic per-share price estimate based on your analysis. "
         f"If the stock is at ${price:.2f} and you think it's undervalued, fair_value should be higher. "
@@ -1245,17 +1688,79 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
     )
 
     try:
-        raw = _call_openrouter(prompt, max_tokens=10000, temperature=0.3,
-                               system_prompt=system_prompt)
-        data = _parse_json_safe(raw)
+        from pmacs.agents.sanity.memo_scorer import score_memo, format_retry_feedback
+
+        MAX_MEMO_RETRIES = 3
+        MEMO_SCORE_THRESHOLD = 50
+        best_data = None
+        best_score = None
+        retry_feedback = ""
+
+        for memo_attempt in range(MAX_MEMO_RETRIES):
+            attempt_prompt = prompt
+            if retry_feedback:
+                attempt_prompt = prompt + "\n\n" + retry_feedback
+
+            temp = 0.3 + (memo_attempt * 0.05)
+            raw = _call_openrouter(attempt_prompt, max_tokens=10000, temperature=temp,
+                                   system_prompt=system_prompt)
+            data = _parse_json_safe(raw)
+            if not data:
+                _log.warning("Memo JSON parse failed for %s attempt %d, retrying", ticker, memo_attempt + 1)
+                retry_feedback = (
+                    "## MEMO QUALITY FEEDBACK\n"
+                    "Previous attempt failed JSON parsing. Respond with ONLY a valid JSON object."
+                )
+                continue
+
+            # Build evidence-like data from fundamentals text for cross-validation
+            _evidence_for_scoring = None
+            if fundamentals:
+                from pmacs.agents.sanity.memo_scorer import parse_fundamentals_text
+                _evidence_for_scoring = parse_fundamentals_text(fundamentals)
+
+            # Score this memo attempt
+            memo_score = score_memo(
+                memo=data,
+                evidence=_evidence_for_scoring,
+                agent_results=agent_results,
+                crucible_attacks=crucible.get("attacks", []),
+                conviction=conviction,
+                verdict=verdict,
+            )
+            _log.info(
+                "Memo score for %s attempt %d: %.0f/100 (grade %s)",
+                ticker, memo_attempt + 1, memo_score.total, memo_score.grade,
+            )
+
+            # Keep the best attempt
+            if best_score is None or memo_score.total > best_score.total:
+                best_data = data
+                best_score = memo_score
+
+            # Good enough — stop retrying
+            if memo_score.total >= MEMO_SCORE_THRESHOLD and not memo_score.critical_issues:
+                break
+
+            # Build feedback for next attempt
+            retry_feedback = format_retry_feedback(memo_score)
+            _log.info(
+                "Memo for %s scored %.0f/100 (below %d), retrying with feedback",
+                ticker, memo_score.total, MEMO_SCORE_THRESHOLD,
+            )
+
+        # Use best attempt (even if below threshold)
+        data = best_data
         if not data:
-            _log.warning("Memo JSON parse failed for %s, using fallback", ticker)
+            _log.warning("All memo attempts failed for %s, using fallback", ticker)
             return json.dumps({
                 "verdict_line": f"{verdict} {ticker} @ ${price:.2f}",
                 "fair_value": None,
                 "valuation_range": {},
                 "thesis": f"{verdict} at conviction {conviction:.0%}",
                 "raw_text": f"{verdict} {ticker} @ ${price:.2f} | Conviction: {conviction:.0%}",
+                "memo_score": 0,
+                "memo_grade": "F",
             })
 
         # Build structured memo data — always use engine verdict, not LLM's
@@ -1273,11 +1778,26 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
             verdict_line = f"{verdict} {ticker} @ ${price:.2f}"
         memo_data = {
             "verdict_line": verdict_line,
+            "current_price": price,
             "fair_value": data.get("fair_value"),
             "valuation_range": data.get("valuation_range", {}),
             "valuation_methodology": data.get("valuation_methodology", ""),
             "business_model": data.get("business_model", ""),
+            "revenue_model": data.get("revenue_model", ""),
+            "key_acquisitions": data.get("key_acquisitions", ""),
+            "company_vision": data.get("company_vision", ""),
             "financial_snapshot": data.get("financial_snapshot", {}),
+            "industry_kpis": {
+                k: v for k, v in {
+                    **_extract_industry_kpis(ticker, fundamentals, agent_results),
+                    **(data.get("industry_kpis") or {}),
+                }.items()
+                if v and isinstance(v, str)
+                and "not available" not in v.lower()
+                and "n/a" not in v.lower()
+                and "unavailable" not in v.lower()
+                and "unknown" not in v.lower()
+            },
             "growth_drivers": data.get("growth_drivers", []),
             "competitive_position": data.get("competitive_position", {}),
             "risk_factors": data.get("risk_factors", []),
@@ -1289,13 +1809,27 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
             "position_sizing_note": data.get("position_sizing_note", ""),
             "agent_signals": [
                 {"persona": r["persona"], "signal": r["key_signal"],
-                 "p_up": r["p_up"], "p_down": r["p_down"], "confidence": r["confidence"]}
+                 "direction": "bullish" if r["p_up"] > r["p_down"] + 0.05
+                              else ("bearish" if r["p_down"] > r["p_up"] + 0.05 else "neutral"),
+                 "p_up": r["p_up"], "p_flat": r.get("p_flat", 0.34), "p_down": r["p_down"],
+                 "confidence": r["confidence"],
+                 "analysis": (r.get("analysis") or "")[:500],
+                 "evidence_cited": (r.get("evidence_cited") or [])[:5]}
                 for r in agent_results if not r.get("error")
             ],
             "crucible_attacks": crucible.get("attacks", [])[:5],
             "crucible_severity": crucible.get("severity", 0),
             "crucible_thesis_survives": crucible.get("thesis_survives", True),
             "crucible_summary": crucible.get("summary", ""),
+            # Engine-authoritative fields (not LLM-generated)
+            "p_up": round(arb.get("p_up", 0.0), 4),
+            "p_flat": round(1.0 - arb.get("p_up", 0.0) - arb.get("p_down", 0.0), 4),
+            "p_down": round(arb.get("p_down", 0.0), 4),
+            "conviction": round(conviction, 4),
+            "ev_multiple": round(arb.get("ev_multiple", 0.0), 4),
+            "direction": round(arb.get("direction", 0.0), 4),
+            "agents_used": arb.get("agents_used", 0),
+            "verdict": verdict,
         }
 
         # Build human-readable fallback text
@@ -1338,6 +1872,18 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
                 lines.append(f"  - {atk}")
 
         memo_data["raw_text"] = "\n".join(lines)
+
+        # Inject memo quality score
+        if best_score is not None:
+            memo_data["memo_score"] = round(best_score.total, 1)
+            memo_data["memo_grade"] = best_score.grade
+            memo_data["memo_score_dimensions"] = {
+                d.name: {"score": round(d.score, 1), "max": round(d.max_score, 1), "issues": d.issues[:3]}
+                for d in best_score.dimensions
+            }
+            if best_score.critical_issues:
+                memo_data["memo_critical_issues"] = best_score.critical_issues[:5]
+
         return json.dumps(memo_data)
 
     except Exception as exc:
@@ -1347,6 +1893,8 @@ def _generate_full_memo(ticker: str, price: float, agent_results: list[dict],
             "fair_value": None,
             "thesis": f"Memo generation failed: {exc}",
             "raw_text": f"{verdict} {ticker} @ ${price:.2f} | Conviction: {conviction:.0%}",
+            "memo_score": 0,
+            "memo_grade": "F",
         })
 
 
@@ -1365,11 +1913,35 @@ def _run_all_agents_sync(ticker: str, price: float, news: list[dict], fundamenta
 
     _log = logging.getLogger("pmacs.web.pipeline")
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+
+    # Detect local backends (Ollama, llama-server) which serialize requests —
+    # running 7 agents in parallel causes timeouts since each waits for others.
+    _workers = 7  # cloud backends: full parallelism
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        _reg = _j.load(open(_P(__file__).resolve().parents[3] / "config" / "model_registry.json"))
+        _active = _reg.get("active", "")
+        if _active in ("ollama", "llama_server"):
+            _workers = 1  # local: sequential to avoid timeout cascades
+            _log.info("Local backend '%s' detected — running agents sequentially", _active)
+    except Exception:
+        pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_workers) as pool:
         futures = {
             pool.submit(_run_single_agent, persona, ticker, price, news, fundamentals): persona
             for persona in _PERSONAS
         }
+        # Emit running events for all agents immediately
+        if cycle_id:
+            for persona in _PERSONAS:
+                _emit_event("agent", "agent.running", {
+                    "cycle_id": cycle_id,
+                    "persona": persona,
+                    "ticker": ticker,
+                    "status": "running",
+                })
         for future in concurrent.futures.as_completed(futures):
             persona = futures[future]
             try:
@@ -1420,6 +1992,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
     """
     import asyncio
     import logging
+    import socket
     import time
     from datetime import datetime, timezone
 
@@ -1430,6 +2003,11 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
     cfg = get_config()
     total = len(tickers)
     processed = 0
+
+    # Set global socket timeout so libraries without explicit timeouts
+    # (e.g. yfinance) can't hang indefinitely and block the entire cycle.
+    _prev_socket_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(12)
 
     try:
         # Phase 0: Fetch prices + news + fundamentals in parallel (all tickers)
@@ -1455,70 +2033,60 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                 return t, []
 
         async def _fetch_fundamentals_async(t: str) -> tuple[str, str]:
+            _DATA_FETCH_TIMEOUT = 45  # seconds — global cap on all data fetching
             try:
-                parts: list[str] = []
-                source_status: dict[str, bool] = {}
-
-                # 1. Full evidence router (EDGAR SEC XBRL + all 13 sources)
-                router_ev = await loop.run_in_executor(
-                    None, _fetch_evidence_router_data, t, cycle_id,
+                return await asyncio.wait_for(
+                    _fetch_fundamentals_inner(t), timeout=_DATA_FETCH_TIMEOUT
                 )
-                if router_ev:
-                    parts.append(router_ev)
-                    source_status["evidence_router"] = True
-                else:
-                    source_status["evidence_router"] = False
-
-                # 2. Basic Finnhub fundamentals (fast, supplement)
-                finnhub_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
-                if finnhub_ev:
-                    parts.append(finnhub_ev)
-                    source_status["finnhub"] = True
-                else:
-                    source_status["finnhub"] = False
-
-                # 3. Yahoo enrichment (price targets + technicals)
-                enrichment = await loop.run_in_executor(None, _fetch_enrichment_data, t)
-                if enrichment:
-                    parts.append(enrichment)
-                    source_status["yahoo_enrichment"] = True
-                else:
-                    source_status["yahoo_enrichment"] = False
-
-                # Retry any failed sources once (reduces partial-evidence variance)
-                failed = [k for k, v in source_status.items() if not v]
-                if failed:
-                    _log.warning("[%s] Evidence sources failed on first attempt: %s — retrying", t, failed)
-                    for src in failed:
-                        try:
-                            if src == "evidence_router":
-                                retry_ev = await loop.run_in_executor(None, _fetch_evidence_router_data, t, cycle_id)
-                                if retry_ev:
-                                    parts.append(retry_ev)
-                                    _log.info("[%s] evidence_router succeeded on retry", t)
-                            elif src == "finnhub":
-                                retry_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
-                                if retry_ev:
-                                    parts.append(retry_ev)
-                                    _log.info("[%s] finnhub succeeded on retry", t)
-                            elif src == "yahoo_enrichment":
-                                retry_ev = await loop.run_in_executor(None, _fetch_enrichment_data, t)
-                                if retry_ev:
-                                    parts.append(retry_ev)
-                                    _log.info("[%s] yahoo_enrichment succeeded on retry", t)
-                        except Exception as retry_exc:
-                            _log.warning("[%s] %s retry also failed: %s", t, src, retry_exc)
-
-                # Log evidence completeness for diagnostics
-                total_chars = sum(len(p) for p in parts)
-                _log.info("[%s] Evidence completeness: %d/%d sources, %d chars total",
-                          t, sum(1 for v in source_status.values() if v) + len([f for f in failed if f not in source_status]),
-                          len(source_status), total_chars)
-
-                return t, "\n".join(parts)
+            except asyncio.TimeoutError:
+                _log.error("[%s] Data fetch timed out after %ds — proceeding with cached/partial data", t, _DATA_FETCH_TIMEOUT)
+                return t, ""
             except Exception as exc:
                 _log.warning("Fundamentals fetch failed for %s: %s", t, exc)
                 return t, ""
+
+        async def _fetch_fundamentals_inner(t: str) -> tuple[str, str]:
+            parts: list[str] = []
+            source_status: dict[str, bool] = {}
+
+            # 1. Full evidence router (EDGAR SEC XBRL + all 13 sources)
+            router_ev = await loop.run_in_executor(
+                None, _fetch_evidence_router_data, t, cycle_id,
+            )
+            if router_ev:
+                parts.append(router_ev)
+                source_status["evidence_router"] = True
+            else:
+                source_status["evidence_router"] = False
+
+            # 2. Basic Finnhub fundamentals (fast, supplement)
+            finnhub_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
+            if finnhub_ev:
+                parts.append(finnhub_ev)
+                source_status["finnhub"] = True
+            else:
+                source_status["finnhub"] = False
+
+            # 3. Yahoo enrichment (price targets + technicals)
+            enrichment = await loop.run_in_executor(None, _fetch_enrichment_data, t)
+            if enrichment:
+                parts.append(enrichment)
+                source_status["yahoo_enrichment"] = True
+            else:
+                source_status["yahoo_enrichment"] = False
+
+            # Log failed sources (no retry — per-source timeouts prevent hangs)
+            failed = [k for k, v in source_status.items() if not v]
+            if failed:
+                _log.warning("[%s] Evidence sources failed: %s — proceeding with partial data", t, failed)
+
+            # Log evidence completeness for diagnostics
+            total_chars = sum(len(p) for p in parts)
+            _log.info("[%s] Evidence completeness: %d/%d sources, %d chars total",
+                      t, sum(1 for v in source_status.values() if v) + len([f for f in failed if f not in source_status]),
+                      len(source_status), total_chars)
+
+            return t, "\n".join(parts)
 
         # Check evidence cache — reuse if same ticker was fetched within TTL.
         # This eliminates the biggest source of run-to-run variance: partial
@@ -1544,7 +2112,9 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
             price_tasks = [_fetch_price_async(t) for t in uncached_tickers]
             news_tasks = [_fetch_news_async(t) for t in uncached_tickers]
             fund_tasks = [_fetch_fundamentals_async(t) for t in uncached_tickers]
+            _log.info("Phase 0: gathering price/news/fundamentals for %d tickers", n_uncached)
             all_results = await asyncio.gather(*price_tasks, *news_tasks, *fund_tasks)
+            _log.info("Phase 0: gather complete, %d results", len(all_results))
 
             for t, p in all_results[:n_uncached]:
                 if p:
@@ -1786,6 +2356,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                         None, _generate_full_memo,
                         ticker, price, agent_results, crucible,
                         verdict, conviction, arb,
+                        prefetched_fundamentals.get(ticker, ""),
                     )
                 else:
                     memo = f"ERROR {ticker} @ ${price:.2f} | Conviction: {conviction:.0%}"
@@ -1823,10 +2394,20 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                             pass
                     memo_db = get_connection(cfg.sqlite_path)
                     try:
+                        # Extract memo score from JSON if available
+                        _memo_score = None
+                        _memo_grade = None
+                        if memo and memo.startswith("{"):
+                            try:
+                                _mj = _json.loads(memo)
+                                _memo_score = _mj.get("memo_score")
+                                _memo_grade = _mj.get("memo_grade")
+                            except Exception:
+                                pass
                         memo_db.execute(
-                            "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, memo_json, raw_text, decided_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (cycle_id, ticker, verdict, conviction, memo, _raw_text, _decided_at),
+                            "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, memo_json, raw_text, memo_score, memo_grade, decided_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (cycle_id, ticker, verdict, conviction, memo, _raw_text, _memo_score, _memo_grade, _decided_at),
                         )
                         memo_db.commit()
                     finally:
@@ -2007,8 +2588,10 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
                     "reason": str(ticker_exc),
                 })
 
-        # Cycle closed
+        # Cycle closed — clear both ticker tracking vars so the Agents page
+        # doesn't show a stale "Current Ticker" on next page load.
         _current_ticker_processing = ""
+        _current_cycle_tickers = []
         _log.info("Cycle %s completed: %d/%d tickers processed", cycle_id[:12], processed, total)
         _emit_event("cycle", "cycle.closed", {
             "cycle_id": cycle_id,
@@ -2046,6 +2629,7 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
 
     except Exception as cycle_exc:
         _current_ticker_processing = ""
+        _current_cycle_tickers = []
         _log.error("Cycle %s fatal error: %s", cycle_id[:12], cycle_exc, exc_info=True)
         _emit_event("cycle", "cycle.closed", {
             "cycle_id": cycle_id,
@@ -2053,6 +2637,8 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
             "tickers_processed": processed,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
+    finally:
+        socket.setdefaulttimeout(_prev_socket_timeout)
 
 
 class CycleStartRequest(BaseModel):

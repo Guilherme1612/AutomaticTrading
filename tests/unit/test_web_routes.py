@@ -12,7 +12,7 @@ from pmacs.storage.sqlite import init_db
 from pmacs.storage.audit import AuditWriter
 from pmacs.data.universe import add_ticker, init_universe_table, UniverseEntry
 from pmacs.web.app import app
-from pmacs.web.config import DashboardConfig, configure
+from pmacs.web.config import DashboardConfig, configure, get_config
 
 
 @pytest.fixture(autouse=True)
@@ -71,8 +71,12 @@ def _setup(tmp_path):
         debug_log_path=debug_path,
         config_dir=config_dir,
     )
+    _original = get_config()
     configure(cfg)
     yield
+    # Restore the global config so this file's tmp paths don't leak into
+    # later tests (the tmp_path is deleted after the test).
+    configure(_original)
 
 
 class TestDashboardRoute:

@@ -78,9 +78,9 @@ class TestAgentsPage:
         response = client.get("/agents")
         assert "Queue" in response.text
 
-    def test_agents_has_sankey_placeholder(self, client):
+    def test_agents_has_signal_flow(self, client):
         response = client.get("/agents")
-        assert "Sankey" in response.text
+        assert "Signal Flow" in response.text
 
     def test_agents_has_sidebar(self, client):
         response = client.get("/agents")
@@ -108,11 +108,11 @@ class TestPipelinePage:
 
     def test_pipeline_has_filter_bar(self, client):
         response = client.get("/pipeline")
-        assert "Filter tickers" in response.text
+        assert "Filter..." in response.text
 
     def test_pipeline_has_queue_info(self, client):
         response = client.get("/pipeline")
-        assert "Queue:" in response.text
+        assert "Filtered" in response.text
 
 
 class TestUniversePage:
@@ -140,9 +140,12 @@ class TestUniversePage:
         assert "Portfolio" in response.text
         assert "Sectors" in response.text
 
-    def test_universe_empty_state(self, client):
+    def test_universe_renders_management_ui(self, client):
+        # Empty-state copy ("No tickers yet") is covered in test_universe_page.py
+        # with an isolated empty DB; here we just assert the page renders its
+        # ticker-management controls regardless of DB contents.
         response = client.get("/universe")
-        assert "No tickers in universe" in response.text
+        assert "Add Ticker" in response.text
 
 
 class TestCortexPage:
@@ -224,20 +227,16 @@ class TestSettingsPage:
 
     def test_settings_has_sections(self, client):
         response = client.get("/settings")
-        assert "General" in response.text
-        assert "Risk" in response.text
-        assert "Crucible" in response.text
-        assert "Mutation Engine" in response.text
-        assert "Inference" in response.text
-        assert "Operator" in response.text
+        assert "Appearance" in response.text
+        assert "AI Provider" in response.text
+        assert "Budget" in response.text
+        assert "Notifications" in response.text
+        assert "Reset Progress" in response.text
+        assert "Keyboard Shortcuts" in response.text
 
-    def test_settings_has_paper_capital(self, client):
+    def test_settings_has_budget_controls(self, client):
         response = client.get("/settings")
-        assert "$5,000" in response.text
-
-    def test_settings_has_catastrophe_stop(self, client):
-        response = client.get("/settings")
-        assert "15%" in response.text
+        assert 'id="cost-daily-cap-input"' in response.text
 
 
 class TestCommonElements:
@@ -275,5 +274,6 @@ class TestCommonElements:
         assert "htmx" in page_response.text.lower()
 
     def test_all_pages_have_fonts(self, page_response):
-        assert "Inter" in page_response.text
-        assert "JetBrains" in page_response.text
+        # Fonts (Inter + JetBrains Mono) are now self-hosted for local-only
+        # operation and loaded via a vendored stylesheet rather than inline.
+        assert "/static/vendor/fonts/fonts.css" in page_response.text

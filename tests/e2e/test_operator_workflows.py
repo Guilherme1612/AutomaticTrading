@@ -118,11 +118,6 @@ class TestWorkflow21_1_AddTicker:
                re.search(r'add.*ticker|ticker.*add', html), \
                "No 'Add Ticker' button or link found on /universe"
 
-    def test_totp_modal_exists(self, workflow_client):
-        response = workflow_client.get("/universe")
-        html = response.text.lower()
-        assert "totp" in html
-
 
 class TestWorkflow21_2_OverrideSkip:
     """21.2: "I want to override a SKIP" — Pipeline → "Run again now"."""

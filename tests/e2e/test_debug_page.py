@@ -22,6 +22,24 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def empty_client(tmp_path):
+    """Client backed by empty debug + audit logs so the empty-state UI
+    renders, independent of the developer's real logs. The debug page falls
+    back to audit entries when no live debug events exist, so both must be
+    empty for the 'Waiting for debug events' state to appear."""
+    log_file = tmp_path / "debug.jsonl"
+    log_file.write_text("")
+    audit_file = tmp_path / "audit.log"
+    audit_file.write_text("")
+    original = web_config.get_config()
+    web_config.configure(
+        web_config.DashboardConfig(debug_log_path=log_file, audit_path=audit_file)
+    )
+    yield TestClient(app)
+    web_config.configure(original)
+
+
 def _make_client_with_events(tmp_path):
     """Helper: create a client backed by a synthetic debug log.
 
@@ -116,20 +134,20 @@ class TestEventRows:
         resp = client.get("/debug")
         assert 'id="event-stream"' in resp.text
 
-    def test_empty_state(self, client):
+    def test_empty_state(self, empty_client):
         """When no events, shows waiting message."""
-        resp = client.get("/debug")
+        resp = empty_client.get("/debug")
         assert "Waiting for debug events" in resp.text
 
-    def test_sse_reference(self, client):
+    def test_sse_reference(self, empty_client):
         """Empty state shows SSE subscription reference."""
-        resp = client.get("/debug")
+        resp = empty_client.get("/debug")
         assert "pmacs-nervous" in resp.text
 
     def test_level_badge_templates_with_events(self, client_with_events):
         """Template has CSS classes for ERROR, WARN, INFO, DEBUG level badges."""
         resp = client_with_events.get("/debug")
-        assert "bg-red-100 text-red-700" in resp.text   # ERROR
+        assert "bg-negative-soft text-negative" in resp.text   # ERROR
 
 
 class TestExpandInline:
@@ -139,13 +157,13 @@ class TestExpandInline:
     we verify the empty state shows the SSE reference.
     """
 
-    def test_empty_state_shows_sse_reference(self, client):
+    def test_empty_state_shows_sse_reference(self, empty_client):
         """Empty state shows SSE subscription info."""
-        resp = client.get("/debug")
+        resp = empty_client.get("/debug")
         assert "pmacs-nervous" in resp.text
 
-    def test_empty_state_explanation(self, client):
-        resp = client.get("/debug")
+    def test_empty_state_explanation(self, empty_client):
+        resp = empty_client.get("/debug")
         assert "Events will stream from pmacs-nervous via SSE" in resp.text
 
 
@@ -165,7 +183,7 @@ class TestExpandInlineWithEvents:
 
     def test_level_badge_error(self, client_with_events):
         resp = client_with_events.get("/debug")
-        assert "bg-red-100 text-red-700" in resp.text
+        assert "bg-negative-soft text-negative" in resp.text
 
     def test_expand_toggle_function(self, client_with_events):
         """Rows call toggleEventDetail() on click."""

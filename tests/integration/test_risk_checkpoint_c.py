@@ -253,7 +253,7 @@ class TestMaxConcurrentABTests:
 class TestMutationsRequireTOTP:
     """No mutation is ever applied without operator TOTP (Architecture.md §10, Agents.md §17)."""
 
-    def test_nervous_apply_requires_totp_context(self, tmp_env) -> None:
+    def test_nervous_apply_requires_confirmation_context(self, tmp_env) -> None:
         """apply_candidate_to_registry is only callable from nervous (TOTP-gated)."""
         from pmacs.nervous.mutation import apply_candidate_to_registry
 

@@ -129,13 +129,13 @@ class TestAccessibilityStructural:
         css = css_path.read_text()
         assert "prefers-reduced-motion" in css, "Missing reduced-motion media query"
 
-    def test_viewport_guard_exists(self, dashboard_client):
-        """1024px minimum viewport guard must exist in base template."""
+    def test_responsive_layout_exists(self, dashboard_client):
+        """The redesign replaced the 1024px viewport guard with a responsive
+        layout (collapsible mobile sidebar + lg: breakpoints)."""
         response = dashboard_client.get("/")
         html = response.text.lower()
-        # Must have the viewport guard element with 1024px reference
-        assert "viewport-guard" in html or ("1024" in html and "wider" in html), \
-            "Viewport guard overlay not found in base template"
+        assert "mobile-sidebar-overlay" in html and "lg:" in html, \
+            "Responsive layout markers not found in base template"
 
     def test_color_contrast_tokens_defined(self):
         """CSS must define color tokens that meet WCAG AA contrast."""

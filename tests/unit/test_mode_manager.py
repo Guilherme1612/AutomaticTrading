@@ -9,7 +9,7 @@ import pytest
 from pmacs.engines.mode_manager import (
     can_transition,
     get_valid_transitions,
-    requires_totp,
+    requires_confirmation,
     transition_mode,
 )
 from pmacs.schemas.system import Mode
@@ -81,7 +81,7 @@ class TestTransitionMode:
         assert result.from_mode == Mode.INSTALLING
         assert result.to_mode == Mode.SHADOW
         assert result.reason == "Wizard complete"
-        assert result.operator_totp_verified is False
+        assert result.operator_confirmed is False
 
     def test_valid_paper_to_shadow_demotion(self) -> None:
         result = transition_mode(
@@ -93,15 +93,15 @@ class TestTransitionMode:
         with pytest.raises(ValueError, match="Invalid mode transition"):
             transition_mode(Mode.INSTALLING, Mode.LIVE_EARLY, reason="jump")
 
-    def test_live_early_requires_totp(self) -> None:
-        with pytest.raises(ValueError, match="TOTP verification"):
+    def test_live_early_requires_confirmation(self) -> None:
+        with pytest.raises(ValueError, match="operator confirmation"):
             transition_mode(
                 Mode.PAPER_VALIDATED, Mode.LIVE_EARLY, reason="promotion"
             )
 
-    def test_paper_validated_requires_totp(self) -> None:
+    def test_paper_validated_requires_confirmation(self) -> None:
         """Spec: PAPER → PAPER_VALIDATED requires TOTP."""
-        with pytest.raises(ValueError, match="TOTP verification"):
+        with pytest.raises(ValueError, match="operator confirmation"):
             transition_mode(
                 Mode.PAPER, Mode.PAPER_VALIDATED, reason="promotion"
             )
@@ -112,19 +112,19 @@ class TestTransitionMode:
             Mode.PAPER,
             Mode.PAPER_VALIDATED,
             reason="met criteria",
-            totp_verified=True,
+            operator_confirmed=True,
         )
         assert result.to_mode == Mode.PAPER_VALIDATED
-        assert result.operator_totp_verified is True
+        assert result.operator_confirmed is True
 
-    def test_live_standard_requires_totp(self) -> None:
-        with pytest.raises(ValueError, match="TOTP verification"):
+    def test_live_standard_requires_confirmation(self) -> None:
+        with pytest.raises(ValueError, match="operator confirmation"):
             transition_mode(
                 Mode.LIVE_EARLY, Mode.LIVE_STANDARD, reason="promotion"
             )
 
-    def test_live_expanded_requires_totp(self) -> None:
-        with pytest.raises(ValueError, match="TOTP verification"):
+    def test_live_expanded_requires_confirmation(self) -> None:
+        with pytest.raises(ValueError, match="operator confirmation"):
             transition_mode(
                 Mode.LIVE_STANDARD, Mode.LIVE_EXPANDED, reason="promotion"
             )
@@ -134,17 +134,17 @@ class TestTransitionMode:
             Mode.PAPER_VALIDATED,
             Mode.LIVE_EARLY,
             reason="promotion",
-            totp_verified=True,
+            operator_confirmed=True,
         )
         assert result.to_mode == Mode.LIVE_EARLY
-        assert result.operator_totp_verified is True
+        assert result.operator_confirmed is True
 
     def test_live_standard_with_totp_succeeds(self) -> None:
         result = transition_mode(
             Mode.LIVE_EARLY,
             Mode.LIVE_STANDARD,
             reason="promotion",
-            totp_verified=True,
+            operator_confirmed=True,
         )
         assert result.to_mode == Mode.LIVE_STANDARD
 
@@ -153,7 +153,7 @@ class TestTransitionMode:
             Mode.LIVE_STANDARD,
             Mode.LIVE_EXPANDED,
             reason="promotion",
-            totp_verified=True,
+            operator_confirmed=True,
         )
         assert result.to_mode == Mode.LIVE_EXPANDED
 
@@ -174,33 +174,33 @@ class TestTransitionMode:
             reason="poor performance",
         )
         assert result.to_mode == Mode.PAPER_VALIDATED
-        assert result.operator_totp_verified is False
+        assert result.operator_confirmed is False
 
 
 class TestRequiresTotp:
     """Test TOTP requirement check."""
 
-    def test_live_early_requires_totp(self) -> None:
-        assert requires_totp(Mode.LIVE_EARLY) is True
+    def test_live_early_requires_confirmation(self) -> None:
+        assert requires_confirmation(Mode.LIVE_EARLY) is True
 
-    def test_live_standard_requires_totp(self) -> None:
-        assert requires_totp(Mode.LIVE_STANDARD) is True
+    def test_live_standard_requires_confirmation(self) -> None:
+        assert requires_confirmation(Mode.LIVE_STANDARD) is True
 
-    def test_live_expanded_requires_totp(self) -> None:
-        assert requires_totp(Mode.LIVE_EXPANDED) is True
+    def test_live_expanded_requires_confirmation(self) -> None:
+        assert requires_confirmation(Mode.LIVE_EXPANDED) is True
 
     def test_paper_does_not_require_totp(self) -> None:
-        assert requires_totp(Mode.PAPER) is False
+        assert requires_confirmation(Mode.PAPER) is False
 
     def test_shadow_does_not_require_totp(self) -> None:
-        assert requires_totp(Mode.SHADOW) is False
+        assert requires_confirmation(Mode.SHADOW) is False
 
     def test_installing_does_not_require_totp(self) -> None:
-        assert requires_totp(Mode.INSTALLING) is False
+        assert requires_confirmation(Mode.INSTALLING) is False
 
-    def test_paper_validated_requires_totp(self) -> None:
+    def test_paper_validated_requires_confirmation(self) -> None:
         """Spec: PAPER → PAPER_VALIDATED requires TOTP (Source.md line 147)."""
-        assert requires_totp(Mode.PAPER_VALIDATED) is True
+        assert requires_confirmation(Mode.PAPER_VALIDATED) is True
 
 
 class TestGetValidTransitions:

@@ -13,13 +13,13 @@ import pytest
 class TestViewportGuard:
     """Test the viewport width guard."""
 
-    def test_viewport_guard_in_base_template(self, dashboard_client):
-        """Base template must include viewport guard overlay."""
+    def test_base_template_is_responsive(self, dashboard_client):
+        """The redesign replaced the hard 1024px viewport guard with a
+        responsive layout (collapsible mobile sidebar + lg: breakpoints)."""
         response = dashboard_client.get("/")
         html = response.text.lower()
-        # Must have a dedicated viewport guard element (not just the meta tag)
-        assert "viewport-guard" in html or ("1024" in html and "wider" in html), \
-            "Viewport guard overlay not found — need element referencing 1024px minimum"
+        assert "mobile-sidebar-overlay" in html and "lg:" in html, \
+            "Responsive layout markers (mobile sidebar + lg: breakpoints) not found"
 
     def test_viewport_guard_css_exists(self):
         """CSS must style the viewport guard."""

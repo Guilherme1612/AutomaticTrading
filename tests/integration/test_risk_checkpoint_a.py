@@ -3,7 +3,7 @@
 Verifies:
 - Kill switch engages on daily loss > 5%
 - Kill switch engages on rolling 5-day loss > 10%
-- Kill switch disengagement requires valid TOTP
+- Kill switch disengagement requires an explicit operator action
 - Audit chain break detection works
 - Ed25519 signing produces valid signatures
 - Ed25519 verification rejects tampered messages
@@ -25,7 +25,6 @@ from pmacs.cortex.kill_switch import (
     get_state,
     is_engaged,
 )
-from pmacs.cortex.totp import compute_totp, generate_totp_secret
 from pmacs.execution.signing import generate_keypair, sign_bytes, verify_signature
 from pmacs.storage.audit import AuditVerifier, AuditWriter
 from pmacs.storage.sqlite import init_db
@@ -48,12 +47,6 @@ def tmp_env(tmp_path: Path) -> dict:
         "heartbeat_dir": heartbeat_dir,
         "tmp_path": tmp_path,
     }
-
-
-@pytest.fixture
-def totp_secret() -> str:
-    """Generate a fresh TOTP secret for testing."""
-    return generate_totp_secret()
 
 
 # ---------------------------------------------------------------------------
@@ -205,45 +198,32 @@ class TestRolling5DayLossTrigger:
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint A.3 — Kill switch disengagement requires valid TOTP
+# Checkpoint A.3 — Kill switch disengagement requires an explicit operator action
 # ---------------------------------------------------------------------------
 
 
-class TestDisengageRequiresTOTP:
-    """Only the operator can disengage — via valid TOTP code."""
+class TestDisengageRequiresOperator:
+    """Only the operator can disengage — via an explicit operator action."""
 
-    def test_valid_totp_disengages(self, tmp_env: dict, totp_secret: str) -> None:
-        """Valid TOTP code successfully disengages the kill switch."""
+    def test_operator_disengages(self, tmp_env: dict) -> None:
+        """Operator action successfully disengages the kill switch."""
         db = tmp_env["db_path"]
 
         engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db)
         assert is_engaged(db_path=db) is True
 
-        code = compute_totp(totp_secret)
-        result = disengage(totp_secret, code, "operator cleared", db_path=db)
+        result = disengage("operator cleared", db_path=db)
         assert result is True
         assert is_engaged(db_path=db) is False
 
-    def test_invalid_totp_keeps_engaged(self, tmp_env: dict, totp_secret: str) -> None:
-        """Invalid TOTP code does NOT disengage the kill switch."""
-        db = tmp_env["db_path"]
-
-        engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db)
-        assert is_engaged(db_path=db) is True
-
-        result = disengage(totp_secret, "000000", "bad attempt", db_path=db)
-        assert result is False
-        assert is_engaged(db_path=db) is True
-
-    def test_disengage_writes_audit(self, tmp_env: dict, totp_secret: str) -> None:
+    def test_disengage_writes_audit(self, tmp_env: dict) -> None:
         """Successful disengage emits KILL_SWITCH_DISENGAGED audit event."""
         db = tmp_env["db_path"]
         audit = tmp_env["audit_path"]
 
         engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db, audit_path=audit)
 
-        code = compute_totp(totp_secret)
-        disengage(totp_secret, code, "operator cleared", db_path=db, audit_path=audit)
+        disengage("operator cleared", db_path=db, audit_path=audit)
 
         content = audit.read_text()
         assert "KILL_SWITCH_ENGAGED" in content

@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from pmacs.cortex.kill_switch import disengage, engage, is_engaged
-from pmacs.cortex.totp import compute_totp, generate_totp_secret
 from pmacs.engines.mode_manager import can_transition, transition_mode
 from pmacs.nervous.sse_publisher import SSEPublisher
 from pmacs.sim.ledger import PaperLedger
@@ -37,12 +36,6 @@ def tmp_env(tmp_path: Path) -> dict:
         "audit_path": audit_path,
         "tmp_path": tmp_path,
     }
-
-
-@pytest.fixture
-def totp_secret() -> str:
-    """Generate a fresh TOTP secret for testing."""
-    return generate_totp_secret()
 
 
 # ---------------------------------------------------------------------------
@@ -296,9 +289,9 @@ class TestKillSwitchAPILifecycle:
         assert "KILL_SWITCH_ENGAGED" in content
 
     def test_engage_then_disengage_via_api(
-        self, tmp_env: dict, totp_secret: str
+        self, tmp_env: dict
     ) -> None:
-        """Full engage -> disengage lifecycle works via API with TOTP."""
+        """Full engage -> disengage lifecycle works via an explicit operator action."""
         db = tmp_env["db_path"]
         audit = tmp_env["audit_path"]
 
@@ -306,10 +299,8 @@ class TestKillSwitchAPILifecycle:
         engage("manual test", "OPERATOR_MANUAL", db_path=db, audit_path=audit)
         assert is_engaged(db_path=db) is True
 
-        # Disengage with valid TOTP
-        code = compute_totp(totp_secret)
-        result = disengage(
-            totp_secret, code, "operator cleared",
+        # Operator disengage
+        result = disengage("operator cleared",
             db_path=db, audit_path=audit,
         )
         assert result is True
@@ -319,15 +310,3 @@ class TestKillSwitchAPILifecycle:
         content = audit.read_text()
         assert "KILL_SWITCH_ENGAGED" in content
         assert "KILL_SWITCH_DISENGAGED" in content
-
-    def test_invalid_totp_disengage_rejected(
-        self, tmp_env: dict, totp_secret: str
-    ) -> None:
-        """Invalid TOTP code rejects disengage attempt."""
-        db = tmp_env["db_path"]
-
-        engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db)
-
-        result = disengage(totp_secret, "999999", "bad attempt", db_path=db)
-        assert result is False
-        assert is_engaged(db_path=db) is True

@@ -21,6 +21,16 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def empty_client(monkeypatch):
+    """Client whose universe data layer reports zero tickers, so the
+    empty-state UI renders regardless of the developer's real pmacs.db."""
+    from pmacs.web.routes import universe as uni_route
+    monkeypatch.setattr(uni_route.data_layer, "get_universe_list", lambda db: [])
+    monkeypatch.setattr(uni_route.data_layer, "get_active_holdings", lambda db: [])
+    return TestClient(app)
+
+
 class TestTopBar:
     """(a) Top bar: group-by selector, search, Add ticker button."""
 
@@ -60,7 +70,7 @@ class TestGroupTabs:
     def test_first_tab_active(self, client):
         """First tab (All) has active styling."""
         resp = client.get("/universe")
-        assert "bg-blue-50 text-blue-600" in resp.text
+        assert "bg-accent-soft text-accent" in resp.text
 
 
 class TestTickerRows:
@@ -76,13 +86,13 @@ class TestTickerRows:
         has_empty = "No tickers in universe" in html
         assert has_table or has_empty
 
-    def test_empty_state(self, client):
+    def test_empty_state(self, empty_client):
         """When no tickers, shows empty state message."""
-        resp = client.get("/universe")
-        assert "No tickers in universe" in resp.text
+        resp = empty_client.get("/universe")
+        assert "No tickers yet" in resp.text
 
-    def test_add_first_ticker_button_in_empty_state(self, client):
-        resp = client.get("/universe")
+    def test_add_first_ticker_button_in_empty_state(self, empty_client):
+        resp = empty_client.get("/universe")
         assert "Add your first ticker" in resp.text
 
 
@@ -93,7 +103,7 @@ class TestTickerTableStructure:
     We verify the empty state is rendered correctly.
     """
 
-    def test_empty_state_has_cta(self, client):
+    def test_empty_state_has_cta(self, empty_client):
         """Empty state has a call-to-action button."""
-        resp = client.get("/universe")
+        resp = empty_client.get("/universe")
         assert "Add your first ticker" in resp.text

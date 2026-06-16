@@ -330,4 +330,6 @@ class TestGrammarAndValidatorWiring:
         assert runner.persona_name == "crucible"
         assert runner.grammar_name == "crucible"
         assert runner.base_temperature == 0.1  # Lower than other personas per spec
-        assert runner.max_tokens == 768
+        # Output budget raised from 768 to give the adversarial critique room
+        # to enumerate attack vectors without truncation (crucible.py).
+        assert runner.max_tokens == 2048

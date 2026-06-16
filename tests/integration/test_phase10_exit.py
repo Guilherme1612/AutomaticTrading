@@ -208,18 +208,18 @@ class TestExit04WizardAllStepsRender:
         assert "PMACS" in resp.text
 
     def test_step_templates_all_exist(self):
-        """All 11 step templates are registered in STEP_TEMPLATES."""
+        """All 10 step templates are registered in STEP_TEMPLATES."""
         from pmacs.web.routes.wizard import STEP_TEMPLATES, TOTAL_STEPS
 
-        assert TOTAL_STEPS == 11
-        for step_num in range(1, 12):
+        assert TOTAL_STEPS == 10
+        for step_num in range(1, 11):
             assert step_num in STEP_TEMPLATES, f"Step {step_num} missing from STEP_TEMPLATES"
 
     def test_wizard_status_endpoint(self, web_client):
         resp = web_client.get("/wizard/status")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total_steps"] == 11
+        assert data["total_steps"] == 10
 
     def test_step_templates_render_via_jinja2(self):
         """Each step template can be loaded and rendered by Jinja2."""
@@ -340,17 +340,20 @@ class TestExit06SSEReconnectResume:
 
     def test_get_events_since_returns_missed(self):
         publisher = SSEPublisher()
-        publisher.publish("cycle", "e1", {"n": 1})
+        # Event IDs are monotonic but start at a millisecond timestamp
+        # (survives restarts), so resume from the returned ID rather than a
+        # hardcoded value.
+        e1 = int(publisher.publish("cycle", "e1", {"n": 1}))
         publisher.publish("cycle", "e2", {"n": 2})
         publisher.publish("cycle", "e3", {"n": 3})
-        missed = publisher.get_events_since(1)
+        missed = publisher.get_events_since(e1)
         assert len(missed) == 2  # events 2 and 3
 
     def test_get_events_since_empty_when_caught_up(self):
         publisher = SSEPublisher()
         publisher.publish("cycle", "e1", {"n": 1})
-        publisher.publish("cycle", "e2", {"n": 2})
-        missed = publisher.get_events_since(2)
+        e2 = int(publisher.publish("cycle", "e2", {"n": 2}))
+        missed = publisher.get_events_since(e2)
         assert len(missed) == 0
 
     def test_get_events_since_returns_all_from_beginning(self):
@@ -366,9 +369,11 @@ class TestExit06SSEReconnectResume:
         for i in range(10):
             eid = publisher.publish("cycle", f"e{i}", {"idx": i})
             ids.append(int(eid))
-        missed = publisher.get_events_since(4)
-        # Events with id > 4: ids 5,6,7,8,9,10 = 6 events
+        # Resume from the 4th event's ID — the 6 events after it should remain.
+        missed = publisher.get_events_since(ids[3])
         assert len(missed) == 6
+        # IDs are strictly increasing (monotonic) for correct Last-Event-ID resume
+        assert ids == sorted(ids) and len(set(ids)) == 10
 
     def test_subscribe_unsubscribe_client(self):
         publisher = SSEPublisher()

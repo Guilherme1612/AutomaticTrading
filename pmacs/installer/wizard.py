@@ -12,7 +12,7 @@ from enum import Enum
 class WizardStep(Enum):
     """Wizard steps in order (Source.md §12.1). COMPLETE is the terminal state.
 
-    11 actionable steps match the spec's "11 dots" progress strip.
+    10 actionable steps match the spec's "10 dots" progress strip.
     Step 4 includes the embedding model setup (spec §12.1 Step 4.5).
     """
     WELCOME = 1           # Step 1 — Welcome and system identity check
@@ -23,10 +23,9 @@ class WizardStep(Enum):
     DATA_CONNECTIVITY = 6  # Step 6 — Data source connectivity ping
     UNIVERSE_SEED = 7      # Step 7 — Universe seed (16-ticker default)
     CYCLE_PREFERENCES = 8  # Step 8 — Cycle preferences (currency, timezone)
-    TOTP_ENROLLMENT = 9    # Step 9 — TOTP enrollment (QR code)
-    SMOKE_TEST = 10        # Step 10 — Smoke-test cycle (synthetic fixtures)
-    PROMOTE = 11           # Step 11 — Promote to SHADOW + PAPER
-    COMPLETE = 12          # Terminal state
+    SMOKE_TEST = 9         # Step 9 — Smoke-test cycle (synthetic fixtures)
+    PROMOTE = 10           # Step 10 — Promote to SHADOW + PAPER
+    COMPLETE = 11          # Terminal state
 
 
 class Wizard:

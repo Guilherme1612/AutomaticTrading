@@ -4,7 +4,7 @@ Dormant for first 50 PAPER cycles, then activates to:
 detect failure clusters, generate candidates, stage A/B tests,
 collect outcomes, run stat tests, and recommend promotions.
 
-All promotions require operator TOTP. No auto-promote.
+All promotions require an explicit operator action. No auto-promote.
 """
 from __future__ import annotations
 

@@ -112,7 +112,7 @@ They are based in Lisbon, trade in USD, hold positions for weeks to months, and 
 
 **What they delegate to PMACS:** evidence gathering at scale, multi-perspective analysis, arbitration math, sizing math, position monitoring, stop-loss execution, calibration and self-improvement, audit-grade record-keeping.
 
-**What PMACS does not delegate back:** mode promotion to live capital, ticker additions to universe, kill-switch disengagement, mutation promotions on substantive system components, force-exit on active positions. These all require explicit operator action via TOTP.
+**What PMACS does not delegate back:** mode promotion to live capital, ticker additions to universe, kill-switch disengagement, mutation promotions on substantive system components, force-exit on active positions. These all require explicit operator action via operator confirmation.
 
 ---
 
@@ -124,7 +124,7 @@ It uses local LLMs (one base model, multiple personas with distinct prompts) for
 
 The system runs autonomously when the operator's machine is on, requires no per-trade input in paper mode, and graduates to live capital only after empirical performance gates pass. Its purpose is not to maximize a return target, but to maximize the **probability-weighted ratio of upside realization to downside drawdown** across thesis-driven holdings in high-alpha growth-tech names.
 
-The system improves itself through a **Mutation Engine** that observes its own failures via the **Failure Diagnostic Engine**, proposes variants of its own components, validates them through shadow A/B tests, and either surfaces all improvements to the operator for review. No mutation is ever auto-applied — the operator confirms every change via TOTP, ensuring the base system cannot be degraded by the flywheel itself.
+The system improves itself through a **Mutation Engine** that observes its own failures via the **Failure Diagnostic Engine**, proposes variants of its own components, validates them through shadow A/B tests, and either surfaces all improvements to the operator for review. No mutation is ever auto-applied — the operator confirms every change via operator confirmation, ensuring the base system cannot be degraded by the flywheel itself.
 
 **The flywheel is the product.** A static system frozen at v1 quality is uninteresting. A system that gets sharper every month — more accurate calibration, better persona prompts, tighter thresholds, learned operator preferences — is what justifies running it locally for years. Every decision feeds the flywheel. Every failure becomes training data. Every override becomes a learned preference. Nothing is wasted.
 
@@ -140,11 +140,11 @@ A vision document without a trust contract is marketing. This is the binding sta
 
 2. **Local-only execution.** No cloud LLM calls. No telemetry. No external observation of operator decisions. The audit log replicates only to operator-controlled destinations.
 
-3. **The operator controls the kill switch.** PMACS can engage it autonomously when triggered. Only the operator can disengage it, with TOTP and a typed reason.
+3. **The operator controls the kill switch.** PMACS can engage it autonomously when triggered. Only the operator can disengage it, with a typed reason.
 
 4. **Trade plans are signed.** Every order PMACS submits is Ed25519-signed by the math process. An LLM cannot sign. A compromised dashboard cannot sign. The signing key never leaves the math process.
 
-5. **Mode promotion is operator-gated.** Moving from PAPER to PAPER_VALIDATED, or from any PAPER mode to any LIVE mode, requires TOTP. The system never decides on its own to start using real money.
+5. **Mode promotion is operator-gated.** Moving from PAPER to PAPER_VALIDATED, or from any PAPER mode to any LIVE mode, requires operator confirmation. The system never decides on its own to start using real money.
 
 6. **The system tells the operator when it does not know.** Every decision carries `matured_sources_used` (how many independent sources have enough track record to be trusted), conviction (a single number reflecting both probability and Crucible severity), and an explicit verdict tier (STRONG_BUY, BUY, HOLD, SKIP). Bootstrap-mode decisions are flagged.
 
@@ -160,7 +160,7 @@ A vision document without a trust contract is marketing. This is the binding sta
 
 4. **Use sentiment from Reddit, X, or social platforms.** They are noise plus prompt-injection surface. The operator's own thesis does not need their consensus.
 
-5. **Auto-promote prompt mutations.** Persona prompts shape reasoning; changes to them must pass operator TOTP after stat-significant A/B validation.
+5. **Auto-promote prompt mutations.** Persona prompts shape reasoning; changes to them must pass operator confirmation after stat-significant A/B validation.
 
 6. **Hide model integrity failures.** GGUF SHA256 mismatch on startup engages the kill switch. The operator must manually update the hashes file to resume.
 
@@ -180,13 +180,13 @@ These are repeated in `Architecture.md §1.1-1.15` as code-level invariants. The
 
 4. **Local-only execution.** No cloud calls of any kind. The inference process is `pf`-blocked from internet egress.
 
-5. **Operator owns the kill switch.** TOTP-gated disengagement. The system can engage it. Only the operator can lift it.
+5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
 ---
 
 ## 6. Decision rights matrix
 
-Who decides what. Operator-only decisions are gated by TOTP at submission. System-only decisions are deterministic and auditable. Shared decisions are system-proposed, operator-confirmed.
+Who decides what. Operator-only decisions are operator-gated at submission. System-only decisions are deterministic and auditable. Shared decisions are system-proposed, operator-confirmed.
 
 | Decision | System | Operator | Both |
 |---|---|---|---|
@@ -208,34 +208,34 @@ Who decides what. Operator-only decisions are gated by TOTP at submission. Syste
 | Stop-loss execution | ✓ | | |
 | Catastrophe-net stop placement | ✓ | | |
 | Position-level force exit | | ✓ | |
-| Add ticker to universe | | ✓ (TOTP) | |
-| Remove ticker from universe (no active position) | | ✓ (TOTP) | |
-| Remove ticker from universe (with active position) | | ✓ (TOTP, force-exit ack) | |
+| Add ticker to universe | | ✓ (operator-confirmed) | |
+| Remove ticker from universe (no active position) | | ✓ (operator-confirmed) | |
+| Remove ticker from universe (with active position) | | ✓ (operator-confirmed, force-exit ack) | |
 | Universe flag (ADV below threshold, halt, etc.) | ✓ | | |
-| Mode promotion to PAPER_VALIDATED | | ✓ (TOTP, after gates pass) | |
-| Mode promotion to any LIVE mode | | ✓ (TOTP, after gates pass) | |
+| Mode promotion to PAPER_VALIDATED | | ✓ (operator-confirmed, after gates pass) | |
+| Mode promotion to any LIVE mode | | ✓ (operator-confirmed, after gates pass) | |
 | Mode demotion (system-initiated on regression) | ✓ | | |
 | Kill switch engagement | ✓ | ✓ | |
-| Kill switch disengagement | | ✓ (TOTP, typed reason) | |
+| Kill switch disengagement | | ✓ (operator-confirmed, typed reason) | |
 | Mutation candidate proposal (auto-detected) | ✓ | | |
 | Mutation candidate proposal (operator-authored) | | ✓ | |
 | Mutation A/B test execution | ✓ | | |
 | Mutation recommendation (all) | ✓ | | |
-| Mutation approval (all, TOTP-gated) | | ✓ (TOTP) | |
+| Mutation approval (all, operator-confirmed) | | ✓ (operator-confirmed) | |
 | Mutation rollback (auto, regression-detected) | ✓ | | |
-| Mutation rollback (operator-initiated) | | ✓ (TOTP) | |
+| Mutation rollback (operator-initiated) | | ✓ (operator-confirmed) | |
 | Settings: display preferences | | ✓ | |
-| Settings: risk thresholds | | ✓ (TOTP) | |
-| Settings: persona enable/disable | | ✓ (TOTP) | |
-| Settings: API credentials | | ✓ (TOTP) | |
-| Audit log replication target | | ✓ (TOTP) | |
-| Per-trade approval requirement toggle | | ✓ (TOTP) | |
+| Settings: risk thresholds | | ✓ (operator-confirmed) | |
+| Settings: persona enable/disable | | ✓ (operator-confirmed) | |
+| Settings: API credentials | | ✓ (operator-confirmed) | |
+| Audit log replication target | | ✓ (operator-confirmed) | |
+| Per-trade approval requirement toggle | | ✓ (operator-confirmed) | |
 | Queue priority (per-cycle and persistent) | | ✓ | |
 | Pin ticker | | ✓ | |
 | Override a SKIP verdict (force into pipeline) | | ✓ | |
 | Override a STRONG_BUY/BUY (block trade) | | ✓ (in autonomy-on mode, this is an override) | |
 
-The pattern: **the system handles everything mechanical and deterministic; the operator handles every decision with a money or trust dimension.** TOTP is the friction layer for operator decisions that change system behavior or move money.
+The pattern: **the system handles everything mechanical and deterministic; the operator handles every decision with a money or trust dimension.** Operator confirmation is the friction layer for operator decisions that change system behavior or move money.
 
 ---
 
@@ -322,9 +322,9 @@ Limited-history tickers are also excluded from the Mutation Engine's A/B base po
 
 ### 8.3 Add, remove, flag
 
-- **Add:** Operator enters a ticker in Universe → admittance check (ADV ≥ $1M average, OHLCV available from at least one source, not halted, not delisted) → TOTP → admitted. Limited-history flag applied automatically if days_of_history < 90.
+- **Add:** Operator enters a ticker in Universe → admittance check (ADV ≥ $1M average, OHLCV available from at least one source, not halted, not delisted) → confirm → admitted. Limited-history flag applied automatically if days_of_history < 90.
 
-- **Remove:** Operator triggers via Universe page. With no active position: TOTP → removed. With active position: TOTP + explicit force-exit acknowledgment → position closed → removed.
+- **Remove:** Operator triggers via Universe page. With no active position: confirm → removed. With active position: confirm + explicit force-exit acknowledgment → position closed → removed.
 
 - **Flag (system, never auto-remove):** Daily ADV check; halt/delisting check. Failures surface as flags in the Universe page. Operator decides whether to remove.
 
@@ -349,7 +349,7 @@ The mode ladder is the path from "system is learning" to "system is trusted with
 | **SHADOW** | $0 | Audit-only. Signals captured. Math gate runs. No fake-trade recorded. | Validates the evidence pipeline, agents, math gate against real market without execution noise. **Always concurrent with PAPER.** |
 | **PAPER** | $5,000 simulated | Real-time fake execution against Alpaca paper API. Bootstrap haircut active. | Sources mature. Mutation baseline accumulates. System learns its own behavior. |
 | **PAPER_VALIDATED** | $5,000 simulated | Full sizing. Mature sources only. Mutation Engine fully active. | Performance-hardened. Ready for live. |
-| **LIVE_EARLY** | Real $ via IBKR | Real execution. Capped position size (10% of capital initially). | First real-money mode. Operator-gated promotion (TOTP). |
+| **LIVE_EARLY** | Real $ via IBKR | Real execution. Capped position size (10% of capital initially). | First real-money mode. Operator-gated promotion (operator-confirmed). |
 | **LIVE_STANDARD** | Real $ via IBKR | Real execution. Full sizing. | Steady-state. |
 | **LIVE_EXPANDED** | Real $ via IBKR | Extended universe. Larger position cap. | Optional. Only after sustained performance. |
 
@@ -361,10 +361,10 @@ Day 1:   SHADOW (audit-only) + PAPER (bootstrap, $5K)
 
 Day ~50 PAPER cycles:  Mutation Engine activates (SHADOW A/B testing; recommendations surface to operator)
 
-Day ~90 PAPER cycles + gates pass:  Operator TOTP-promotes to PAPER_VALIDATED
+Day ~90 PAPER cycles + gates pass:  Operator promotes to PAPER_VALIDATED
          SHADOW continues for audit-only consistency
 
-Day ~180 PAPER_VALIDATED + gates pass:  Operator TOTP-promotes to LIVE_EARLY
+Day ~180 PAPER_VALIDATED + gates pass:  Operator promotes to LIVE_EARLY
          Real broker (IBKR), capped position, capital from operator
 ```
 
@@ -374,7 +374,7 @@ Promotion gates and demotion triggers are numerical and live in `Phases.md §3`.
 
 In paper mode, the entire pipeline auto-executes — signal → arbitration → sizing → trade plan → Alpaca paper submission. The operator can observe in real time, override individual decisions, or pause via kill-switch. **Operator approval per trade is not required.** This is intentional: paper exists precisely to test full autonomy with no real money at stake. Per-trade approval would corrupt the test.
 
-In live modes, paper-mode autonomy is preserved by default. The Settings panel offers a TOTP-gated toggle to require per-trade operator approval (recommended OFF for full autonomy, ON for risk-aversion or while initially trusting the system at LIVE_EARLY).
+In live modes, paper-mode autonomy is preserved by default. The Settings panel offers an operator-confirmed toggle to require per-trade operator approval (recommended OFF for full autonomy, ON for risk-aversion or while initially trusting the system at LIVE_EARLY).
 
 ### 9.4 What auto-demotion looks like
 
@@ -387,7 +387,7 @@ The system can demote itself without operator action when performance regresses.
 | LIVE_EARLY | PAPER_VALIDATED | Rolling 20-cycle Sharpe < 0 OR drawdown > 16% |
 | PAPER_VALIDATED | PAPER | Rolling 30-cycle Brier > 0.32 OR Sharpe < -0.3 |
 
-Demotion fires the kill switch first, then transitions mode after operator disengages. The operator can challenge the demotion via Settings → Operator → Mode override (TOTP). This is a deliberate friction; demotion exists to protect capital, not to be casually undone.
+Demotion fires the kill switch first, then transitions mode after operator disengages. The operator can challenge the demotion via Settings → Operator → Mode override (operator-confirmed). This is a deliberate friction; demotion exists to protect capital, not to be casually undone.
 
 ---
 
@@ -477,7 +477,7 @@ The wizard runs once on initial install. It is the only setup flow. After comple
 
 ### 12.1 Step sequence
 
-The wizard is 11 steps. Each step blocks until passed. The operator can quit and resume; state is checkpointed at every step.
+The wizard is 10 steps. Each step blocks until passed. The operator can quit and resume; state is checkpointed at every step.
 
 **Step 1 — Welcome and system identity check.**
 Detects hardware. Confirms M1 family with at least 32GB RAM. Warns if less than 64GB (system will run but cycle times will be longer). Displays detected configuration for operator confirmation.
@@ -515,22 +515,19 @@ Displays the default 16-ticker seed. Operator can deselect any, add more, or acc
 **Step 8 — Cycle preferences.**
 Confirms display currency (USD primary). Confirms timezone for "EOD" semantics (default US/Eastern, 16:30 ET). No schedule needed — PMACS is boot-driven.
 
-**Step 9 — TOTP enrollment.**
-QR code displayed. Operator scans with authenticator app (Google Authenticator, Authy, 1Password). System verifies one TOTP before proceeding. The TOTP secret is stored in macOS Keychain under `pmacs.system.totp_secret`.
-
-**Step 10 — Smoke-test cycle.**
+**Step 9 — Smoke-test cycle.**
 Runs one full pipeline against synthetic fixture data. Verifies all engines execute, all DBs are writable, the audit chain validates, the kill-switch trigger works. Displays the result. Operator can inspect the synthetic outputs to understand what real cycles will look like.
 
-**Step 11 — Promote to SHADOW + PAPER.**
-The audit log records the first mode promotion. Wizard exits. Dashboard opens at `localhost:8001`.
+**Step 10 — Promote to SHADOW + PAPER.**
+The audit log records the first mode promotion. Wizard exits. Dashboard opens at `localhost:8000`.
 
 ### 12.2 Wizard re-entry
 
-The wizard is one-shot under normal use. Re-running it via `pmacs wizard --reset` from CLI wipes all state and starts over. This is destructive (deletes all DBs, audit log, holdings, and history) and requires TOTP confirmation. The operator should never need to re-run unless reinstalling on a new machine.
+The wizard is one-shot under normal use. Re-running it via `pmacs wizard --reset` from CLI wipes all state and starts over. This is destructive (deletes all DBs, audit log, holdings, and history) and requires operator confirmation. The operator should never need to re-run unless reinstalling on a new machine.
 
 ### 12.3 Wizard design language
 
-The wizard uses the same Notion aesthetic as the dashboard. Each step is a single full-window panel with a progress strip at the top showing 11 dots. Forward-only navigation; operator can quit at any step and resume at the same step on next launch. No "back" button mid-step (each step's success persists state and cannot be partially undone).
+The wizard uses the same Notion aesthetic as the dashboard. Each step is a single full-window panel with a progress strip at the top showing 10 dots. Forward-only navigation; operator can quit at any step and resume at the same step on next launch. No "back" button mid-step (each step's success persists state and cannot be partially undone).
 
 Animations: 200ms cross-fade between steps. No unnecessary transitions. The wizard should feel competent and brief, not playful.
 
@@ -583,13 +580,13 @@ Theme follows system preference by default. Manual toggle in Settings.
 - Logo at top (clickable → Dashboard)
 - Page nav: Dashboard, Agents, Pipeline, Universe, Cortex, Debug, Settings
 - Each nav item with icon + label. Active page highlighted with accent border.
-- Bottom: operator avatar + name (placeholder, since single-operator), TOTP-status indicator, quick-action button (opens Cmd-K palette)
+- Bottom: operator avatar + name (placeholder, since single-operator), quick-action button (opens Cmd-K palette)
 
 **Main content.** Scrollable. Page-specific.
 
 **Toast notifications.** Bottom-right. Stack of up to 5. Auto-dismiss 5s for info, sticky for warning/error until clicked. Toasts come from SSE event stream and from operator action confirmations.
 
-**Modal dialogs.** For TOTP confirmations, destructive actions, and high-friction operator decisions. Always carry: action description, consequences, "Type SYMBOL to confirm" for destructive, TOTP field, cancel button.
+**Modal dialogs.** For operator confirmations, destructive actions, and high-friction operator decisions. Always carry: action description, consequences, "Type SYMBOL to confirm" for destructive, confirm field, cancel button.
 
 **Cmd-K command palette.** Available everywhere. Type to search:
 - Tickers (jump to Pipeline filtered to that ticker)
@@ -610,8 +607,6 @@ Theme follows system preference by default. Manual toggle in Settings.
 **PersonaCard.** Used in Agents page. 320px tall card with persona name, role, status, progress bar, output summary. Detailed in §15.
 
 **EventRow.** Used in feeds and debug log. Single line: timestamp (mono, muted), level badge (colored), source (mono), message (truncated). Click to expand.
-
-**TOTPField.** 6-digit input, monospace, large. Auto-advances on keypress. Auto-submits on 6th digit.
 
 **Sankey (custom, D3-based).** Used in Agents page communication-layer view. Smooth animated path transitions. Hover reveals flow values.
 
@@ -666,7 +661,6 @@ The operator can adjust notification levels in Settings → General. The kill sw
 | / | Focus search/filter on current page |
 | Esc | Close modal, close drawer, dismiss toast |
 | Cmd-Shift-K (in Agents page) | Engage kill switch (with typed confirmation modal: type KILL to confirm) |
-| Cmd-T (when no text input focused) | Open TOTP modal pre-emptively (operator wants to perform a TOTP action) |
 | ? | Show contextual help for current page |
 
 ### 13.7 Accessibility
@@ -923,7 +917,7 @@ Each card shows:
   - **Run again now** — single-ticker re-run. Behavior: (a) if a cycle is currently running, the re-run queues for after current cycle completes (operator sees toast: "Queued. Will run after current cycle ends in ~Xm"); (b) if no cycle is running, the re-run starts immediately as a single-ticker cycle. Either way, the re-run audit-logs `cycle_initiated_by_operator` with `single_ticker=true`.
   - **Promote to next-cycle priority** — moves to head of next cycle queue
   - **Pin to queue** — persistent pin across cycles
-  - **Force exit** — for active positions only, TOTP-gated
+  - **Force exit** — for active positions only, operator-confirmed
 
 ### 16.5 Long queue management (right rail)
 
@@ -992,13 +986,13 @@ Operator types ticker symbol. The system auto-fills name, exchange, sector via d
 - Not delisted
 - Days of history (just informational; <90 triggers limited-history flag)
 
-Submit → TOTP → admitted. Audit log records the admission.
+Submit → confirm → admitted. Audit log records the admission.
 
 ### 17.4 Bulk actions
 
 Select multiple tickers (checkboxes). Bulk options:
 - Tag with operator-defined sub-sector (e.g., "AI infrastructure," "fintech LATAM," "drone autonomy")
-- Remove (TOTP, with confirmation if any have active positions)
+- Remove (operator-confirmed, with confirmation if any have active positions)
 
 ### 17.5 Index overlay toggle
 
@@ -1053,8 +1047,8 @@ Per process (cortex, cortex-self-check, nervous, execution, dashboard, stoploss,
 
 - Current state (ARMED / ENGAGED) — large, color-coded
 - Recent triggers history (last 10)
-- **Engage manually** button (no TOTP; engagement is always the safer option)
-- **Disengage** button (TOTP + typed reason; only enabled when ENGAGED and trigger condition resolved)
+- **Engage manually** button (no confirmation step; engagement is always the safer option)
+- **Disengage** button (typed reason; only enabled when ENGAGED and trigger condition resolved)
 
 ### 18.7 Model integrity panel
 
@@ -1108,7 +1102,7 @@ Above the event list, persistent chip group:
 
 ## 20. Page: Settings
 
-**Purpose:** all runtime-editable configuration. TOTP-gated for sensitive changes.
+**Purpose:** all runtime-editable configuration. operator-confirmed for sensitive changes.
 
 **Path:** `/settings`
 
@@ -1126,9 +1120,9 @@ Single scrollable page with section anchors in left sub-nav. Sections (in order)
 
 ### 20.3 Brokers
 
-- Alpaca paper key (read-only display, edit via TOTP)
+- Alpaca paper key (read-only display, edit via operator confirmation)
 - IBKR credentials (when LIVE modes activate)
-- Catastrophe-net stop percentage (default 15%, TOTP-gated)
+- Catastrophe-net stop percentage (default 15%, operator-confirmed)
 
 ### 20.4 Inference
 
@@ -1150,7 +1144,7 @@ Single scrollable page with section anchors in left sub-nav. Sections (in order)
 - Max single position % (default 20%)
 - Max concurrent positions (default 5, derived from $5K / 20%)
 - Per-mode position cap override
-- Kill-switch threshold tuning (TOTP-gated):
+- Kill-switch threshold tuning (operator-confirmed):
   - Daily loss % (default 5%)
   - Rolling 5-day loss % (default 10%)
   - Reconciliation tolerance ($ and %)
@@ -1165,20 +1159,20 @@ Single scrollable page with section anchors in left sub-nav. Sections (in order)
 
 - Enable/disable per dimension (prompts / source-weights / thresholds / persona-affinity / universe-flags)
 - Stat-sig threshold for recommendations: p<0.05, Cohen's d>0.20, n≥20
-- **All mutations require operator TOTP to apply.** No auto-promote. The Mutation Engine is an advisor, not an actor. This prevents the flywheel from degrading the base system.
-- **Pending recommendations** panel (read-only display + approve/reject TOTP buttons). ALL mutations require operator TOTP to apply:
+- **All mutations require operator confirmation to apply.** No auto-promote. The Mutation Engine is an advisor, not an actor. This prevents the flywheel from degrading the base system.
+- **Pending recommendations** panel (read-only display + approve/reject buttons). ALL mutations require operator confirmation to apply:
   - Per candidate: dimension, target (e.g., "moat_analyst.system_prompt"), proposed at, sample size so far, current effect size, current p-value, trending direction
-  - "Promote" button (TOTP) — applies the candidate as the new production config
+  - "Promote" button (operator-confirmed) — applies the candidate as the new production config
   - "Reject" button — closes the candidate without applying
 - **Recent promotions** log (read-only with rollback button):
   - Per promotion: date, dimension, target, was-auto-promoted-vs-operator, current post-promotion performance vs baseline
-  - Rollback button (TOTP)
+  - Rollback button (operator-confirmed)
 
 ### 20.9 Agent Personas
 
 - Per persona: read-only display of current production prompt, weight, last-update timestamp, rolling Brier
 - "Propose mutation" button — opens diff editor where operator drafts a prompt variant; submission stages a candidate for the Mutation Engine to A/B test
-- Persona enable/disable (TOTP-gated; disabling a critical persona triggers a warning)
+- Persona enable/disable (operator-confirmed; disabling a critical persona triggers a warning)
 - Persona temperature override (advanced)
 
 ### 20.10 Queue
@@ -1191,15 +1185,15 @@ Single scrollable page with section anchors in left sub-nav. Sections (in order)
 
 ### 20.11 Audit & Debug
 
-- Audit log replication target (rsync destination, TOTP to change)
+- Audit log replication target (rsync destination, operator confirmation to change)
 - Debug log retention (default 30 days)
 - Audit log retention policy (default 1 year hot, then archive — see §24)
 - Operator email for critical alerts (optional)
 
 ### 20.12 Operator
 
-- Per-trade approval requirement (default OFF for paper; TOTP toggle, TOTP per trade if ON)
-- Mode override (TOTP-gated promotion or demotion — bypasses normal gates with explicit acknowledgment)
+- Per-trade approval requirement (default OFF for paper; operator toggle, operator confirmation per trade if ON)
+- Mode override (operator-confirmed promotion or demotion — bypasses normal gates with explicit acknowledgment)
 - Force a single-ticker re-run (button; same effect as Pipeline page action)
 - Force kill-switch test (runs a synthetic kill-switch event to verify wiring)
 
@@ -1219,15 +1213,15 @@ These are code-versioned. Changing them requires a code change and process resta
 
 ## 21. Operator workflows
 
-Specific tasks the operator performs, with the screen sequence. Each workflow is designed to take three clicks or fewer for routine actions, with TOTP friction only at the points where it earns its cost.
+Specific tasks the operator performs, with the screen sequence. Each workflow is designed to take three clicks or fewer for routine actions, with operator confirmation friction only at the points where it earns its cost.
 
 ### 21.1 "I want to add a new ticker"
 
 1. Cmd-K → type "add ticker" → Enter (or navigate to Universe → Add ticker button)
 2. Type symbol (e.g., `RDDT`) → live admittance check fills in
-3. If passes: type TOTP → submit → toast "RDDT added to universe; will appear in next cycle"
+3. If passes: confirm → submit → toast "RDDT added to universe; will appear in next cycle"
 
-If the ticker fails admittance: error message specifies which check failed (e.g., "ADV $432K, below $1M threshold"). Operator can override the threshold in Settings (TOTP).
+If the ticker fails admittance: error message specifies which check failed (e.g., "ADV $432K, below $1M threshold"). Operator can override the threshold in Settings (operator-confirmed).
 
 ### 21.2 "I want to override a SKIP and force NBIS into the pipeline"
 
@@ -1256,27 +1250,27 @@ If the operator wants to compare with similar past failures: Cmd-K → "Failures
    - Sample size, effect size, p-value, Cohen's d
    - Direction of effect (e.g., "candidate Brier 0.27 vs production 0.31, lower is better")
    - Audit lineage (which failures triggered the candidate generation)
-4. Click **Promote** → TOTP modal → Submit
+4. Click **Promote** → confirmation modal → Submit
 5. Toast: "Mutation promoted. 30-cycle probation period active. Auto-rollback armed if regression > baseline."
 
 ### 21.5 "I want to promote PAPER → PAPER_VALIDATED"
 
 1. Dashboard → mode badge → click → opens mode-management modal showing current gates
 2. Modal shows: "PAPER → PAPER_VALIDATED requires: ≥90 PAPER cycles ✓ | ≥200 trades ✓ | Brier ≤ 0.30 (current 0.28) ✓ | Sharpe ≥ 0.0 (current 0.71) ✓ | Drawdown ≤ 15% (current 8.2%) ✓ | All gates pass ✓"
-3. **Promote** button enabled → click → TOTP modal → Submit
+3. **Promote** button enabled → click → confirmation modal → Submit
 4. Audit log records mode change. Mode badge updates.
 
 ### 21.6 "I want to engage the kill switch immediately"
 
 1. Top bar → kill switch button → click
-2. Confirmation modal: "Engage kill switch? All trading halts. Stop-loss execution continues. TOTP not required to engage."
-3. Click **Engage** (no TOTP needed for engagement; it's the safer option)
+2. Confirmation modal: "Engage kill switch? All trading halts. Stop-loss execution continues. No confirmation required to engage."
+3. Click **Engage** (no confirmation needed for engagement; it's the safer option)
 4. Top bar kill switch button turns red. Toast: "Kill switch ENGAGED. To disengage: Cortex page."
 
 To disengage:
 1. Cortex page → Kill switch panel
 2. Verify trigger condition resolved
-3. Click **Disengage** → modal asks for typed reason and TOTP
+3. Click **Disengage** → modal asks for a typed reason
 4. Submit → switch disengages, audit logs the disengagement with operator identity
 
 ### 21.7 "I want to inspect the system before market open"
@@ -1304,7 +1298,7 @@ This is the felt experience of running PMACS week-to-week, week 6 of PAPER mode.
 
 **Morning.** Operator opens the MacBook. launchd starts the eight PMACS processes in dependency order. Cortex notices the last completed cycle was 27 hours ago and auto-initiates a new one.
 
-Operator opens dashboard at `localhost:8001`. The Agents page is showing the first ticker of the cycle (NBIS) being processed. The Sankey is animating as evidence flows to the 9 personas. ETA shows 4 minutes for this ticker, ~1.5 hours for the full cycle.
+Operator opens dashboard at `localhost:8000`. The Agents page is showing the first ticker of the cycle (NBIS) being processed. The Sankey is animating as evidence flows to the 9 personas. ETA shows 4 minutes for this ticker, ~1.5 hours for the full cycle.
 
 NBIS comes in as STRONG_BUY (conviction 0.72). The Crucible card shows severity 0.18 — minor flaws found, not blocking. Operator clicks the Crucible card; the critique points out that NBIS's GPU-supply assumption depends on a single Q3 earnings call quote. Fair point, but the broader thesis still holds.
 
@@ -1358,7 +1352,7 @@ Operator decides whether to keep going toward PAPER_VALIDATED (~60 more cycles t
 
 ### 24.1 What gets backed up
 
-- **Audit log** (most critical). Replicated hourly via TOTP-configured rsync to operator-controlled offsite. Hash chain re-verified on the destination.
+- **Audit log** (most critical). Replicated hourly via operator-configured rsync to operator-controlled offsite. Hash chain re-verified on the destination.
 - **All five databases.** Daily snapshot to operator-configured offsite location. Snapshot includes Kuzu graph, Qdrant collections, DuckDB analytics, SQLite OLTP. Snapshot is consistent (cycle-boundary-aligned).
 - **Configuration.** `model_registry.json`, `risk.toml`, `crucible.toml`, `mutation.toml`, `model_hashes.toml`. Versioned in git in `config/`. Not auto-replicated; operator commits.
 - **Keychain entries.** *Not* backed up by PMACS (would require exporting secrets). Operator backs up macOS Keychain themselves via macOS-native means.
@@ -1369,7 +1363,7 @@ Operator decides whether to keep going toward PAPER_VALIDATED (~60 more cycles t
 
 **Corruption mid-cycle.** Cortex's hourly audit verification catches it. Kill switch engages. Operator runs `pmacs ops verify-and-rebuild` from CLI. The tool walks back from the last verified audit entry, replays cycle events, rebuilds DB state. If unrecoverable: restore from last good snapshot.
 
-**Accidental destructive operation.** The wizard's `--reset` flag is destructive but TOTP-gated. Audit retention means even after a reset, the audit log can be re-imported from offsite to recover historical context.
+**Accidental destructive operation.** The wizard's `--reset` flag is destructive but operator-confirmed. Audit retention means even after a reset, the audit log can be re-imported from offsite to recover historical context.
 
 ### 24.3 Multi-machine considerations
 
@@ -1381,7 +1375,6 @@ Recommended pattern for the operator with two Macs:
 - Audit log replicates to a NAS or cloud storage both Macs can read.
 - DB snapshots replicate to the same shared destination.
 - If primary fails: secondary restores from latest snapshot, runs `--restore`, takes over.
-- TOTP secret is shared via the operator's authenticator app (same TOTP secret enrolled on both Macs during their respective wizard runs). The wizard's Step 9 (TOTP enrollment) accepts an existing TOTP secret as input for the secondary Mac (operator types in the secret manually or scans the original QR if still available).
 
 There is no "active-active" mode. The cycle lock (flock-based, see `Architecture.md §12`) prevents simultaneous cycles on the same DBs even if the operator misconfigures, but this is a safety net, not a feature.
 
@@ -1396,7 +1389,7 @@ PMACS follows a deliberate release cadence that respects the audit invariant.
 `vMAJOR.MINOR.PATCH`:
 - **PATCH:** bug fixes, no schema change, no audit format change. Safe to apply immediately.
 - **MINOR:** new features, backward-compatible schema migrations, no audit format change. Migration runs on next startup; operator confirms.
-- **MAJOR:** breaking changes (audit format, schema-incompatible). Migration is one-way and requires a TOTP-gated explicit "migrate" command.
+- **MAJOR:** breaking changes (audit format, schema-incompatible). Migration is one-way and requires an operator-confirmed explicit "migrate" command.
 
 ### 25.2 Update flow
 
@@ -1405,7 +1398,7 @@ PMACS does not auto-update. The operator runs `pmacs update --check` from CLI; s
 Major-version updates require:
 - Audit log archive of the current version (the chain becomes immutable for the prior version)
 - Genesis entry of a new audit chain for the new version (linked to prior chain head via cross-reference event)
-- TOTP confirmation
+- operator confirmation
 - A smoke-test cycle on synthetic fixtures before the system enters operational mode in the new version
 
 ### 25.3 Model file updates
@@ -1452,7 +1445,7 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 | **GBNF** | GGML BNF — grammar format for constraining llama-server output structure. |
 | **Holding** | A position record. Has state (CANDIDATE → ACTIVE → terminal). |
 | **Immutable memory** | Hash-chained audit log. Forever-retention. |
-| **Kill switch** | System-wide trade halt. TOTP to disengage. |
+| **Kill switch** | System-wide trade halt. operator confirmation to disengage. |
 | **Limited-history** | Ticker with fewer than 90 trading days of OHLCV. Stacked conviction haircut applied. |
 | **Mode ladder** | The promotion path SHADOW + PAPER → PAPER_VALIDATED → LIVE_*. |
 | **Mutation Engine** | Active-flywheel sub-system that proposes and validates variants of system components. |
@@ -1464,7 +1457,6 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 | **Source maturity** | A source's `historical_n` ≥ 30 (default). Below = immature, contributes with bootstrap haircut. |
 | **Thesis-bound** | Holding philosophy: position held while thesis is valid, not for fixed duration. |
 | **TradePlan** | Ed25519-signed instruction sent from `pmacs-nervous` to `pmacs-execution`. |
-| **TOTP** | Time-based one-time password. Operator-only authorization for sensitive writes. |
 | **Verdict tier** | Operator-facing classification: STRONG_BUY / BUY / HOLD / SKIP. |
 | **Working memory** | Per-cycle scratch state in SQLite. |
 

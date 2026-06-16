@@ -1,6 +1,6 @@
 {# Cost & Budget settings section (PRD Phase 16)
    Included in settings.html via {% include "cost_settings.html" %}.
-   Provides: period totals, budget cap inputs (TOTP-gated), per-persona breakdown,
+   Provides: period totals, budget cap inputs (operator-confirmed), per-persona breakdown,
    pricing table, reconciliation status.
 #}
 
@@ -46,7 +46,7 @@
     </div>
 </div>
 
-<!-- Budget cap inputs (TOTP-gated) -->
+<!-- Budget cap inputs (operator-confirmed) -->
 <div class="border-t border-border-subtle pt-4 mb-6">
     <h4 class="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Budget Caps</h4>
     <div class="space-y-3 max-w-lg">
@@ -76,7 +76,7 @@
             <span id="cost-cap-save-status" class="text-xs text-text-muted"></span>
             <button type="button" onclick="saveBudgetCaps()"
                     class="px-3 py-1.5 text-xs bg-accent text-white rounded-md hover:opacity-90 transition-opacity font-medium">
-                Save Caps (TOTP)
+                Save Caps
             </button>
         </div>
     </div>
@@ -205,7 +205,7 @@
 </div>
 
 <script>
-// Budget cap save (TOTP-gated)
+// Budget cap save (operator-confirmed)
 function saveBudgetCaps() {
     var dailyCap = parseFloat(document.getElementById('cost-daily-cap-input').value);
     var monthlyCap = parseFloat(document.getElementById('cost-monthly-cap-input').value);
@@ -219,7 +219,7 @@ function saveBudgetCaps() {
         return;
     }
 
-    open_totp_modal({
+    confirmAction({
         actionId: 'settings.cost_caps',
         description: 'Update budget caps: Daily $' + dailyCap.toFixed(2) + ' / Monthly $' + monthlyCap.toFixed(2),
         consequences: 'Budget caps control when LLM calls are blocked to prevent cost overruns. Lowering caps may prevent cycles from completing.',

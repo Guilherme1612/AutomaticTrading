@@ -14,14 +14,14 @@ PMACS uses macOS launchd to manage 8 processes in dependency order.
 5. pmacs-nervous      (orchestration on :8000, SSE, write API)
 6. pmacs-stoploss     (RTH position monitoring every 30 min)
 7. pmacs-mutation     (active flywheel, dormant first 50 cycles)
-8. pmacs-dashboard    (read-only web UI on :8001, loopback only)
+8. pmacs-dashboard    (read-only web UI on :8000, served by pmacs-nervous, loopback only)
 ```
 
 ### Startup Procedure
 
 1. Open MacBook — launchd starts all 8 processes automatically
 2. Wait ~10s for inference model to load (Qwen3.6-35B-A3B, ~21GB)
-3. Open browser: `http://localhost:8001`
+3. Open browser: `http://localhost:8000`
 4. Check Cortex page: audit chain status (green) + process heartbeats (all green) + disk + clock + sources
 5. If gap > 24h since last cycle: cycle auto-initiates
 
@@ -51,7 +51,7 @@ python ops/backup_verify.py restore --backup-dir <backup-dir>
 
 ### Pre-Market Inspection (Source.md §21.7)
 
-1. Open `http://localhost:8001`
+1. Open `http://localhost:8000`
 2. **Cortex page**: verify audit chain (green), process heartbeats (all green), disk free, clock drift, source connectivity
 3. **Dashboard**: check active positions, last cycle status, mode badge, cycle timing
 4. If no cycle ran in 24h: click "Run cycle now" or let auto-cycle start
@@ -74,7 +74,7 @@ python ops/backup_verify.py restore --backup-dir <backup-dir>
 
 ## First-Run Wizard
 
-On first launch, PMACS runs an 11-step wizard that configures:
+On first launch, PMACS runs a 10-step wizard that configures:
 
 1. **Welcome** — system overview and prerequisites
 2. **Inference** — llama-server connection test (:8080)
@@ -85,8 +85,7 @@ On first launch, PMACS runs an 11-step wizard that configures:
 7. **Universe** — select initial ticker universe from 11 templates
 8. **Risk** — confirm $5K paper capital, position limits
 9. **Broker** — Alpaca paper trading API key entry
-10. **TOTP** — set up authenticator for operator actions
-11. **Review** — confirm all settings, run smoke-test cycle
+10. **Review** — confirm all settings, run smoke-test cycle
 
 After wizard completes, the dashboard opens with pre-first-cycle state showing "Run smoke-test cycle".
 
@@ -182,7 +181,6 @@ All shortcuts work from any page. Shortcuts are suppressed when a text input is 
 | `/` | Focus search/filter on current page |
 | `Esc` | Close modal, drawer, or dismiss toast |
 | `Cmd-Shift-K` | Open kill switch confirmation (any page) |
-| `Cmd-T` | Open TOTP input modal |
 | `?` | Show contextual help for current page |
 
 ## Cycle Timing
@@ -207,21 +205,17 @@ Compare two cycles side-by-side from the Dashboard:
 
 Useful for understanding why a thesis changed between cycles.
 
-## TOTP Setup
+## Operator Action Authorization
 
-TOTP is required for all destructive/promotion actions. Setup via:
+PMACS is a single-operator, loopback-only system with no second-factor authentication gate. Sensitive actions still require an explicit operator action through the dashboard (a confirmation step, and a typed reason where noted), and every such action is recorded in the hash-chained audit log.
 
-1. Generate TOTP secret: `python -m pmacs.auth.totp_setup`
-2. Scan QR code with authenticator app (Google Authenticator, Authy, etc.)
-3. Verify with: `python -m pmacs.auth.totp_verify --code <6-digit-code>`
-
-TOTP is required for:
+Explicit operator confirmation is required for:
 - Mode promotion (SHADOW+PAPER → PAPER_VALIDATED → LIVE_EARLY → ...)
-- Kill switch disengagement
+- Kill switch disengagement (also requires a typed reason)
 - Mutation approval
 - Settings changes (threshold overrides, universe edits)
 
-TOTP is NOT required for:
+No confirmation is required for:
 - Kill switch engagement (it's the safer option)
 
 ## Mode Promotion
@@ -246,7 +240,7 @@ INSTALLING → SHADOW + PAPER → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDA
 1. Dashboard → mode badge → click → mode management modal
 2. Modal shows current gate status: cycles, trades, Brier, Sharpe, drawdown
 3. All gates must pass simultaneously
-4. Click **Promote** → TOTP modal → Submit
+4. Click **Promote** → confirmation modal → Submit
 5. Audit log records mode change. Mode badge updates.
 
 **Important:** Even when all gates pass, promotion does not happen automatically. The operator decides when to promote.
@@ -257,7 +251,7 @@ INSTALLING → SHADOW + PAPER → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDA
 
 1. Top bar → Kill Switch button → click
 2. Confirmation modal: "Engage kill switch? All trading halts. Stop-loss continues."
-3. Click **Engage** (no TOTP needed)
+3. Click **Engage** (no confirmation needed)
 4. Top bar button turns red. Toast confirms.
 
 **Triggers (automatic):**
@@ -272,14 +266,14 @@ INSTALLING → SHADOW + PAPER → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDA
 
 1. Cortex page → Kill Switch panel
 2. Verify trigger condition resolved
-3. Click **Disengage** → modal asks for typed reason + TOTP
+3. Click **Disengage** → modal asks for typed reason
 4. Submit → audit logs disengagement with operator identity
 
 ## Mutation Engine
 
 ### Overview
 
-The Mutation Engine proposes improvements to system parameters based on failure pattern analysis. It is an **advisor** — it never auto-applies mutations. All mutations require operator TOTP approval.
+The Mutation Engine proposes improvements to system parameters based on failure pattern analysis. It is an **advisor** — it never auto-applies mutations. All mutations require operator approval.
 
 ### Activation
 
@@ -291,7 +285,7 @@ The Mutation Engine proposes improvements to system parameters based on failure 
 1. Dashboard → Mutation Engine card → "N pending operator review" → click
 2. Settings → Mutation Engine → Pending candidates
 3. Review: dimension, target, diff, sample size, effect size, p-value
-4. Click **Promote** → TOTP → Submit
+4. Click **Promote** → confirm → Submit
 5. 30-cycle probation period. Auto-rollback if regression exceeds baseline.
 
 ### Safety Levels
@@ -339,12 +333,12 @@ Runs: backup → wipe → restore → verify → report
 
 | Task | Steps | Page |
 |---|---|---|
-| Add ticker (§21.1) | Cmd-K → "add ticker" → type symbol → TOTP | Universe |
+| Add ticker (§21.1) | Cmd-K → "add ticker" → type symbol → confirm | Universe |
 | Override SKIP (§21.2) | Pipeline → SKIP column → "Run again now" | Pipeline |
 | Investigate stop-out (§21.3) | Pipeline → search ticker → detail drawer → failure history | Pipeline |
-| Review mutation (§21.4) | Dashboard → Mutation card → review → Promote → TOTP | Settings |
-| Promote mode (§21.5) | Dashboard → mode badge → check gates → Promote → TOTP | Dashboard |
-| Engage kill switch (§21.6) | Top bar → Kill Switch → Engage (no TOTP) | Any |
+| Review mutation (§21.4) | Dashboard → Mutation card → review → Promote → confirm | Settings |
+| Promote mode (§21.5) | Dashboard → mode badge → check gates → Promote → confirm | Dashboard |
+| Engage kill switch (§21.6) | Top bar → Kill Switch → Engage (no confirmation step) | Any |
 | Pre-market check (§21.7) | Cortex → audit chain + heartbeats → Dashboard | Cortex |
 | Tag tickers (§21.8) | Universe → group-by → select → bulk tag | Universe |
 
@@ -352,7 +346,7 @@ Runs: backup → wipe → restore → verify → report
 
 | Issue | Check | Fix |
 |---|---|---|
-| Dashboard not loading | `curl localhost:8001` | Restart: `launchctl kickstart -k gui/$(id -u)/pmacs-dashboard` |
+| Dashboard not loading | `curl localhost:8000` | Restart: `launchctl kickstart -k gui/$(id -u)/pmacs-nervous` |
 | SSE not streaming | `curl localhost:8000/events` | Check pmacs-nervous is running |
 | Inference down | Cortex page → heartbeats | `ops/start_inference.sh` |
 | Audit chain broken | `python ops/audit_chain_verify.py` | Check output for line number, investigate tampering |
@@ -363,7 +357,7 @@ Runs: backup → wipe → restore → verify → report
 
 | Service | URL |
 |---|---|
-| Dashboard | `http://localhost:8001` |
+| Dashboard | `http://localhost:8000` |
 | Nervous API | `http://localhost:8000` |
 | Inference | `http://localhost:8080` (pf-blocked) |
 | SSE stream | `http://localhost:8000/events` |
@@ -376,4 +370,4 @@ Runs: backup → wipe → restore → verify → report
 - Catastrophe-net stop: 15% below entry (broker-side)
 - Crucible time budget: 90s per attack cycle, 2 cycles max
 - Mutation activation: after 50 PAPER cycles
-- All mutations require operator TOTP
+- All mutations require operator confirmation

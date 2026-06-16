@@ -11,7 +11,7 @@ PMACS monitors a curated universe of equities for catalyst events (earnings, FDA
 - **LLMs never decide, never math, never sign.** Probabilities are combined, sized, and arbitrated by Python. Trades are Ed25519-signed by the execution process.
 - **Every state transition is hash-chained.** The audit log uses `prev_sha256` — tamper with one line and the chain breaks.
 - **Local-only execution.** No cloud LLM calls. No telemetry. The inference process is pf-blocked from the internet.
-- **Operator owns the kill switch.** TOTP-gated disengagement. Only the operator can lift it.
+- **Operator owns the kill switch.** Disengagement requires an explicit operator action. Only the operator can lift it.
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@ python -m pmacs wizard
 bash ops/install_launchd.sh
 
 # Open dashboard
-open http://localhost:8001
+open http://localhost:8000
 ```
 
 ## Architecture
@@ -50,7 +50,7 @@ PMACS runs 8 processes managed by launchd:
 | pmacs-nervous | :8000 | Orchestration, SSE, write API |
 | pmacs-stoploss | daemon | RTH position monitoring every 30 min |
 | pmacs-mutation | daemon | Active flywheel (dormant first 50 cycles) |
-| pmacs-dashboard | :8001 | Read-only web UI (loopback only) |
+| pmacs-dashboard | :8000 | Read-only web UI, served by pmacs-nervous (loopback only) |
 
 5 storage backends: SQLite (OLTP), KuzuDB (graph lineage), Qdrant (vector embeddings), DuckDB (analytics), audit.log (hash-chained).
 

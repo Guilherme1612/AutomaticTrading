@@ -257,17 +257,6 @@ body::before {
     transform: translateX(2px);
 }
 
-/* ─── TOTP Input ────────────────────────────────────────────────────────── */
-
-.totp-digit {
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
-}
-
-.totp-digit:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-ring);
-    transform: scale(1.05);
-}
 
 /* ─── Ticker Autocomplete ──────────────────────────────────────────────── */
 
@@ -1324,8 +1313,7 @@ textarea:focus-visible {
 /* ─── Modal Backdrop ──────────────────────────────────────────────────── */
 
 #blocking-modal,
-#shortcut-overlay,
-#totp-modal {
+#shortcut-overlay {
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 }

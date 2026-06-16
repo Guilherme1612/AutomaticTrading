@@ -105,13 +105,11 @@ class NotificationLevelRequest(BaseModel):
 
 class MutationActionRequest(BaseModel):
     candidate_id: str
-    totp_code: str = ""  # Required for promote/rollback; validated server-side
 
 
 class CostCapsRequest(BaseModel):
     daily_cap: float
     monthly_cap: float
-    totp_code: str = ""  # Required — budget changes are TOTP-gated
 
 
 @router.get("/settings")
@@ -213,19 +211,16 @@ async def get_notification_levels():
 
 class InferenceProviderRequest(BaseModel):
     provider: str
-    totp_code: str = ""  # TOTP-gated: changing inference provider is security-sensitive
 
 
 class InferenceApiKeyRequest(BaseModel):
     provider: str
     api_key: str
-    totp_code: str = ""  # TOTP-gated: API key changes are security-sensitive
 
 
 class InferenceModelRequest(BaseModel):
     provider: str
     model: str
-    totp_code: str = ""  # TOTP-gated: model changes affect inference behavior
 
 
 @router.get("/api/settings/inference")
@@ -237,10 +232,6 @@ async def get_inference_config():
 @router.post("/api/settings/inference/provider")
 async def set_inference_provider(req: InferenceProviderRequest):
     """Switch the active LLM provider in model_registry.json."""
-    # TOTP-gated: changing inference provider is security-sensitive
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
     registry = _load_registry()
     backends = registry.get("backends", {})
 
@@ -258,10 +249,6 @@ async def set_inference_provider(req: InferenceProviderRequest):
 @router.post("/api/settings/inference/api-key")
 async def set_inference_api_key(req: InferenceApiKeyRequest):
     """Save an API key for a cloud provider to the system keychain."""
-    # TOTP-gated: API key changes are security-sensitive
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
     registry = _load_registry()
     backend = registry.get("backends", {}).get(req.provider, {})
     api_key_ref = backend.get("api_key_ref", "")
@@ -293,10 +280,6 @@ async def set_inference_api_key(req: InferenceApiKeyRequest):
 @router.post("/api/settings/inference/model")
 async def set_inference_model(req: InferenceModelRequest):
     """Update the default model for a provider."""
-    # TOTP-gated: model changes affect inference behavior
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
     registry = _load_registry()
     backends = registry.get("backends", {})
 
@@ -418,19 +401,18 @@ async def test_inference_connection():
 
 
 # ---------------------------------------------------------------------------
-# Mutation API endpoints (Source.md §6 — TOTP-gated for promote/reject)
+# Mutation API endpoints (Source.md §6 — operator-confirmed promote/reject)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/api/mutation/promote")
 async def mutation_promote(req: MutationActionRequest):
-    """Promote a mutation candidate to production (TOTP-gated).
+    """Promote a mutation candidate to production.
 
-    The JS side calls open_totp_modal() first, then posts here on verification.
-    Server-side TOTP verification is enforced — direct POST without valid code is rejected.
-    Updates candidate status to 'approved' and records the promotion.
+    Requires an explicit operator action (single-operator, loopback-only; no
+    second-factor gate). Updates candidate status to 'approved' and records the
+    promotion.
     """
-    # TOTP disabled
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -460,11 +442,7 @@ async def mutation_promote(req: MutationActionRequest):
 
 @router.post("/api/mutation/reject")
 async def mutation_reject(req: MutationActionRequest):
-    """Reject a mutation candidate (TOTP-gated per CLAUDE.md)."""
-    # TOTP verification — ALL mutation actions require operator TOTP
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    """Reject a mutation candidate. Requires an explicit operator action."""
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -486,12 +464,11 @@ async def mutation_reject(req: MutationActionRequest):
 
 @router.post("/api/mutation/rollback")
 async def mutation_rollback(req: MutationActionRequest):
-    """Rollback a promoted mutation (TOTP-gated).
+    """Rollback a promoted mutation.
 
     Reverts the candidate to 'rolled_back' status and records in mutation_log.
-    Server-side TOTP verification is enforced.
+    Requires an explicit operator action.
     """
-    # TOTP disabled
     cfg = get_config()
     db = data_layer.get_readwrite_db(cfg.sqlite_path)
     try:
@@ -763,11 +740,6 @@ def _get_reconciliation_status(duckdb_path: str) -> dict:
         }
 
 
-def _verify_totp(totp_code: str = "") -> tuple[bool, str]:
-    """TOTP verification disabled — always passes."""
-    return True, ""
-
-
 @router.get("/api/settings/cost")
 async def get_cost_settings():
     """Return current budget state, pricing table, and reconciliation status."""
@@ -789,12 +761,7 @@ async def get_cost_settings():
 
 @router.post("/api/settings/cost/caps")
 async def save_cost_caps(req: CostCapsRequest):
-    """Update budget caps (TOTP-gated). Writes to risk.toml billing section."""
-    # TOTP verification
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
-
+    """Update budget caps. Writes to risk.toml billing section."""
     if req.daily_cap <= 0 or req.monthly_cap <= 0:
         return JSONResponse(
             {"ok": False, "error": "Caps must be greater than zero"},

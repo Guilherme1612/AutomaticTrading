@@ -12,14 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
-from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from pmacs.cortex.health import write_heartbeat
-from pmacs.cortex.totp import verify_totp
 from pmacs.config import data_dir as _data_dir
 from pmacs.nervous.auth import SessionManager
-from pmacs.nervous.rate_limit import BUCKETS
 from pmacs.nervous.sse_publisher import SSEPublisher, set_global_publisher, publish_system_event
 
 # ---------------------------------------------------------------------------
@@ -79,85 +76,6 @@ async def heartbeat_middleware(request: Request, call_next):
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-# ---------------------------------------------------------------------------
-# TOTP verification endpoint (Architecture.md §13, §4.4)
-# ---------------------------------------------------------------------------
-
-_totp_secret: str = ""
-
-
-def set_totp_secret(secret: str) -> None:
-    """Set the TOTP secret for verification (called at startup)."""
-    global _totp_secret
-    _totp_secret = secret
-
-
-class TOTPVerifyRequest(BaseModel):
-    """Request body for TOTP verification."""
-    model_config = {"from_attributes": True}
-
-    totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
-    action_id: str = Field(min_length=1)
-
-
-class TOTPVerifyResponse(BaseModel):
-    """Response body for TOTP verification."""
-    model_config = {"from_attributes": True}
-
-    verified: bool
-    action_id: str
-    error: str = ""
-
-
-@router.post("/api/totp/verify", response_model=TOTPVerifyResponse)
-@app.post("/api/totp/verify", response_model=TOTPVerifyResponse)
-async def totp_verify(body: TOTPVerifyRequest, request: Request) -> TOTPVerifyResponse:
-    """Verify a TOTP code for a given action.
-
-    Rate limited to 5 attempts per minute.
-    Audit logged on every attempt.
-    """
-    # Rate limiting (Architecture.md §16.3)
-    if not BUCKETS["totp_verify"].acquire():
-        return TOTPVerifyResponse(
-            verified=False,
-            action_id=body.action_id,
-            error="Rate limited: too many attempts",
-        )
-
-    # Verify TOTP code
-    if not _totp_secret:
-        return TOTPVerifyResponse(
-            verified=False,
-            action_id=body.action_id,
-            error="TOTP not configured",
-        )
-
-    success = verify_totp(_totp_secret, body.totp_code)
-
-    # Audit log (Architecture.md §5.1) — cycle_id is "totp" for non-cycle actions
-    try:
-        from pmacs.storage.audit import AuditWriter
-        audit_path = Path("logs/audit.log")
-        writer = AuditWriter(audit_path)
-        writer.append(
-            "totp_verify_attempt",
-            {"action_id": body.action_id, "success": success},
-            cycle_id="totp",
-        )
-        writer.close()
-    except Exception:
-        pass  # Audit failure must not block the endpoint
-
-    if success:
-        return TOTPVerifyResponse(verified=True, action_id=body.action_id)
-    return TOTPVerifyResponse(
-        verified=False,
-        action_id=body.action_id,
-        error="Invalid TOTP code",
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -88,11 +88,10 @@ _COMPANY_SUBSECTORS: dict[str, str] = {
 
 
 class TickerActionRequest(BaseModel):
-    """Request body for TOTP-gated universe actions."""
+    """Request body for operator-confirmed universe actions."""
     ticker: str = ""
     tickers: list[str] = []
     subsector: str = ""
-    totp_code: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -321,11 +320,7 @@ async def universe_remove(req: TickerActionRequest):
 
 @router.post("/api/universe/bulk-tag")
 async def universe_bulk_tag(req: TickerActionRequest):
-    """Tag selected tickers with a sub-sector (TOTP-gated, Source.md §17.6)."""
-    from pmacs.web.routes.settings import _verify_totp as _verify_totp
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    """Tag selected tickers with a sub-sector (operator-confirmed, Source.md §17.6)."""
     if not req.tickers or not req.subsector:
         return JSONResponse({"ok": False, "error": "tickers and subsector required"}, status_code=400)
 
@@ -350,11 +345,7 @@ async def universe_bulk_tag(req: TickerActionRequest):
 
 @router.post("/api/universe/bulk-remove")
 async def universe_bulk_remove(req: TickerActionRequest):
-    """Remove selected tickers from universe (TOTP-gated, Source.md §17.6)."""
-    from pmacs.web.routes.settings import _verify_totp as _verify_totp
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    """Remove selected tickers from universe (operator-confirmed, Source.md §17.6)."""
     if not req.tickers:
         return JSONResponse({"ok": False, "error": "tickers required"}, status_code=400)
 
@@ -377,5 +368,5 @@ async def universe_bulk_remove(req: TickerActionRequest):
 async def universe_index_overlay(request: Request):
     """Toggle Nasdaq-100 index overlay (Source.md §17.5)."""
     body = await request.json()
-    # No TOTP required for overlay toggle — read-only visual change
+    # No operator confirmation required for overlay toggle — read-only visual change
     return JSONResponse({"ok": True, "enabled": body.get("enabled", False)})

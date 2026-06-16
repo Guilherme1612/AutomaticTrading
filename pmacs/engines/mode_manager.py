@@ -1,9 +1,9 @@
-"""Mode management engine — mode transitions with TOTP gating.
+"""Mode management engine — mode transitions with operator-confirmation gating.
 
 Spec ref: Architecture.md §4.6, Source.md §1, Phases.md §3
 Mode ladder: INSTALLING -> SHADOW -> PAPER -> PAPER_VALIDATED -> LIVE_EARLY -> LIVE_STANDARD -> LIVE_EXPANDED
-All LIVE transitions require operator TOTP verification.
-PAPER → PAPER_VALIDATED also requires TOTP per Source.md line 147.
+All LIVE transitions require an explicit operator confirmation.
+PAPER → PAPER_VALIDATED also requires operator confirmation per Source.md.
 """
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ MODE_RANK: dict[Mode, int] = {
     Mode.LIVE_EXPANDED: 6,
 }
 
-# Modes that require TOTP verification to transition INTO (promotion only)
-# Spec: Source.md line 147 — PAPER_VALIDATED and all LIVE modes require TOTP
-TOTP_REQUIRED_MODES: frozenset[Mode] = frozenset({
+# Modes that require explicit operator confirmation to transition INTO (promotion only)
+# Spec: Source.md — PAPER_VALIDATED and all LIVE modes require operator confirmation
+CONFIRMATION_REQUIRED_MODES: frozenset[Mode] = frozenset({
     Mode.PAPER_VALIDATED,
     Mode.LIVE_EARLY,
     Mode.LIVE_STANDARD,
@@ -30,7 +30,7 @@ TOTP_REQUIRED_MODES: frozenset[Mode] = frozenset({
 })
 
 # Backward compat alias
-LIVE_MODES = TOTP_REQUIRED_MODES
+LIVE_MODES = CONFIRMATION_REQUIRED_MODES
 
 
 def can_transition(from_mode: Mode, to_mode: Mode) -> bool:
@@ -42,7 +42,7 @@ def transition_mode(
     from_mode: Mode,
     to_mode: Mode,
     reason: str,
-    totp_verified: bool = False,
+    operator_confirmed: bool = False,
     triggered_by: str = "OPERATOR",
 ) -> ModeTransition:
     """Attempt a mode transition.
@@ -51,14 +51,14 @@ def transition_mode(
         from_mode: Current mode.
         to_mode: Target mode.
         reason: Human-readable reason for the transition.
-        totp_verified: Whether operator TOTP has been verified.
+        operator_confirmed: Whether the operator explicitly confirmed the action.
         triggered_by: "OPERATOR" or "AUTO_DEMOTION".
 
     Returns:
         ModeTransition record on success.
 
     Raises:
-        ValueError: If transition is invalid or TOTP is missing for required modes.
+        ValueError: If transition is invalid or operator confirmation is missing for required modes.
     """
     if not can_transition(from_mode, to_mode):
         raise ValueError(
@@ -66,18 +66,18 @@ def transition_mode(
             f"Valid targets: {[m.value for m in VALID_MODE_TRANSITIONS.get(from_mode, set())]}"
         )
 
-    # TOTP required for promotions to TOTP_REQUIRED_MODES (not demotions)
+    # Operator confirmation required for promotions to CONFIRMATION_REQUIRED_MODES (not demotions)
     is_promotion = MODE_RANK.get(to_mode, 0) > MODE_RANK.get(from_mode, 0)
-    if to_mode in TOTP_REQUIRED_MODES and is_promotion and not totp_verified:
+    if to_mode in CONFIRMATION_REQUIRED_MODES and is_promotion and not operator_confirmed:
         raise ValueError(
-            f"Mode transition to {to_mode.value} requires TOTP verification"
+            f"Mode transition to {to_mode.value} requires explicit operator confirmation"
         )
 
     return ModeTransition(
         from_mode=from_mode,
         to_mode=to_mode,
         reason=reason,
-        operator_totp_verified=totp_verified,
+        operator_confirmed=operator_confirmed,
         triggered_by=triggered_by,
     )
 
@@ -87,6 +87,6 @@ def get_valid_transitions(mode: Mode) -> list[Mode]:
     return list(VALID_MODE_TRANSITIONS.get(mode, set()))
 
 
-def requires_totp(to_mode: Mode) -> bool:
-    """Check if transitioning to this mode requires TOTP."""
+def requires_confirmation(to_mode: Mode) -> bool:
+    """Check if transitioning to this mode requires explicit operator confirmation."""
     return to_mode in LIVE_MODES

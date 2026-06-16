@@ -1253,9 +1253,9 @@ class MutationCandidate(BaseModel):
 
 **The Mutation Engine MUST NOT make irreversible changes.** This is enforced at five levels:
 
-**Design principle: The Mutation Engine is an advisor, not an actor.** All mutations — prompts, weights, thresholds, affinities — require explicit operator TOTP to apply. The system surfaces recommendations with full statistical evidence; the operator makes the final call. This prevents the flywheel from degrading the base system even in edge cases where A/B testing produces a false positive.
+**Design principle: The Mutation Engine is an advisor, not an actor.** All mutations — prompts, weights, thresholds, affinities — require explicit operator confirmation to apply. The system surfaces recommendations with full statistical evidence; the operator makes the final call. This prevents the flywheel from degrading the base system even in edge cases where A/B testing produces a false positive.
 
-**Level 1: Structural separation.** The Mutation Engine process (`pmacs-mutation`) cannot write to production config. It writes proposals to SQLite `mutation_proposals`. The promotion function lives in `pmacs-nervous` and is triggered by auto-promote rules or operator TOTP. The mutation process physically cannot modify `model_registry.json`, prompt files, or threshold configs.
+**Level 1: Structural separation.** The Mutation Engine process (`pmacs-mutation`) cannot write to production config. It writes proposals to SQLite `mutation_proposals`. The promotion function lives in `pmacs-nervous` and is triggered by auto-promote rules or operator confirmation. The mutation process physically cannot modify `model_registry.json`, prompt files, or threshold configs.
 
 **Level 2: Baseline snapshot.** When a candidate is proposed, the CURRENT production config for that target is snapshot into `baseline_config` AND `rollback_config`. Both fields are immutable once written. Even if the production config is modified between proposal and promotion, the rollback always returns to the snapshot-at-proposal state.
 
@@ -1341,7 +1341,7 @@ The following are excluded from the Mutation Engine's candidate space:
 - The audit log format (immutable)
 - The kill-switch triggers (code-versioned)
 - The Mutation Engine's own rules (this section; prevents self-referential mutation)
-- The TOTP requirement for operator-gated mutations (security invariant)
+- The operator-confirmation requirement for operator-gated mutations (security invariant)
 
 These are defended by CI grep-fails on mutation candidates targeting excluded paths.
 

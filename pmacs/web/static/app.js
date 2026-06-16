@@ -1,6 +1,6 @@
 /**
  * PMACS Dashboard client-side JavaScript.
- * Handles SSE, Cmd-K palette, TOTP input, toast notifications,
+ * Handles SSE, Cmd-K palette, toast notifications,
  * keyboard shortcuts, notification policy, and accessibility.
  *
  * Spec: Source.md §13.2 (chrome), §13.5 (notifications), §13.6 (shortcuts), §13.7 (a11y)
@@ -529,7 +529,6 @@ var CMD_K_ACTIONS = [
     { name: "Failures by taxonomy", action: "openTaxonomyBrowser", category: "action" },
     { name: "Promote all P1 queue", action: "promoteAllP1Global", category: "action" },
     { name: "Show shortcuts", action: "showShortcuts", category: "action" },
-    { name: "Open TOTP modal", action: "openTOTPManual", category: "action" },
 ];
 
 // Error codes from Architecture.md §5.5 — searchable in palette
@@ -537,7 +536,6 @@ var CMD_K_ERROR_CODES = [
     { name: "E001 — Queue pop on empty", href: "/debug?event=E001", category: "audit" },
     { name: "E002 — Cycle timeout exceeded", href: "/debug?event=E002", category: "audit" },
     { name: "E003 — Inference connection lost", href: "/debug?event=E003", category: "audit" },
-    { name: "E004 — TOTP verification failed", href: "/debug?event=E004", category: "audit" },
     { name: "E005 — Audit chain hash mismatch", href: "/debug?event=E005", category: "audit" },
     { name: "E006 — Broker connection error", href: "/debug?event=E006", category: "audit" },
     { name: "E010 — Holding state invalid transition", href: "/debug?event=E010", category: "audit" },
@@ -834,7 +832,7 @@ function openTaxonomyBrowser() {
 }
 
 function promoteAllP1Global() {
-    open_totp_modal({
+    confirmAction({
         actionId: "pipeline.promote_all_p1",
         description: "Promote all P1 queue items",
         consequences: "All items in the P1 priority queue will be promoted for immediate processing.",
@@ -847,14 +845,6 @@ function promoteAllP1Global() {
 
 function showShortcuts() {
     document.getElementById("shortcut-overlay").classList.remove("hidden");
-}
-
-function openTOTPManual() {
-    open_totp_modal({
-        actionId: "manual_totp_verify",
-        description: "Manual TOTP verification",
-        consequences: "No specific action gated — verify your TOTP code.",
-    });
 }
 
 // ─── Keyboard Shortcuts (Source.md §13.6) ───────────────────────────────────
@@ -878,7 +868,7 @@ function toggleSidebar() {
 document.addEventListener("keydown", function (e) {
     var isCmd = e.metaKey || e.ctrlKey;
     var isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT";
-    var activeModal = isElementVisible("cmd-k") || isElementVisible("totp-modal") ||
+    var activeModal = isElementVisible("cmd-k") ||
                       isElementVisible("shortcut-overlay") || isElementVisible("blocking-modal");
 
     // Cmd-K: command palette
@@ -916,17 +906,6 @@ document.addEventListener("keydown", function (e) {
         return;
     }
 
-    // Cmd-T: open TOTP modal with generic context (when no text input focused)
-    if (isCmd && e.key === "t" && !isInput) {
-        e.preventDefault();
-        open_totp_modal({
-            actionId: "manual_totp_verify",
-            description: "Manual TOTP verification",
-            consequences: "No specific action gated — verify your TOTP code.",
-        });
-        return;
-    }
-
     // Esc: close modals/drawers/dismiss toasts
     if (e.key === "Escape") {
         var ccModal = document.getElementById("cycle-compare-modal");
@@ -935,7 +914,6 @@ document.addEventListener("keydown", function (e) {
             return;
         }
         closeCmdK();
-        closeTotpModal();
         var _shortcutOverlay = document.getElementById("shortcut-overlay");
         if (_shortcutOverlay) _shortcutOverlay.classList.add("hidden");
         // blocking-modal: Don't close with Esc (requires explicit acknowledgment)
@@ -1011,7 +989,7 @@ document.addEventListener("click", function (e) {
 function handleKillSwitch() {
     showBlockingModal(
         "Engage Kill Switch?",
-        "All trading halts. Stop-loss execution continues. TOTP not required to engage.",
+        "All trading halts. Stop-loss execution continues. No confirmation required to engage.",
         [
             { label: "Cancel", primary: false },
             {
@@ -1040,334 +1018,37 @@ function handleKillSwitch() {
     );
 }
 
-// ─── TOTP Modal (Source.md §13.2, §13.3 TOTPField) ───────────────────────
+// ─── Operator action confirmation ────────────────────────
 //
-// Reusable parameterizable TOTP modal. Any gated action calls open_totp_modal({...}).
-//
-// Gated actions per Source.md §6 (Decision rights matrix):
-//   Settings: broker key edit, catastrophe-net % change, kill-switch threshold,
-//             mutation promote/reject/rollback, persona enable/disable, mode override
-//   Universe: add/remove ticker, bulk tag/remove
-//   Pipeline: force exit (active only)
-//   Cortex: kill switch disengage (engage does NOT require TOTP)
+// Single-operator, loopback-only system: there is no second-factor gate.
+// Sensitive actions still require an explicit operator action (a click, plus a
+// typed confirmation for destructive ones). confirmAction() executes the action
+// directly; every action is recorded in the hash-chained audit log server-side.
 
-var totpModalState = {
-    actionId: "",
-    callbackUrl: "",
-    confirmText: "",
-    pendingAction: null,  // optional function to call on success
-    extra: {},            // action-specific data (e.g. ticker, tickers)
-    verifiedCode: "",     // TOTP code after verification
-};
-
-/**
- * Open the TOTP modal with action context.
- * @param {Object} opts
- * @param {string} opts.actionId         — unique action identifier
- * @param {string} opts.description      — human-readable action description
- * @param {string} opts.consequences     — what happens if confirmed
- * @param {string} [opts.confirmText]    — text operator must type (e.g. "KILL")
- * @param {string} [opts.callbackUrl]    — URL to POST after TOTP verified
- * @param {Function} [opts.onSuccess]    — function to call on verification success
- * @param {Object} [opts.extra]          — action-specific data to pass through
- */
-function open_totp_modal(opts) {
-    // TOTP disabled — immediately execute the action with a dummy code
-    totpModalState.actionId = opts.actionId || "";
-    totpModalState.callbackUrl = opts.callbackUrl || "";
-    totpModalState.confirmText = opts.confirmText || "";
-    totpModalState.pendingAction = opts.onSuccess || null;
-    totpModalState.extra = opts.extra || {};
-    totpModalState.verifiedCode = "000000";
-
-    // Skip modal, go straight to action
-    if (totpModalState.callbackUrl) {
-        var body = Object.assign({}, totpModalState.extra, {
-            totp_code: "000000",
-            action_id: totpModalState.actionId
-        });
-        fetch(totpModalState.callbackUrl, {
+function confirmAction(opts) {
+    opts = opts || {};
+    if (opts.callbackUrl) {
+        var body = Object.assign({}, opts.extra || {}, { action_id: opts.actionId || "" });
+        fetch(opts.callbackUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
-        }).then(function(r) { return r.json(); }).then(function(data) {
+        }).then(function (r) { return r.json(); }).then(function (data) {
             if (data.ok || data.verified) {
-                if (totpModalState.pendingAction) totpModalState.pendingAction("000000");
-                show_toast("Action completed", "success");
+                if (opts.onSuccess) opts.onSuccess(data);
+                show_toast(data.message || "Action completed", "success");
+                if (data.reload) window.location.reload();
             } else {
                 show_toast(data.error || "Action failed", "error");
             }
-        }).catch(function(err) {
+        }).catch(function (err) {
             show_toast("Request failed: " + err.message, "error");
         });
         return;
     }
-    if (totpModalState.pendingAction) {
-        totpModalState.pendingAction("000000");
-        return;
-    }
-    // Fallback: show modal if no action configured
-    var modal = document.getElementById("totp-modal");
-    if (!modal) return;
-
-    // Set data attributes
-    modal.setAttribute("data-action-id", totpModalState.actionId);
-    modal.setAttribute("data-action-description", opts.description || "");
-    modal.setAttribute("data-consequences", opts.consequences || "");
-    modal.setAttribute("data-confirm-text", totpModalState.confirmText);
-    modal.setAttribute("data-callback-url", totpModalState.callbackUrl);
-
-    // Populate visible elements
-    document.getElementById("totp-action-description").textContent = opts.description || "";
-    document.getElementById("totp-consequences").textContent = opts.consequences || "";
-
-    // Confirmation text field (for destructive actions)
-    var confirmGroup = document.getElementById("totp-confirm-group");
-    var confirmInput = document.getElementById("totp-confirm-input");
-    var confirmRequiredText = document.getElementById("totp-confirm-required-text");
-    if (totpModalState.confirmText) {
-        confirmGroup.classList.remove("hidden");
-        confirmRequiredText.textContent = totpModalState.confirmText;
-        confirmInput.value = "";
-    } else {
-        confirmGroup.classList.add("hidden");
-        confirmInput.value = "";
-    }
-
-    // Clear previous state
-    var digits = modal.querySelectorAll(".totp-digit");
-    digits.forEach(function (d) { d.value = ""; });
-    document.getElementById("totp-error").classList.add("hidden");
-    document.getElementById("totp-confirm-mismatch").classList.add("hidden");
-
-    // Reset confirm button state
-    updateTotpConfirmButton();
-
-    // Show modal
-    modal.classList.remove("hidden");
-
-    // Focus first TOTP digit
-    if (digits.length > 0) {
-        digits[0].focus();
-    }
+    if (opts.onSuccess) opts.onSuccess({ ok: true });
 }
 
-function closeTotpModal() {
-    var modal = document.getElementById("totp-modal");
-    if (modal) modal.classList.add("hidden");
-    totpModalState.pendingAction = null;
-}
-
-/**
- * Check whether the Confirm button should be enabled.
- * Enabled when: TOTP code is 6 digits AND (no confirm text required OR confirm text matches).
- */
-function updateTotpConfirmButton() {
-    var btn = document.getElementById("totp-confirm-btn");
-    if (!btn) return;
-
-    // Check TOTP digits
-    var digits = document.querySelectorAll("#totp-modal .totp-digit");
-    var code = "";
-    digits.forEach(function (d) { code += d.value; });
-    var totpComplete = code.length === 6;
-
-    // Check confirmation text
-    var confirmRequired = totpModalState.confirmText || "";
-    var confirmInput = document.getElementById("totp-confirm-input");
-    var confirmMatch = true;
-    if (confirmRequired) {
-        confirmMatch = confirmInput.value === confirmRequired;
-        var mismatch = document.getElementById("totp-confirm-mismatch");
-        if (confirmInput.value && !confirmMatch) {
-            mismatch.classList.remove("hidden");
-        } else {
-            mismatch.classList.add("hidden");
-        }
-    }
-
-    btn.disabled = !(totpComplete && confirmMatch);
-}
-
-/**
- * Submit TOTP code to /api/totp/verify, then execute the gated action on success.
- */
-function submitTotp() {
-    var digits = document.querySelectorAll("#totp-modal .totp-digit");
-    var code = "";
-    digits.forEach(function (d) { code += d.value; });
-
-    if (code.length !== 6) {
-        showToast("Enter all 6 digits", "warning");
-        return;
-    }
-
-    // Check confirmation text if required
-    if (totpModalState.confirmText) {
-        var confirmInput = document.getElementById("totp-confirm-input");
-        if (confirmInput.value !== totpModalState.confirmText) {
-            document.getElementById("totp-confirm-mismatch").classList.remove("hidden");
-            return;
-        }
-    }
-
-    var errorEl = document.getElementById("totp-error");
-    var confirmBtn = document.getElementById("totp-confirm-btn");
-    confirmBtn.disabled = true;
-    confirmBtn.textContent = "Verifying...";
-
-    fetch("/api/totp/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            code: code,
-            action_id: totpModalState.actionId,
-        }),
-    })
-    .then(function (resp) {
-        return resp.json();
-    })
-    .then(function (data) {
-        if (!data.verified) {
-            throw new Error(data.error || "Verification failed");
-        }
-        // TOTP verified — close modal
-        totpModalState.verifiedCode = code;
-        closeTotpModal();
-        showToast("Action confirmed", "success");
-
-        // Execute gated action
-        if (totpModalState.callbackUrl) {
-            executeGatedAction(totpModalState.callbackUrl, totpModalState.actionId, code);
-        } else if (totpModalState.pendingAction) {
-            totpModalState.pendingAction({verified: true, code: code, extra: totpModalState.extra});
-        }
-    })
-    .catch(function (err) {
-        // Keep modal open, show error
-        errorEl.textContent = err.message || "Verification failed. Try again.";
-        errorEl.classList.remove("hidden");
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = "Confirm";
-        // Clear digits for retry
-        digits.forEach(function (d) { d.value = ""; });
-        if (digits.length > 0) digits[0].focus();
-        updateTotpConfirmButton();
-    });
-}
-
-/**
- * Execute a gated action by POSTing to the callback URL.
- * Includes TOTP code and any extra data from the modal state.
- */
-function executeGatedAction(callbackUrl, actionId, totpCode) {
-    var body = Object.assign(
-        { action_id: actionId, totp_code: totpCode || "" },
-        totpModalState.extra || {}
-    );
-    fetch(callbackUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-    })
-    .then(function (resp) {
-        if (resp.ok) {
-            return resp.json();
-        }
-        return resp.json().then(function (data) {
-            throw new Error(data.detail || "Action failed");
-        });
-    })
-    .then(function (data) {
-        showToast(data.message || "Action completed", "success");
-        // Reload page to reflect changes
-        if (data.reload) {
-            window.location.reload();
-        }
-    })
-    .catch(function (err) {
-        showToast("Action failed: " + (err.message || "Unknown error"), "error");
-    });
-}
-
-// TOTP input auto-advance and confirmation-text validation
-document.addEventListener("DOMContentLoaded", function () {
-    var modal = document.getElementById("totp-modal");
-    if (!modal) return;
-
-    var digits = modal.querySelectorAll(".totp-digit");
-    digits.forEach(function (digit, index) {
-        // Handle digit keys via keydown for reliable auto-advance
-        digit.addEventListener("keydown", function (e) {
-            // Digit keys (0-9)
-            if (e.key >= "0" && e.key <= "9" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-                e.preventDefault();
-                e.target.value = e.key;
-                updateTotpConfirmButton();
-                if (index < digits.length - 1) {
-                    digits[index + 1].focus();
-                }
-                // Auto-submit on last digit
-                if (index === digits.length - 1) {
-                    var confirmRequired = totpModalState.confirmText || "";
-                    if (!confirmRequired || document.getElementById("totp-confirm-input").value === confirmRequired) {
-                        submitTotp();
-                    }
-                }
-                return;
-            }
-            // Backspace: clear current or go back
-            if (e.key === "Backspace") {
-                if (!e.target.value && index > 0) {
-                    e.preventDefault();
-                    digits[index - 1].focus();
-                } else {
-                    e.target.value = "";
-                    updateTotpConfirmButton();
-                }
-                return;
-            }
-        });
-
-        // Handle paste: distribute digits across all fields
-        digit.addEventListener("paste", function (e) {
-            e.preventDefault();
-            var text = (e.clipboardData || window.clipboardData).getData("text").replace(/[^0-9]/g, "");
-            for (var j = 0; j < Math.min(text.length, digits.length); j++) {
-                digits[j].value = text[j];
-            }
-            var focusIndex = Math.min(text.length, digits.length) - 1;
-            if (focusIndex >= 0) digits[focusIndex].focus();
-            updateTotpConfirmButton();
-            if (text.length >= 6) {
-                var confirmRequired = totpModalState.confirmText || "";
-                if (!confirmRequired || document.getElementById("totp-confirm-input").value === confirmRequired) {
-                    submitTotp();
-                }
-            }
-        });
-    });
-
-    // Confirmation text input validation
-    var confirmInput = document.getElementById("totp-confirm-input");
-    if (confirmInput) {
-        confirmInput.addEventListener("input", function () {
-            updateTotpConfirmButton();
-        });
-    }
-
-    // Cancel button
-    var cancelBtn = document.getElementById("totp-cancel-btn");
-    if (cancelBtn) {
-        cancelBtn.addEventListener("click", closeTotpModal);
-    }
-
-    // Confirm button
-    var confirmBtn = document.getElementById("totp-confirm-btn");
-    if (confirmBtn) {
-        confirmBtn.addEventListener("click", submitTotp);
-    }
-});
 
 // ─── Debug Page: Event Filtering ────────────────────────────────────────────
 
@@ -2015,20 +1696,6 @@ var _origCloseCmdK = closeCmdK;
 closeCmdK = function () {
     releaseFocus();
     _origCloseCmdK();
-};
-
-// TOTP modal focus trap wiring
-var _origOpenTotpModal = open_totp_modal;
-open_totp_modal = function (opts) {
-    _origOpenTotpModal(opts);
-    var modal = document.getElementById("totp-modal");
-    if (modal) trapFocus(modal);
-};
-
-var _origCloseTotpModal = closeTotpModal;
-closeTotpModal = function () {
-    releaseFocus();
-    _origCloseTotpModal();
 };
 
 // Blocking modal focus trap wiring

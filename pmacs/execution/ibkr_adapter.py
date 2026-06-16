@@ -11,7 +11,7 @@ Spec constraints:
 
 Wiring:
   1. Operator completes wizard → broker credentials stored in Keychain
-  2. Mode promoted to LIVE_EARLY via TOTP-gated promotion
+  2. Mode promoted to LIVE_EARLY via operator-confirmed promotion
   3. Nervous creates IBKRLiveAdapter via create_adapter(mode="LIVE_EARLY", ...)
   4. All trades signed by Ed25519 before submission
 

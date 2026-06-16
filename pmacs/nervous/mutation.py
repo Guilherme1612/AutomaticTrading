@@ -76,7 +76,7 @@ def apply_candidate_to_registry(
     """Apply a mutation candidate to model_registry.json atomically.
 
     This is the ONLY function that writes to model_registry.json for mutations.
-    Called from pmacs-nervous after operator TOTP verification.
+    Called from pmacs-nervous after explicit operator confirmation.
 
     Steps:
     1. Read current model_registry.json
@@ -153,7 +153,7 @@ def apply_candidate_to_registry(
     writer.append("mutation_operator_promoted", audit_payload, cycle_id=cycle_id)
     writer.close()
 
-    # 6. SSE event — mutation.promoted when operator TOTP-applies a candidate
+    # 6. SSE event — mutation.promoted when the operator applies a candidate
     if sse_publisher is not None:
         sse_publisher.publish("mutation", "mutation.promoted", {
             "mutation_id": proposal_id,

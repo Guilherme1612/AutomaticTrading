@@ -195,18 +195,17 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **What gets built:**
 - `pmacs/cortex/daemon.py` — main loop
 - `pmacs/cortex/health.py` — heartbeat monitoring
-- `pmacs/cortex/kill_switch.py` — engage/disengage with TOTP
+- `pmacs/cortex/kill_switch.py` — engage/disengage with operator confirmation
 - `pmacs/cortex/boot_detector.py` — gap detection
 - `pmacs/cortex/crash_loop_detector.py`
 - `pmacs/cortex/self_check.py` — meta-monitor
 - `pmacs/cortex/clock_monitor.py`
 - `pmacs/cortex/disk_monitor.py`
-- `pmacs/cortex/totp.py` — TOTP verification
 - `pmacs/nervous/orchestrator.py` — stub cycle (open → close, no symbols)
 - `pmacs/nervous/api.py` — FastAPI app with `/events` SSE
 - `pmacs/nervous/sse_publisher.py`
 - `pmacs/nervous/checkpoint.py` — cycle resume
-- `pmacs/nervous/auth.py` — session token + TOTP verification
+- `pmacs/nervous/auth.py` — session token verification
 - `pmacs/execution/service.py` — stub (accepts TradePlan via UDS, logs, returns mock fill)
 - `pmacs/execution/signing.py` — Ed25519 keypair generation and signing
 - `launchd/*.plist` — all 8 plists
@@ -220,7 +219,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 **Exit test:**
 1. All 8 processes start via launchd, heartbeat within 10s, Cortex monitors all
-2. `pytest tests/integration/test_kill_switch.py` — engage → verify no new cycles start → disengage with TOTP → cycles resume
+2. `pytest tests/integration/test_kill_switch.py` — engage → verify no new cycles start → disengage with operator confirmation → cycles resume
 3. `pytest tests/integration/test_cycle_stub.py` — Nervous opens a cycle, writes audit open + close, SSE emits cycle.open + cycle.close
 4. Ed25519 signing: sign a test TradePlan → verify signature → tamper one byte → verification fails
 5. Crash loop: restart a process 5 times in 60s → Cortex marks BROKEN_CRASH_LOOP → kill switch engages
@@ -321,19 +320,19 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/sim/alpaca_paper_adapter.py` — Alpaca paper order submission + fill polling
 - `pmacs/execution/alpaca_adapter.py` — real adapter (not stub)
 - `pmacs/execution/catastrophe_net.py` — broker-side wide stop placement at entry
-- `pmacs/installer/wizard.py` + `steps/*.py` — the 11-step wizard (`Source.md §12`)
+- `pmacs/installer/wizard.py` + `steps/*.py` — the 10-step wizard (`Source.md §12`)
 - Mode management: `INSTALLING → SHADOW + PAPER` transition
 - `pmacs/schemas/system.py` — Mode enum, mode transition logic
 - SQLite `mode_history`, `paper_account` tables
 - Nervous orchestrator updated: step 13 concludes with TradePlan.sign_and_send() + catastrophe-net stop for PAPER mode
 - `tests/integration/test_paper_trade.py` — submit order → receive fill → update ledger → update holding → audit
-- `tests/integration/test_wizard.py` — run all 11 steps with mocked APIs
+- `tests/integration/test_wizard.py` — run all 10 steps with mocked APIs
 - `tests/e2e/test_smoke_cycle.py` — the smoke-test cycle from wizard step 10
 
 **Dependencies:** Phase 7 (full decision pipeline to produce TradePlans).
 
 **Exit test:**
-1. Wizard completes all 11 steps on a fresh machine (prerequisite: `ops/install_system_users.sh` has been run with sudo to create _pmacs_* system users) (with mocked API keys in test mode)
+1. Wizard completes all 10 steps on a fresh machine (prerequisite: `ops/install_system_users.sh` has been run with sudo to create _pmacs_* system users) (with mocked API keys in test mode)
 2. `pytest tests/integration/test_paper_trade.py` — a STRONG_BUY ticker → TradePlan signed → submitted to Alpaca paper → fill received → ledger updated → holding transitions to ACTIVE → catastrophe-net stop placed → audit trail complete
 3. `pytest tests/e2e/test_smoke_cycle.py` — full cycle on synthetic fixtures; audit chain verifies; all engines fire
 4. SHADOW mode concurrently captures audit-only signals (no fake-trades in SHADOW)
@@ -382,11 +381,11 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/web/sse_client.py` — subscribes to Nervous `/events`
 - `pmacs/web/routes/*.py` — all 7 page routes (dashboard, agents, pipeline, universe, cortex, debug, settings)
 - `pmacs/web/templates/*.html` — Jinja2 + HTMX
-- `pmacs/web/components/*.html` — reusable partials (card, statblock, persona_card, ticker_chip, totp_field, etc.)
+- `pmacs/web/components/*.html` — reusable partials (card, statblock, persona_card, ticker_chip, etc.)
 - `pmacs/web/static/` — Tailwind CSS, D3 for Sankey, minimal JS
 - Visual identity tokens from `Source.md §13.1`
 - Cmd-K command palette
-- TOTP modal
+- confirmation modal
 - Toast notifications
 - All empty states and loading states per `Source.md §13.4`
 - `tests/e2e/test_dashboard_renders.py` — each page returns 200 with expected content
@@ -394,16 +393,16 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **Dependencies:** Phase 8 (data exists in DBs), Phase 9 (stop-loss events to display).
 
 **Exit test:**
-1. All 7 pages render at `localhost:8001` with real cycle data
+1. All 7 pages render at `localhost:8000` with real cycle data
 2. Agents page shows persona progress during an active cycle (SSE-driven, not polling)
 3. Pipeline page shows verdict cards in kanban columns
 4. Universe page shows all seeded tickers with correct flags
 5. Cortex page shows heartbeats and audit chain status
 6. Debug page streams live events
-7. Settings page renders all sections; TOTP modal appears on gated actions
+7. Settings page renders all sections; confirmation modal appears on gated actions
 8. Dashboard page shows portfolio summary, risk metrics, and recent decisions
 9. Operator can reorder queue from Pipeline right rail
-10. Operator can add a ticker from Universe page (TOTP-gated)
+10. Operator can add a ticker from Universe page (operator-confirmed)
 
 **Duration estimate:** 10-14 days (largest UI phase).
 
@@ -522,7 +521,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 **Exit test:**
 1. `pytest tests/unit/test_stat_test.py` — Welch's t-test produces correct p-values on known distributions; Cohen's d correct
-2. `pytest tests/integration/test_mutation_lifecycle.py` — synthetic FDE cluster (N=5 MOAT_DRIFT_OVERESTIMATE) → candidate generated → A/B started → 20 synthetic cycles → stat test → result classified → if significant: staged as recommendation for operator TOTP approval (ALL mutations require operator confirmation)
+2. `pytest tests/integration/test_mutation_lifecycle.py` — synthetic FDE cluster (N=5 MOAT_DRIFT_OVERESTIMATE) → candidate generated → A/B started → 20 synthetic cycles → stat test → result classified → if significant: staged as recommendation for operator approval (ALL mutations require operator confirmation)
 3. `pytest tests/integration/test_rollback.py`:
    - **Level 1:** mutation process cannot write to `model_registry.json` (filesystem permission denied)
    - **Level 2:** baseline_config and rollback_config are identical and immutable after proposal creation
@@ -561,7 +560,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **Dependencies:** All previous phases.
 
 **Exit test:**
-1. All 8 operator workflows from `Source.md §21` complete in ≤ 3 clicks (excluding TOTP input)
+1. All 8 operator workflows from `Source.md §21` complete in ≤ 3 clicks (excluding operator confirmation)
 2. Full cycle on 16-ticker universe completes within 3 hours on M1 Max 64GB
 3. RAM usage under 50GB during cycle peak
 4. Audit chain verifies after 100+ cycles of accumulated data
@@ -582,16 +581,16 @@ These are the numerical thresholds that govern when the system moves between pro
 
 | From | To | Min cycles | Min trades | Brier ≤ | Rolling Sharpe ≥ | Max drawdown ≤ | Manual gate |
 |---|---|---|---|---|---|---|---|
-| SHADOW + PAPER | PAPER_VALIDATED | 90 | 200 | 0.30 | 0.0 | 15% | Yes — TOTP |
-| PAPER_VALIDATED | LIVE_EARLY | 90 | 200 | 0.28 | 0.5 | 12% | Yes — TOTP |
-| LIVE_EARLY | LIVE_STANDARD | 90 | 200 | 0.27 | 0.7 | 10% | Yes — TOTP |
-| LIVE_STANDARD | LIVE_EXPANDED | 120 | 300 | 0.25 | 0.8 | 8% | Yes — TOTP |
+| SHADOW + PAPER | PAPER_VALIDATED | 90 | 200 | 0.30 | 0.0 | 15% | Yes — operator |
+| PAPER_VALIDATED | LIVE_EARLY | 90 | 200 | 0.28 | 0.5 | 12% | Yes — operator |
+| LIVE_EARLY | LIVE_STANDARD | 90 | 200 | 0.27 | 0.7 | 10% | Yes — operator |
+| LIVE_STANDARD | LIVE_EXPANDED | 120 | 300 | 0.25 | 0.8 | 8% | Yes — operator |
 
 **All gates must pass simultaneously.** If Brier is ≤ 0.30 but Sharpe < 0.0, promotion is blocked. The dashboard's mode badge shows which gates pass and which block.
 
 **Cycles and trades are cumulative** within the current mode. Promoting to PAPER_VALIDATED resets the counters for the next mode's gates.
 
-**The operator controls the timing.** Even when all gates pass, promotion does not happen automatically. The operator clicks Promote → TOTP → mode changes. This is deliberate friction (`Source.md §4` promise 5).
+**The operator controls the timing.** Even when all gates pass, promotion does not happen automatically. The operator clicks Promote → confirm → mode changes. This is deliberate friction (`Source.md §4` promise 5).
 
 ### 3.2 Gate computation
 
@@ -646,7 +645,7 @@ PAPER → PAPER_VALIDATED
   ☑ Sharpe: 0.71 / ≥ 0.0         ✓
   ☑ Drawdown: 8.2% / ≤ 15%      ✓
 
-  All gates pass. [Promote → TOTP]
+  All gates pass. [Promote → confirm]
 ```
 
 Or:
@@ -663,7 +662,7 @@ PAPER → PAPER_VALIDATED
 
 ### 3.4 Mode override
 
-The operator can force-promote or force-demote from Settings → Operator → Mode override (TOTP). This bypasses gates with an explicit warning: "You are overriding the promotion gates. The system has not yet proven its performance at the required level. Do you want to proceed?" The override is logged in audit with `gates_overridden=true`.
+The operator can force-promote or force-demote from Settings → Operator → Mode override (operator-confirmed). This bypasses gates with an explicit warning: "You are overriding the promotion gates. The system has not yet proven its performance at the required level. Do you want to proceed?" The override is logged in audit with `gates_overridden=true`.
 
 ### 3.5 Demotion gates
 
@@ -682,12 +681,12 @@ Demotion triggers:
 3. Audit log records `mode_changed` with `triggered_by='AUTO_DEMOTION'`
 4. SSE event `system.mode_changed` (dashboard badge updates)
 5. Operator sees the kill switch panel with the demotion reason
-6. Operator disengages kill switch (TOTP) → system resumes at the demoted tier
+6. Operator disengages kill switch (operator-confirmed) → system resumes at the demoted tier
 7. A 10-cycle observation period begins before any promotion attempt is allowed
 
 ### 3.6 Demotion override
 
-The operator can challenge a demotion from Settings → Operator → Mode override (TOTP). This restores the previous tier with `gates_overridden=true` in audit. The system will re-demote if the trigger condition persists after the override.
+The operator can challenge a demotion from Settings → Operator → Mode override (operator-confirmed). This restores the previous tier with `gates_overridden=true` in audit. The system will re-demote if the trigger condition persists after the override.
 
 ### 3.7 The SHADOW + PAPER special case
 
@@ -835,7 +834,7 @@ At three points in the build, stop and explicitly verify risk properties before 
 
 **Verify:**
 - [ ] Kill switch engages on all 10 triggers
-- [ ] Kill switch disengagement requires TOTP
+- [ ] Kill switch disengagement requires operator confirmation
 - [ ] Audit chain break → immediate kill switch
 - [ ] llama-server process cannot reach external IP (pf verified)
 - [ ] Execution process is the only one with broker imports
@@ -852,7 +851,7 @@ At three points in the build, stop and explicitly verify risk properties before 
 - [ ] Ledger balance is accurate after 10+ trades
 - [ ] Wizard completes without error
 - [ ] The operator can engage and disengage the kill switch from the UI (Cortex page)
-- [ ] The operator can force-exit a position from the Pipeline page (TOTP required)
+- [ ] The operator can force-exit a position from the Pipeline page (operator-confirmed)
 - [ ] Mode is SHADOW + PAPER after wizard completes
 
 **If any fails:** Do not proceed to Phase 9. The system is trading (paper) money.
@@ -864,10 +863,10 @@ At three points in the build, stop and explicitly verify risk properties before 
 - [ ] Auto-rollback fires on synthetic regression (tested with injected bad mutation)
 - [ ] Kill switch engagement flags last 3 promotions
 - [ ] Maximum 3 concurrent A/B tests enforced
-- [ ] No mutation is ever applied without operator TOTP (verify: attempt auto-apply → rejected)
+- [ ] No mutation is ever applied without operator confirmation (verify: attempt auto-apply → rejected)
 - [ ] Mutation candidates cannot target excluded paths (arbitration formula, state machine, kill switch, etc.)
 - [ ] `reversible=True` is enforced on every MutationCandidate
-- [ ] Operator TOTP required for prompt and threshold mutations
+- [ ] Operator confirmation required for prompt and threshold mutations
 
 **If any fails:** Do not proceed to Phase 15. The Mutation Engine is the highest-risk component — an unrestricted self-modifying system will destroy itself.
 

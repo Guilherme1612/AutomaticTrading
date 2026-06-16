@@ -807,7 +807,7 @@ def cmd_setup() -> None:
             from_mode=Mode.INSTALLING,
             to_mode=Mode.PAPER,
             reason="CLI setup complete",
-            totp_verified=False,
+            operator_confirmed=False,
         )
         conn = _sql_connect(db_path)
         conn.execute(

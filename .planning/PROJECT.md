@@ -46,7 +46,7 @@ Reading order: Source.md → Architecture.md → Agents.md → Phases.md.
 | pmacs-nervous | :8000 | Orchestration, SSE, write API |
 | pmacs-stoploss | daemon | RTH position monitoring every 30 min |
 | pmacs-mutation | daemon | Active flywheel (dormant first 50 cycles) |
-| pmacs-dashboard | :8001 | Read-only web UI (loopback only) |
+| pmacs-dashboard | :8000 | Read-only web UI, served by pmacs-nervous (loopback only) |
 
 ## GSD Phase Structure
 

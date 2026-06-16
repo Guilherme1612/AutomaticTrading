@@ -2643,7 +2643,6 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
 
 class CycleStartRequest(BaseModel):
     trigger: str = "manual"
-    totp_code: str = ""
     tickers: list[str] = []  # if non-empty, only these tickers are cycled
 
 
@@ -2651,13 +2650,8 @@ class CycleStartRequest(BaseModel):
 async def cycle_start(req: CycleStartRequest):
     """Manually trigger a new analysis cycle (Source.md §15).
 
-    TOTP-gated: cycles consume API credits and place paper trades.
+    Operator-confirmed: cycles consume API credits and place paper trades.
     """
-    from pmacs.web.routes.settings import _verify_totp
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
-
     import asyncio
     from datetime import datetime, timezone
 
@@ -2701,7 +2695,7 @@ class SoloRunRequest(BaseModel):
 async def solo_run(req: SoloRunRequest):
     """Run a one-time solo analysis for any ticker (research mode).
 
-    No TOTP required — read-only data fetching and LLM analysis.
+    No operator confirmation required — read-only data fetching and LLM analysis.
     Paper trades may still be created for BUY/STRONG_BUY verdicts.
     Results stream via SSE in real-time and persist in DB.
     """
@@ -2739,7 +2733,7 @@ async def solo_run(req: SoloRunRequest):
 
 @router.post("/api/cycle/smoke-test")
 async def cycle_smoke_test():
-    """First-use smoke-test cycle — no TOTP required (Source.md §12 Step 10).
+    """First-use smoke-test cycle — no operator confirmation required (Source.md §12 Step 9).
     Creates a cycle record and verifies the pipeline is functional.
     """
     from datetime import datetime, timezone
@@ -2768,7 +2762,6 @@ async def cycle_smoke_test():
 
 class ForceExitRequest(BaseModel):
     ticker: str
-    totp_code: str = ""
 
 
 @router.post("/api/pipeline/force-exit")
@@ -2776,14 +2769,8 @@ async def force_exit(req: ForceExitRequest):
     """Force-exit an active holding (Source.md §15).
 
     Transitions the holding to EXIT_THESIS_INVALIDATED and persists
-    the state change to SQLite.  TOTP-gated (Non-Negotiable #5).
+    the state change to SQLite. Operator-confirmed (Non-Negotiable #5).
     """
-    # TOTP verification — operator must authenticate state changes
-    from pmacs.web.routes.settings import _verify_totp
-    ok, err = _verify_totp(req.totp_code)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
-
     cfg = get_config()
     try:
         import sqlite3

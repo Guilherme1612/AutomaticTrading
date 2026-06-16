@@ -856,7 +856,7 @@ def get_cortex_status(
         "nervous": 8000,
         "pmacs-stoploss": None,
         "pmacs-mutation": None,
-        "dashboard": None,
+        "dashboard": 8000,
     }
     for s in process_statuses:
         display_name = s.proc if s.proc.startswith("pmacs-") else f"pmacs-{s.proc}"
@@ -894,7 +894,7 @@ def get_cortex_status(
             "clock_skew_ms": 0,
             "network_ok": True,
         },
-        "kill_switch": {"engaged": False, "totp_required": True},
+        "kill_switch": {"engaged": False},
         "kill_switch_history": get_kill_switch_history(audit_path),
         "model_integrity": {"hash_verified": False, "model_path": "--"},
     }

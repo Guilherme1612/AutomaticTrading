@@ -19,7 +19,7 @@ _heartbeat_dir: Path = _data_dir() / "heartbeats"
 
 app = FastAPI(title="PMACS")
 
-# Include nervous API routes (health, TOTP) into combined app
+# Include nervous API routes (health) into combined app
 app.include_router(_nervous_router)
 
 

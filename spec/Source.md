@@ -387,7 +387,7 @@ The system can demote itself without operator action when performance regresses.
 | LIVE_EARLY | PAPER_VALIDATED | Rolling 20-cycle Sharpe < 0 OR drawdown > 16% |
 | PAPER_VALIDATED | PAPER | Rolling 30-cycle Brier > 0.32 OR Sharpe < -0.3 |
 
-Demotion fires the kill switch first, then transitions mode after operator disengages. The operator can challenge the demotion via Settings → Operator → Mode override (operator-confirmed). This is a deliberate friction; demotion exists to protect capital, not to be casually undone.
+Demotion fires the kill switch first, then transitions mode after operator disengages. The operator can challenge the demotion via an operator-confirmed mode override. This is a deliberate friction; demotion exists to protect capital, not to be casually undone.
 
 ---
 
@@ -539,28 +539,24 @@ Error states: every failure surfaces a specific error code, the spec section it 
 
 ### 13.1 Visual identity
 
-**Aesthetic:** Notion. Spacious. Neutral. Single accent color. Generous whitespace. No skeuomorphism. No gradients-as-decoration. No drop-shadows-for-shadow's-sake. Data is the content; chrome stays out of the way.
+**Aesthetic:** Notion-derived but elevated. Spacious, neutral, data-first, single accent — with selective, restrained polish: a gradient PMACS wordmark, a glassmorphic sidebar (subtle `backdrop-blur` over the surface), soft `*-soft` tints for status, and gentle elevation shadows on cards and the command palette. Gradients and glass are used for chrome accents only, never on data. Data is the content; chrome stays out of the way.
 
-**Color tokens (Tailwind):**
+**Color tokens (semantic Tailwind layer).** The UI is built on a named token layer rather than raw palette utilities, so light/dark themes and future re-skins flow from one place. Classes reference the token name (`bg-surface`, `text-text-primary`, `bg-accent-soft text-accent`, `bg-crucible`), and the build maps each token to concrete light/dark values.
 
-| Role | Light mode | Dark mode |
-|---|---|---|
-| Surface (background) | `zinc-50` | `zinc-900` |
-| Surface elevated (cards, panels) | `white` | `zinc-800` |
-| Border | `zinc-200` | `zinc-700` |
-| Text primary | `zinc-900` | `zinc-100` |
-| Text secondary | `zinc-600` | `zinc-400` |
-| Text muted | `zinc-500` | `zinc-500` |
-| Accent (primary actions) | `blue-600` | `blue-500` |
-| Positive (gains, buy, confirm) | `green-600` | `green-500` |
-| Negative (losses, sell, alert) | `red-500` | `red-500` |
-| Warning (degraded, caution) | `amber-500` | `amber-400` |
-| Strong-buy emphasis | `green-700` | `green-600` |
-| Crucible severity | `purple-600` | `purple-500` |
+| Token family | Roles |
+|---|---|
+| `surface`, `surface-elevated`, `surface-sunken` | page background, cards/panels, recessed wells |
+| `border`, `border-subtle` | dividers, card edges, subtle hairlines |
+| `text-primary`, `text-secondary`, `text-muted` | body, labels, de-emphasized metadata |
+| `accent`, `accent-soft` | primary actions, BUY emphasis, active nav (`bg-accent-soft text-accent`) |
+| `positive`, `positive-soft` | gains, STRONG_BUY emphasis |
+| `negative`, `negative-soft` | losses, ERROR level, destructive |
+| `warning` | degraded/caution |
+| `crucible` | Crucible severity, HOLD/SKIP emphasis |
 
-Theme follows system preference by default. Manual toggle in Settings.
+Theme follows system preference by default. Manual light/dark toggle (`#theme-toggle`) and density toggle (`#density-toggle`) live in Settings → Appearance.
 
-**Typography:**
+**Typography:** fonts are **self-hosted** (`/static/vendor/fonts/fonts.css`, `woff2` subsets) — no CDN call, consistent with the offline-capable posture even when a cloud LLM backend is selected.
 
 - **Inter** (variable weight) for all UI text.
   Sizes: 12 (caption), 14 (body), 16 (subhead), 20 (head), 28 (page title).
@@ -570,17 +566,16 @@ Theme follows system preference by default. Manual toggle in Settings.
 
 ### 13.2 Chrome (persistent across pages)
 
-**Top bar.** Fixed, 56px tall:
-- Left: PMACS wordmark (small, monospace, accent color)
-- Center-left: mode badge (`SHADOW + PAPER`, `PAPER_VALIDATED`, `LIVE_EARLY`, etc.) — colored by tier
-- Center: current cycle indicator. When idle: "Idle. Last cycle: Tue 14:32, 1h 47m". When running: animated bar with current ticker name and ETA.
-- Right: kill switch button (always visible, red when engaged, white-on-zinc-700 when armed). Above it on hover: condensed system health (heartbeats, audit chain status).
+**Top bar.** Fixed, 56px (`h-14`) tall, `role="banner"`:
+- Far-left on narrow viewports: a hamburger button (`lg:hidden`, `aria-label="Toggle navigation"`) that opens the mobile sidebar overlay.
+- Left: PMACS wordmark — monospace, **gradient text** (`gradient-text`), `aria-label="PMACS"`.
+- Center-left: mode badge (`SHADOW + PAPER`, `PAPER_VALIDATED`, `LIVE_EARLY`, etc.) — `bg-positive-soft text-positive` when in a PAPER tier, `bg-accent-soft text-accent` otherwise; `aria-label="Current mode: …"`.
+- Center: current cycle indicator (`role="status" aria-live="polite"`, hidden on `<sm`). When idle: last-cycle summary. When running: animated progress with the current ticker.
+- Right: kill switch button (always visible, hover turns it `bg-negative`), `aria-label="Kill switch"`, with a visible focus ring.
 
-**Left sidebar.** Fixed, 240px wide, collapsible to 64px:
-- Logo at top (clickable → Dashboard)
-- Page nav: Dashboard, Agents, Pipeline, Universe, Cortex, Debug, Settings
-- Each nav item with icon + label. Active page highlighted with accent border.
-- Bottom: operator avatar + name (placeholder, since single-operator), quick-action button (opens Cmd-K palette)
+**Left sidebar.** Fixed, 240px (`w-60`) wide, **glassmorphic** (translucent over surface), `role="navigation" aria-label="Main navigation"`; collapsible to an icon rail (`#sidebar-toggle`), and on `<lg` it is hidden behind the hamburger + overlay (`#mobile-sidebar-overlay`):
+- Page nav: Dashboard, Agents, Pipeline, Universe, Cortex, Debug, Settings. Each item = icon + label + a `kbd` shortcut hint (shown `lg:` only). Active page highlighted `active bg-accent-soft text-accent`.
+- Bottom: a live "system online" dot + "Operator" label, and a command-palette search button (`aria-label="Open command palette (Cmd-K)"`, `K` kbd hint).
 
 **Main content.** Scrollable. Page-specific.
 
@@ -596,7 +591,7 @@ Theme follows system preference by default. Manual toggle in Settings.
 
 ### 13.3 Component library (reusable patterns)
 
-**Card.** White surface (zinc-800 in dark), 1px border, 8px radius, 24px padding. Hover state: shadow-sm. No gradient. No outer glow.
+**Card.** `bg-surface-elevated`, 1px `border` (or `border-subtle`), rounded (≈12–16px radius), 24px padding. Hover state: soft elevation shadow. Gradients/glass are reserved for chrome (wordmark, sidebar), not data cards.
 
 **StatBlock.** Vertical layout. Label (text-secondary, 12px). Value (large, 28px, JetBrains Mono if numeric). Optional delta (small, colored by sign).
 
@@ -648,7 +643,7 @@ The system surfaces events to the operator with intentional restraint. Over-noti
 | Source connectivity degraded (NICE_TO_HAVE) | Silent (Cortex page only) | None |
 | Source connectivity recovered (IMPORTANT+) | Toast, info, 5s | None |
 
-The operator can adjust notification levels in Settings → General. The kill switch and audit chain failure modals are non-disable-able.
+The operator can adjust notification levels in Settings → Notifications. The kill switch and audit chain failure modals are non-disable-able.
 
 ### 13.6 Keyboard shortcuts
 
@@ -666,13 +661,13 @@ The operator can adjust notification levels in Settings → General. The kill sw
 ### 13.7 Accessibility
 
 - Respects `prefers-reduced-motion`: all animations (Sankey, progress bars, Math view transitions) are disabled when this media query is active. Static equivalents are shown.
-- All color combinations meet WCAG AA contrast (verified in CI via axe-core).
+- **Target:** all color combinations meet WCAG 2.1 AA contrast, verified in CI via axe-core (`tests/accessibility/test_a11y.py::TestAxeCoreCI`, browser tests skipped by default). The redesign currently has open AA violations tracked as a separate a11y-remediation task; AA compliance is the standard the pages are held to, not yet a clean pass.
 - Every interactive element is keyboard-accessible. Tab order is meaningful.
-- Focus states are clearly visible (2px accent outline, never `outline: none` without replacement).
-- Screen readers: every icon paired with `aria-label`. Live regions for toasts and SSE-driven UI updates.
+- Focus states are clearly visible (`focus-visible` accent outline with offset, never `outline: none` without replacement).
+- Screen readers: every icon is `aria-hidden` and paired with an adjacent `aria-label`/text; dialogs use `role="dialog" aria-modal="true"`. Live regions (`aria-live`) for the cycle indicator, toasts, and SSE-driven UI updates.
 - Browser back/forward: HTMX pushes URL state for every page navigation and drawer open/close. Back button returns to previous page or closes the drawer. Forward works correspondingly.
 - The dashboard works at 200% browser zoom without horizontal scrollbars.
-- The dashboard runs at viewport widths down to 1024px. Below that, a "use a wider window" message appears (this is a desktop tool, not a responsive app).
+- **Responsive, not viewport-gated.** The earlier "use a wider window below 1024px" guard has been removed. The layout is responsive on a single `lg:` breakpoint: at `≥lg` the glassmorphic sidebar is pinned; below `lg` it collapses behind a hamburger button and a dismissible overlay (`#mobile-sidebar-overlay`). It remains a desktop-first tool, but no longer blocks narrow viewports.
 
 ---
 
@@ -682,7 +677,7 @@ The operator can adjust notification levels in Settings → General. The kill sw
 
 **Path:** `/`
 
-**Layout (top to bottom, single column with right-rail at viewport > 1440px):**
+**Layout (top to bottom; responsive — a right-rail appears on wide viewports, content reflows to a single column when narrow):**
 
 ### 14.1 Portfolio summary card
 
@@ -699,7 +694,7 @@ Top of page. Full width.
 - **Mode badge** large: `SHADOW + PAPER` (colored by tier)
 - **Last cycle**: `Tue Apr 30 14:32 UTC, duration 1h 47m, 14 tickers processed, 3 STRONG_BUY, 4 BUY, 5 HOLD, 2 SKIP`
 - **Next cycle**: `Triggered on next boot detection (24h+ gap from last)` OR active progress bar if cycle running
-- **Run cycle now** button (primary action, blue-600)
+- **Run cycle now** button (primary action, `accent`)
 
 ### 14.3 Risk metrics row
 
@@ -729,11 +724,9 @@ Last 20 decisions across all cycles. Per row: timestamp, ticker chip, verdict, r
 
 ### 14.7 Mutation Engine summary card
 
-- Active mutations under test: `2`
-- Pending operator review: `0`
-- Approved by operator last 30 days: `7`
-- Rolled back last 30 days: `1`
-- Click → Settings → Mutation Engine
+Reflects the engine's lifecycle state. Before activation (the first 50 PAPER cycles) it shows the **Dormant** state with "Activates after 50 PAPER cycles" and a `Candidates` count of 0. Once active, it summarizes candidates under test / pending operator review / recently approved / recently rolled back.
+
+- Click → Settings → Mutation Diff
 
 ### 14.8 Empty states
 
@@ -761,8 +754,8 @@ The page has three primary regions plus a collapsible bottom strip:
 |  Current ticker panel              | Decision summary |
 |  (dominant area)                   | (right rail)     |
 |                                    |                  |
-|  --- 7 analysis + Crucible + MemoWriter ---| Phase progress   |
-|  ---        (9 LLM persona cards)       ---     | Verdict tier     |
+|  --- Gatekeeper + 7 analysis + Crucible ---| Phase progress   |
+|  ---        (9 persona cards, grid)     ---     | Verdict tier     |
 |                                    | Trade plan       |
 |  Communication layer viz           |                  |
 |                                                       |
@@ -791,19 +784,21 @@ Above the persona row:
 
 ### 15.4 Persona row
 
-Nine cards arranged in a row (or 3x3 grid at viewport widths below 1280px):
+Nine cards in a responsive grid (`grid-cols-3`):
 
-1. MacroRegime
-2. CatalystSummarizer
-3. MoatAnalyst
-4. GrowthHunter
-5. InsiderActivity
-6. ShortInterest
-7. Forensics
-8. Crucible (visually distinct — purple border, slightly larger)
-9. MemoWriter (visually distinct — appears after Crucible completes; muted border, shows memo draft)
+1. Gatekeeper
+2. Catalyst Summarizer
+3. Growth Hunter
+4. Moat Analyst
+5. Macro Regime
+6. Insider Activity
+7. Short Interest
+8. Forensics
+9. Crucible (visually distinct — adversarial tester)
 
-(Gatekeeper is deterministic, not LLM, and runs in Phase 0; not shown as a persona card. Its output appears in the right-rail decision summary.)
+Each card shows a `ready`/`idle` status indicator and a one-line role description (e.g. Gatekeeper "Final gate check", Crucible "Adversarial testing"). Before a cycle runs the row shows a "Waiting for cycle" state.
+
+(Note on the redesign: **Gatekeeper is now shown as a card** in this row — though it is the deterministic Phase-0 gate, the operator wanted its pass/fail visible inline. **MemoWriter is not a separate card** here; the memo draft surfaces in the decision summary / Memo page rather than as a tenth persona tile.)
 
 Each persona card displays:
 
@@ -830,21 +825,19 @@ Each persona card displays:
 
 Below the persona row. The most distinctive UX element in PMACS.
 
-**Toggle** (chip group at top of viz region): **Process** / **Network** / **Math**
+**Toggle** (chip group at top of viz region, `data-comm-view`): **Process** / **Signals** / **Conviction**. The Process view is the default (its chip carries `aria-pressed="true"`); the Signals (`#viz-signals`) and Conviction (`#viz-conviction`) panels start `hidden`.
 
-**Process view** (default). A horizontal timeline showing the cycle stages:
+**Process view** (default, `#viz-process`). A horizontal timeline showing the cycle stages:
 ```
 Evidence → Personas → Arbitration → Crucible → Sizing → Risk Gate → Verdict
 ```
 Each stage is a node. Lines connect them. As the cycle progresses, completed stages fill with their result (e.g., Arbitration node shows `p_up=0.62, p_flat=0.20, p_down=0.18`). Pending stages are gray.
 
-**Network view.** A Sankey diagram. On the left: evidence sources (SEC filings, Polygon EOD, Form 4, news, IR pages). In the middle: personas. On the right: the Arbitrated output. Flow widths correspond to evidence relevance weights (per persona's evidence consumption). Hover over a flow reveals which specific evidence pieces flowed.
+**Signals view** (`#viz-signals`). A Sankey diagram (D3, served data from `/agents/sankey-data`: `evidence_sources`, `personas`, `flows`, `stages`). On the left: evidence sources (SEC filings, EOD, Form 4, news, IR pages). In the middle: personas. On the right: the Arbitrated output. Flow widths correspond to evidence relevance weights. Hover over a flow reveals which specific evidence pieces flowed. After Arbitration, a second smaller Sankey shows Arbitrated → Crucible (colored by severity); a successful Crucible flip is drawn as an override arrow.
 
-After Arbitration completes, a second smaller Sankey appears below: Arbitrated → Crucible (single flow, colored by severity). Crucible's critique node shows severity score. If the Crucible attack succeeds in flipping the decision, an arrow shows the override.
+**Conviction view** (`#viz-conviction`). The actual numbers. Per persona: `p_up`, `p_flat`, `p_down`, weight (after Brier-derived adjustment). Below: the arbitration formula computed step-by-step, then the conviction formula computed step-by-step. Operator-readable, full transparency — useful for auditing why a verdict came out the way it did.
 
-**Math view.** The actual numbers. Per persona: `p_up`, `p_flat`, `p_down`, weight (after Brier-derived adjustment). Below: the arbitration formula computed step-by-step. Below: the conviction formula computed step-by-step. Operator-readable but full transparency. Useful for auditing why a verdict came out the way it did.
-
-**Animation.** Process view animates left-to-right as stages complete. Network view re-renders smoothly when new persona completes (D3 enter/update/exit transitions, 200ms). Math view fills in numbers progressively. None of this is critical-path; the dashboard's responsiveness is unaffected by animation rendering.
+**Animation.** Process view animates left-to-right as stages complete. Signals view re-renders smoothly when a persona completes (D3 enter/update/exit transitions, ~200ms). Conviction view fills in numbers progressively. None of this is critical-path; the dashboard's responsiveness is unaffected by animation rendering.
 
 ### 15.6 Decision summary right rail
 
@@ -885,61 +878,52 @@ Cmd-K → "Compare cycles" → select two cycle IDs → side-by-side view of the
 
 ### 16.1 Layout
 
-Kanban-style with four columns: STRONG_BUY / BUY / HOLD / SKIP. Cards in each column come from current and recent cycles. A right rail handles long-form queue management.
+A four-column **kanban** (`grid-cols-4`): STRONG_BUY / BUY / HOLD / SKIP. Cards come from current and recent cycles and are **draggable between columns**; ordering and column placement persist via the queue API (§16.5). There is **no separate priority-band right rail** — the kanban columns *are* the queue.
 
 ### 16.2 Top filter bar
 
-- Verdict (multi-select)
-- State (multi-select: active / pending / closed / aborted)
-- Sector (multi-select)
-- Date range
-- Search (ticker or thesis text)
+A single compact bar above the board:
+- **Verdict selector** (`#verdict-filter-select`): All Verdicts / STRONG_BUY / BUY / HOLD / SKIP.
+- **Search** input (placeholder `Filter...`) — matches ticker.
+- **Queue info**: a "Filtered" count of cards currently shown.
+
+(The earlier multi-select verdict/state/sector/date-range filter set was simplified to this verdict-dropdown-plus-search bar in the redesign.)
 
 ### 16.3 Verdict columns
 
-**STRONG_BUY column.** Tickers from the most recent cycle that scored STRONG_BUY. After 7 days, they age out unless they've become active holdings.
+Each column is color-coded by tier and carries a dashed-border empty placeholder when no cards qualify:
 
-**BUY column.** Same, lower-conviction tier.
+**STRONG_BUY column** (`bg-positive-soft`). Highest-conviction tickers from the most recent cycle. Empty: "No strong buy signals".
 
-**HOLD column.** Currently active positions. This is the "live portfolio" view.
+**BUY column** (`bg-accent-soft`). Lower-conviction buy tier.
 
-**SKIP column.** Aborted/skipped tickers from the last 5 cycles. Sub-grouped by abort reason (abort_pre_llm, abort_disagreement, abort_llm, abort_risk).
+**HOLD column** (`bg-crucible`). Currently active positions — the "live portfolio" view.
+
+**SKIP column** (`bg-crucible`). Aborted/skipped tickers from recent cycles.
+
+Columns are drop targets (`ondragover`/`ondrop`); the column header shows aggregate stats (count, summed/avg conviction). Drag-and-drop handlers are always present even when a column is empty.
 
 ### 16.4 Per-ticker card
 
-Each card shows:
-- Ticker (mono, large) + verdict color border
-- Current price + day change
-- Conviction score (numeric + small bar)
-- Final memo (truncated to 2 lines, click to expand)
-- Cycle date
-- Action buttons (visible on hover):
-  - **Run again now** — single-ticker re-run. Behavior: (a) if a cycle is currently running, the re-run queues for after current cycle completes (operator sees toast: "Queued. Will run after current cycle ends in ~Xm"); (b) if no cycle is running, the re-run starts immediately as a single-ticker cycle. Either way, the re-run audit-logs `cycle_initiated_by_operator` with `single_ticker=true`.
-  - **Promote to next-cycle priority** — moves to head of next cycle queue
-  - **Pin to queue** — persistent pin across cycles
-  - **Force exit** — for active positions only, operator-confirmed
+Each draggable card (`data-ticker`, `data-verdict`, `draggable`) shows:
+- **Ticker** (mono, bold) — a link to the ticker's **Memo page** (`/memo/{ticker}`).
+- Current price + key financials when available (revenue growth, gross margin, free cash flow, fair value / upside).
+- Conviction score (numeric + small bar).
+- Two actions: **Re-run** (`queueTickerNow(ticker)` — single-ticker re-run; queues behind a running cycle or starts immediately, audit-logging `cycle_initiated_by_operator` with `single_ticker=true`) and **Memo** (link to `/memo/{ticker}`).
 
-### 16.5 Long queue management (right rail)
+### 16.5 Queue management (drag-and-drop, no separate rail)
 
-Multi-band priority queue:
-- **P1** (highest priority — runs first)
-- **P2**
-- **P3**
-- **P4** (background, runs only if cycle has time)
+Queue management happens **on the board itself**, not in a side rail. Operators drag cards within and between columns; placement and order persist through the queue API:
+- `POST /pipeline/queue/reorder` — persist a card's column/position (drag-drop).
+- `POST /pipeline/queue/pin` — pin a ticker so it survives across cycles.
+- `POST /pipeline/queue/promote` — promote a ticker for the next cycle.
+- `POST /pipeline/queue/scheme` (save) and `GET` (load) — named, recallable board arrangements ("schemes").
 
-Drag tickers between bands. "Promote all in P1 to head of next cycle" button. Pin/unpin per ticker. Saved priority schemes (operator can name and recall).
+(The earlier P1–P4 multi-band priority rail was removed; `from_band`/`to_band` survive only as an internal reorder-payload detail.)
 
-### 16.6 Single-ticker detail drawer
+### 16.6 Ticker detail → the Memo page
 
-Clicking a card opens a slide-in drawer (60% viewport width):
-
-- **Header:** ticker, current price, conviction, verdict
-- **Final memo** (full text)
-- **Per-persona memos** (collapsible accordion, one row per persona)
-- **Historical decisions on this ticker** (last 10 cycles with verdicts)
-- **Position lineage** (if currently held): entry, all events (re-evals, stop-loss arming, trailing stop adjustments, MtM history), current state
-- **Failure history** (if previously stopped out): FailedAssumption nodes from KuzuDB with taxonomy classification
-- **Re-run pipeline now** button at bottom
+Clicking a card's ticker navigates to the dedicated **Memo page** (`/memo/{ticker}`) rather than a slide-in drawer. The Memo page carries the full final memo, per-persona memos, historical decisions, position lineage (if held), and failure history (FailedAssumption nodes), with a re-run action — the content the old drawer described, now a routable, deep-linkable page.
 
 ### 16.7 Empty states
 
@@ -955,9 +939,10 @@ Pre-first-cycle: explanation card. Mid-cycle (running): "Cycle in progress — v
 
 ### 17.1 Layout
 
-- **Top bar:** Group-by selector (sector GICS / sub-sector operator-tagged / market-cap bucket / exchange / status), search, "Add ticker" button
-- **Ticker list:** rows grouped by selected dimension, expandable
-- **Right rail:** universe statistics (total tickers, active positions, flagged tickers, average ADV, average days-of-history)
+- **Heading:** "Ticker Universe".
+- **Top bar:** an **Add Ticker** button and a **Bulk Actions** button.
+- **Group-by tabs** (segmented control, first tab active = `bg-accent-soft text-accent`): **All / Watchlist / Portfolio / Sectors**. (The redesign replaced the earlier five-way group-by selector — GICS/sub-sector/market-cap/exchange/status — with these four tabs.)
+- **Ticker list:** a table of rows (per §17.2). When the universe is empty it shows an empty state — "No tickers yet" with an "Add your first ticker" call-to-action.
 
 ### 17.2 Per-ticker row
 
@@ -1108,94 +1093,49 @@ Above the event list, persistent chip group:
 
 ### 20.1 Layout
 
-Single scrollable page with section anchors in left sub-nav. Sections (in order):
+A single scrollable page laid out in a small grid of cards. The redesign **consolidated the old 13-section settings IA into seven focused sections**; deeper/structural configuration moved into the **setup wizard** (`/wizard/*` — broker keychain, inference provider, universe seed, cycle prefs) and into versioned **TOML config** (`config/risk.toml`, `config/crucible.toml`, `config/mutation.toml`, etc., see §20.8 / CLAUDE.md). Settings holds only what the operator changes at runtime. The seven sections (each verified by `tests/e2e/test_settings_page.py`):
 
-### 20.2 General
+### 20.2 Appearance
 
-- Display currency (USD primary / EUR primary / EUR-only)
-- Display density (compact / comfortable / spacious — default: spacious)
-- Theme (system / light / dark)
-- EOD timezone
-- Notification levels (per category, see §13.5)
+- **Theme** toggle (`#theme-toggle`, system / light / dark).
+- **Density** toggle (`#density-toggle`, compact / comfortable / spacious).
+- **Currency** select (`#currency-select`, USD / EUR).
+- **Timezone** select (`#timezone-select`, EOD timezone).
 
-### 20.3 Brokers
+### 20.3 AI Provider
 
-- Alpaca paper key (read-only display, edit via operator confirmation)
-- IBKR credentials (when LIVE modes activate)
-- Catastrophe-net stop percentage (default 15%, operator-confirmed)
+The runtime expression of the operator-selectable backend (§4):
 
-### 20.4 Inference
+- **Mode toggle** (`#inference-mode-toggle`): **Local** vs **Cloud API**.
+- **Local panel** (`#inference-local-panel`): radio list of local providers (e.g. `llama-server`, `Ollama`) from the inference registry, each showing its `id` and active model.
+- **Cloud panel** (`#inference-cloud-panel`): cloud-API provider selection (OpenRouter / Anthropic / OpenAI); API keys are Keychain-stored, never shown or logged.
+- **Test connection** button (`#inference-test-btn`): pings the selected backend and reports success/failure.
 
-- Backend (llama-server / Ollama)
-- Model selection (from `model_registry.json`)
-- Per-persona model override (advanced, mostly default)
-- Max concurrent inference slots (default 3 for llama-server, 1 for Ollama)
-- Thinking mode per persona (where supported)
+### 20.4 Budget
 
-### 20.5 Universe
+Token-cost guardrails for cloud backends:
 
-- Ticker list (links to Universe page for primary management)
-- Index-overlay toggle (Nasdaq-100 inclusion)
-- ADV minimum threshold (default $1M)
-- Limited-history haircut (default 50%)
+- **Daily cap** (`#cost-daily-cap-input`) and **Monthly cap** (`#cost-monthly-cap-input`) in dollars.
+- **Usage bars** (`#settings-cost-daily-bar`, `#settings-cost-monthly-bar`) showing spend against each cap.
 
-### 20.6 Risk
+### 20.5 Notifications
 
-- Max single position % (default 20%)
-- Max concurrent positions (default 5, derived from $5K / 20%)
-- Per-mode position cap override
-- Kill-switch threshold tuning (operator-confirmed):
-  - Daily loss % (default 5%)
-  - Rolling 5-day loss % (default 10%)
-  - Reconciliation tolerance ($ and %)
+Per-event notification level (see §13.5). Each event row has a select: **Toast / Toast + Sound / Modal / Silent**, persisted via `POST /api/settings/notifications`. The `kill_switch_engaged` and `audit_chain_failure` rows are **locked** (rendered disabled) — those modals are non-disable-able.
 
-### 20.7 Crucible
+### 20.6 Reset Progress
 
-- Time budget per attack (default 90s)
-- Max rewrite cycles (default 2)
-- Severity thresholds (advanced)
+Destructive reset of accumulated state:
 
-### 20.8 Mutation Engine
+- **Reset** button (`#reset-btn`), gated by a **confirmation checkbox** (`#reset-confirm-check`) that must be ticked before the action is allowed.
 
-- Enable/disable per dimension (prompts / source-weights / thresholds / persona-affinity / universe-flags)
-- Stat-sig threshold for recommendations: p<0.05, Cohen's d>0.20, n≥20
-- **All mutations require operator confirmation to apply.** No auto-promote. The Mutation Engine is an advisor, not an actor. This prevents the flywheel from degrading the base system.
-- **Pending recommendations** panel (read-only display + approve/reject buttons). ALL mutations require operator confirmation to apply:
-  - Per candidate: dimension, target (e.g., "moat_analyst.system_prompt"), proposed at, sample size so far, current effect size, current p-value, trending direction
-  - "Promote" button (operator-confirmed) — applies the candidate as the new production config
-  - "Reject" button — closes the candidate without applying
-- **Recent promotions** log (read-only with rollback button):
-  - Per promotion: date, dimension, target, was-auto-promoted-vs-operator, current post-promotion performance vs baseline
-  - Rollback button (operator-confirmed)
+### 20.7 Mutation Diff
 
-### 20.9 Agent Personas
+Operator review surface for the Mutation Engine (the advisor — §10, Architecture.md §10). A **Mutations** panel lists proposed candidates; opening one shows a **diff modal** (`#diff-modal`) with a side-by-side/unified **diff container** (`#diff-container`) of the proposed change against current production config. **All mutations require operator confirmation to apply — no auto-promote.** Stat-sig threshold for recommendations: p<0.05, Cohen's d>0.20, n≥20. Approve applies the candidate; reject closes it.
 
-- Per persona: read-only display of current production prompt, weight, last-update timestamp, rolling Brier
-- "Propose mutation" button — opens diff editor where operator drafts a prompt variant; submission stages a candidate for the Mutation Engine to A/B test
-- Persona enable/disable (operator-confirmed; disabling a critical persona triggers a warning)
-- Persona temperature override (advanced)
+### 20.8 Keyboard Shortcuts
 
-### 20.10 Queue
-
-(Most queue management lives in Pipeline page right rail. This section has the persistent queue-policy settings.)
-
-- Default priority for newly-added tickers (P3 default)
-- Auto-elevate held positions to P2 priority band (default on)
-- Pin behavior: persistent across cycles or per-cycle only
-
-### 20.11 Audit & Debug
-
-- Audit log replication target (rsync destination, operator confirmation to change)
-- Debug log retention (default 30 days)
-- Audit log retention policy (default 1 year hot, then archive — see §24)
-- Operator email for critical alerts (optional)
-
-### 20.12 Operator
-
-- Per-trade approval requirement (default OFF for paper; operator toggle, operator confirmation per trade if ON)
-- Mode override (operator-confirmed promotion or demotion — bypasses normal gates with explicit acknowledgment)
-- Force a single-ticker re-run (button; same effect as Pipeline page action)
-- Force kill-switch test (runs a synthetic kill-switch event to verify wiring)
+- **Shortcut overlay** (`#shortcut-overlay`): the keyboard-shortcut reference dialog (also reachable via `Cmd-/`), listing the bindings in §13.6.
+- **Command palette** (`#cmd-k`, `Cmd-K`): fuzzy jump to pages, tickers, and quick actions.
 
 ### 20.13 What is *not* in Settings
 
@@ -1227,7 +1167,7 @@ If the ticker fails admittance: error message specifies which check failed (e.g.
 
 1. Pipeline page → SKIP column → find NBIS card
 2. Click "Run again now" button on the card
-3. Toast confirms: "NBIS queued for next cycle (P1 priority)"
+3. Toast confirms: "NBIS queued for next cycle"
 
 The single-ticker re-run runs after the current cycle ends (Q9 design call). It is logged with `operator_initiated=true`. If the re-run produces a different verdict, OverrideLearning records the pattern.
 
@@ -1243,7 +1183,7 @@ If the operator wants to compare with similar past failures: Cmd-K → "Failures
 ### 21.4 "I want to review and approve a mutation candidate"
 
 1. Dashboard → Mutation Engine card → "1 pending operator review" → click
-2. Settings → Mutation Engine → Pending candidates section
+2. Settings → Mutation Diff → pending candidates
 3. Click the candidate row → expands to show:
    - Dimension and target
    - Diff (production vs candidate, side-by-side)
@@ -1403,7 +1343,7 @@ Major-version updates require:
 
 ### 25.3 Model file updates
 
-When upstream releases a new GGUF (e.g., Qwen3.6-35B-A3B → Qwen3.7), the operator manually updates `config/model_hashes.toml` with the new SHA256 and triggers a model swap via Settings → Inference. The system performs a smoke-test inference before accepting the new model. If the smoke test fails, the swap is rolled back.
+When upstream releases a new GGUF (e.g., Qwen3.6-35B-A3B → Qwen3.7), the operator manually updates `config/model_hashes.toml` with the new SHA256 and triggers a model swap via Settings → AI Provider. The system performs a smoke-test inference before accepting the new model. If the smoke test fails, the swap is rolled back.
 
 ---
 

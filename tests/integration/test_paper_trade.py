@@ -215,25 +215,25 @@ class TestModeTransitions:
         )
         assert result.to_mode == Mode.SHADOW
 
-    def test_live_promotion_requires_totp(self) -> None:
-        """PAPER_VALIDATED -> LIVE_EARLY requires TOTP."""
-        with pytest.raises(ValueError, match="TOTP"):
+    def test_live_promotion_requires_confirmation(self) -> None:
+        """PAPER_VALIDATED -> LIVE_EARLY requires operator confirmation."""
+        with pytest.raises(ValueError, match="operator confirmation"):
             transition_mode(
                 Mode.PAPER_VALIDATED,
                 Mode.LIVE_EARLY,
                 reason="ready for live",
             )
 
-    def test_live_promotion_with_totp(self) -> None:
-        """PAPER_VALIDATED -> LIVE_EARLY succeeds with TOTP."""
+    def test_live_promotion_with_confirmation(self) -> None:
+        """PAPER_VALIDATED -> LIVE_EARLY succeeds with operator confirmation."""
         result = transition_mode(
             Mode.PAPER_VALIDATED,
             Mode.LIVE_EARLY,
             reason="ready for live",
-            totp_verified=True,
+            operator_confirmed=True,
         )
         assert result.to_mode == Mode.LIVE_EARLY
-        assert result.operator_totp_verified is True
+        assert result.operator_confirmed is True
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,6 @@ class TestWizard:
             WizardStep.DATA_CONNECTIVITY,
             WizardStep.UNIVERSE_SEED,
             WizardStep.CYCLE_PREFERENCES,
-            WizardStep.TOTP_ENROLLMENT,
             WizardStep.SMOKE_TEST,
             WizardStep.PROMOTE,
         ]
@@ -336,12 +335,12 @@ class TestWizard:
         wizard = Wizard()
         completed, total = wizard.get_progress()
         assert completed == 0
-        assert total == 11  # 11 actionable steps (Source.md §12.1)
+        assert total == 10  # 10 actionable steps (Source.md §12.1)
 
         wizard.complete_step(WizardStep.WELCOME)
         completed, total = wizard.get_progress()
         assert completed == 1
-        assert total == 11
+        assert total == 10
 
     def test_wizard_cannot_complete_final_step(self) -> None:
         wizard = Wizard()
@@ -870,7 +869,7 @@ class TestWizardStepImplementations:
             from_mode=Mode.INSTALLING,
             to_mode=Mode.PAPER,
             reason="Wizard setup complete",
-            totp_verified=False,
+            operator_confirmed=False,
         )
         assert mt.to_mode == Mode.PAPER
 

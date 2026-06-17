@@ -86,7 +86,10 @@ class TestFullDataBrief:
             ],
         )
         word_count = len(brief.split())
-        assert word_count <= 200, f"Brief has {word_count} words, exceeds 200 limit"
+        # Brief budget was widened from 200 to 400 words for a first analysis
+        # (700 on re-analysis) to carry more short-term memory — see
+        # episodic_context.build_context_brief.
+        assert word_count <= 400, f"Brief has {word_count} words, exceeds 400 limit"
 
 
 class TestNoHistoryBrief:

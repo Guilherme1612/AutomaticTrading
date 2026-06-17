@@ -582,7 +582,8 @@ class TestFullSymbolPipelineMockFill:
             # MSFT: flat probabilities, no edge -> low conviction -> SKIP
             return 0.05
 
-        def mock_verdict_tier(conviction, is_active_holding=False, thesis_valid=True):
+        def mock_verdict_tier(conviction, is_active_holding=False, thesis_valid=True,
+                              is_bootstrap=False):
             if conviction >= 0.6:
                 return VerdictTier.STRONG_BUY
             if conviction >= 0.3:

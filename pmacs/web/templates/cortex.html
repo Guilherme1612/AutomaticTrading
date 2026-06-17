@@ -258,9 +258,6 @@
                     onclick="killSwitchAction()">
                 {{ "Lift Kill Switch" if kill_switch.engaged else "Engage Kill Switch" }}
             </button>
-            {% if kill_switch.totp_required %}
-            <p class="text-caption text-text-muted mt-2">TOTP verification required</p>
-            {% endif %}
         </div>
         <!-- Trigger history -->
         <div class="mt-4 pt-3 border-t border-border-subtle">
@@ -364,7 +361,7 @@ document.addEventListener('htmx:afterSwap', function(e) {
 
 function killSwitchAction() {
     {% if kill_switch.engaged %}
-    open_totp_modal({
+    confirmAction({
         actionId: "cortex.kill_switch_disengage",
         description: "Disengage kill switch",
         consequences: "Trading will resume. Stop-loss monitoring continues.",

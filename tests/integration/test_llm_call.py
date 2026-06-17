@@ -283,9 +283,9 @@ class TestLayer3SanityFailure:
     def test_out_of_range_revenue_fails_sanity(
         self, mock_client_cls, runner, evidence_packets
     ):
-        """GrowthHunterSanity rejects revenue_yoy_pct > 500."""
+        """GrowthHunterSanity rejects revenue_yoy_pct out of [-100, 2000]."""
         bad_output = _valid_growth_hunter_json()
-        bad_output["revenue_yoy_pct"] = 999.0
+        bad_output["revenue_yoy_pct"] = 9999.0
 
         valid_json = json.dumps(_valid_growth_hunter_json())
 

@@ -81,12 +81,6 @@ class TestKeyboardShortcuts:
         assert re.search(r"shift.*['\"]k['\"]|['\"]k['\"].*shift", self.js, re.IGNORECASE), \
                "Cmd-Shift-K binding not found in app.js"
 
-    def test_cmd_t_totp_modal(self):
-        """Cmd-T opens TOTP modal."""
-        # Actual pattern: isCmd && e.key === "t"
-        assert 'e.key === "t"' in self.js or "e.key === 't'" in self.js, \
-               "Cmd-T binding not found in app.js"
-
     def test_question_mark_help(self):
         """? shows contextual help."""
         assert "'?'" in self.js or '"?"' in self.js, \

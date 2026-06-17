@@ -264,7 +264,7 @@ class TestGetCortexStatus:
         assert result["audit_chain"]["status"] == "OK"
         assert "processes" in result
         assert "cross_db" in result
-        assert result["kill_switch"]["totp_required"] is True
+        assert result["kill_switch"]["engaged"] is False
 
     def test_handles_missing_audit(self, db, heartbeat_dir, tmp_path):
         result = get_cortex_status(db, heartbeat_dir, tmp_path / "nope.log")

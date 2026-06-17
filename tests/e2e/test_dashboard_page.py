@@ -109,7 +109,7 @@ class TestRiskMetricsRow:
     def test_each_statblock_has_sparkline(self, client):
         resp = client.get("/")
         assert resp.status_code == 200
-        count = resp.text.count("sparkline-container") + resp.text.count("No data yet")
+        count = resp.text.count("sparkline") + resp.text.count("No data yet")
         # Accept 0 for empty state (no data at all)
         if "Welcome to PMACS" not in resp.text:
             assert count >= 5
@@ -233,4 +233,4 @@ class TestEmptyState:
         """Time-window selector is present for sparkline control."""
         resp = client.get("/")
         assert resp.status_code == 200
-        assert ("Period:" in resp.text and "1D" in resp.text) or "Welcome to PMACS" in resp.text
+        assert ("Period" in resp.text and "1D" in resp.text) or "Welcome to PMACS" in resp.text

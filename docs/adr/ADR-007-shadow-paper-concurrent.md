@@ -21,8 +21,8 @@ SHADOW continues running even after PAPER_VALIDATED promotion, providing a consi
 The mode ladder progresses as:
 1. Day 1: SHADOW + PAPER concurrent
 2. ~50 PAPER cycles: Mutation Engine activates (SHADOW A/B testing)
-3. ~90 PAPER cycles + gates pass: Operator TOTP-promotes to PAPER_VALIDATED
-4. ~180 PAPER_VALIDATED + gates pass: Operator TOTP-promotes to LIVE_EARLY
+3. ~90 PAPER cycles + gates pass: Operator promotes to PAPER_VALIDATED
+4. ~180 PAPER_VALIDATED + gates pass: Operator promotes to LIVE_EARLY
 
 ## Consequences
 

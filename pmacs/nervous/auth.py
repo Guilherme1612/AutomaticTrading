@@ -2,15 +2,14 @@
 
 Session tokens are 256-bit random hex (secrets.token_hex(32)).
 Only one active session at a time — new creation invalidates the old.
-TOTP required for write endpoints.
+A valid session is required for write endpoints (single-operator, loopback-only;
+no second-factor gate).
 """
 from __future__ import annotations
 
 import secrets
 import time
 from dataclasses import dataclass, field
-
-from pmacs.cortex.totp import verify_totp
 
 
 SESSION_DURATION_S: float = 24 * 60 * 60  # 24 hours
@@ -82,14 +81,11 @@ class SessionManager:
         if self._session is not None and token == self._session.token:
             self._session = None
 
-    def verify_write_access(
-        self,
-        session_token: str,
-        totp_code: str | None = None,
-        totp_secret: str = "",
-        require_totp: bool = False,
-    ) -> bool:
-        """Verify session for write endpoints. TOTP disabled.
+    def verify_write_access(self, session_token: str) -> bool:
+        """Verify session for write endpoints.
+
+        Single-operator, loopback-only system — a valid session is sufficient;
+        there is no second-factor gate.
 
         Returns:
             True if session is valid.

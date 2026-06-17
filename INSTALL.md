@@ -32,7 +32,7 @@ pmacs setup
 pmacs start
 ```
 
-Dashboard runs at http://127.0.0.1:8001
+Dashboard runs at http://127.0.0.1:8000
 
 ## Data Directory
 
@@ -100,4 +100,4 @@ pytest tests/ -k "not e2e"
 | `ModuleNotFoundError` | Run `pip install -e ".[dev]"` |
 | `data/` missing | Run `pmacs init` |
 | API key errors | Set `ANTHROPIC_API_KEY` env var |
-| Port 8001 in use | `lsof -i :8001` then kill the process |
+| Port 8000 in use | `lsof -i :8000` then kill the process |

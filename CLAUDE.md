@@ -42,7 +42,7 @@ These are absolute. They are not guidelines. Violating any of them is a bug.
 2. **LLMs never math.** Probabilities are combined, sized, and arbitrated by Python. LLMs produce structured outputs only.
 3. **Every state transition is hash-chained.** Audit log with `prev_sha256`. Tampering with one line breaks the chain.
 4. **Local-only execution.** No cloud LLM calls. No telemetry. The inference process is pf-blocked from internet.
-5. **Operator owns the kill switch.** TOTP-gated disengagement. The system can engage it. Only the operator can lift it.
+5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
 ## Anti-Patterns (enforce via pre-commit + CI)
 
@@ -56,12 +56,12 @@ These are from `spec/Architecture.md §16`. Every one of them is a specific code
 - ❌ Day 1 bootstrap aborting everything — MUST use `PROCEED_BOOTSTRAP_LOW_CONFIDENCE`
 - ❌ Tight broker-side stops — PMACS manages tight stops; broker gets only catastrophe-net (15%)
 - ❌ `eur_per_usd` field — MUST use `usd_per_eur` (ECB convention)
-- ❌ Mutation Engine writing production state directly — proposes only; operator TOTP applies
+- ❌ Mutation Engine writing production state directly — proposes only; operator confirmation applies
 - ❌ Mutation A/B running in PAPER — candidate arm runs SHADOW-only
-- ❌ Any mutation auto-applying — ALL mutations require operator TOTP. No exceptions.
-- ❌ Runtime prompt edits — operator proposes mutation → A/B test → TOTP promote
+- ❌ Any mutation auto-applying — ALL mutations require operator confirmation. No exceptions.
+- ❌ Runtime prompt edits — operator proposes mutation → A/B test → confirm promote
 - ❌ Backtesting against historical LLM outputs — epistemically invalid
-- ❌ Logging secrets — never log API keys, TOTP secrets, signing keys
+- ❌ Logging secrets — never log API keys, signing keys
 - ❌ Missing `error_code` on WARN+ debug events — every WARN+ has a canonical code from Architecture.md §5.5
 
 ## Pydantic v2 Rules (enforce everywhere)
@@ -130,13 +130,13 @@ PMACS has 15 build phases defined in `spec/Phases.md §2`. Map them to GSD phase
 1. Read the page spec in `spec/Source.md §14-20`
 2. Use the visual identity tokens from `spec/Source.md §13.1`
 3. Dashboard gets data via SSE from nervous (spec/Architecture.md §4.4) — NOT by polling DBs
-4. Write actions go through `pmacs-nervous` POST (TOTP-gated) — dashboard is READ-ONLY
+4. Write actions go through `pmacs-nervous` POST (operator-confirmed) — dashboard is READ-ONLY
 
 ### Implementing the Mutation Engine
 1. Read `spec/Architecture.md §10` for the process lifecycle
 2. Read `spec/Agents.md §17` for candidate generation rules
 3. Read `spec/Agents.md §17.4` for the FIVE rollback safety levels — ALL MUST WORK
-4. **The Mutation Engine is an advisor, not an actor.** ALL mutations require operator TOTP. No auto-promote.
+4. **The Mutation Engine is an advisor, not an actor.** ALL mutations require operator confirmation. No auto-promote.
 5. The mutation process CANNOT write to production config (structural, not procedural)
 6. Auto-rollback on regression remains as a safety net for operator-approved mutations
 7. Run `spec/Phases.md §6.3` Checkpoint C before marking Phase 14 complete
@@ -160,7 +160,7 @@ All in `config/`:
 - Catastrophe-net stop: 15% below entry (broker-side)
 - Crucible time budget: 90s per attack cycle, 2 cycles max
 - Mutation activation: after 50 PAPER cycles
-- Mutation: ALL require operator TOTP (no auto-promote). Engine is advisor-only.
+- Mutation: ALL require operator confirmation (no auto-promote). Engine is advisor-only.
 - Mutation stat-sig threshold for recommendations: p < 0.05, Cohen's d > 0.20, n >= 20
 - Mutation probation: 30 cycles, auto-rollback window: 50 cycles (safety net for approved mutations that regress)
 - Mode promotion to PAPER_VALIDATED: >= 90 cycles, >= 200 trades, Brier <= 0.30, Sharpe >= 0.0, drawdown <= 15%
@@ -177,7 +177,7 @@ All in `config/`:
 | pmacs-nervous | :8000 | Orchestration, SSE, write API |
 | pmacs-stoploss | daemon | RTH position monitoring every 30 min |
 | pmacs-mutation | daemon | Active flywheel (dormant first 50 cycles) |
-| pmacs-dashboard | :8001 | Read-only web UI (loopback only) |
+| pmacs-dashboard | :8000 | Read-only web UI, served by pmacs-nervous (loopback only) |
 
 ## Storage (5 stores)
 

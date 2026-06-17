@@ -18,8 +18,13 @@ if not importlib.util.find_spec("multipart"):
 
 
 @pytest.fixture
-def client():
-    """FastAPI test client with wizard routes registered."""
+def client(tmp_path, monkeypatch):
+    """FastAPI test client with wizard routes registered.
+
+    Isolated to a virgin data dir so wizard state (current_step / completed)
+    starts fresh and is not polluted by the developer's real pmacs.db.
+    """
+    monkeypatch.setenv("PMACS_DATA_DIR", str(tmp_path))
     from pmacs.web.app import app
     return TestClient(app, raise_server_exceptions=True)
 
@@ -41,7 +46,7 @@ class TestWizardHomeRoute:
 
     def test_wizard_home_has_progress_dots(self, client):
         resp = client.get("/wizard/", follow_redirects=True)
-        # 11 dots for 11 steps
+        # 10 dots for 10 steps
         assert "Step 1" in resp.text
 
 
@@ -54,7 +59,7 @@ class TestWizardStatusRoute:
         data = resp.json()
         assert "current_step" in data
         assert "total_steps" in data
-        assert data["total_steps"] == 11
+        assert data["total_steps"] == 10
 
     def test_status_default_step_is_1(self, client):
         resp = client.get("/wizard/status")
@@ -293,73 +298,6 @@ class TestVerifyDataStep:
             assert result["all_ok"] is True
 
 
-class TestTOTPEnrollStep:
-    """Tests for pmacs.installer.steps.totp_enroll module."""
-
-    @pytest.mark.asyncio
-    async def test_totp_phase1_generates_secret_and_qr(self):
-        from pmacs.installer.steps.totp_enroll import run
-
-        result = await run({})
-        assert "_secret" in result
-        assert "qr_data_uri" in result
-        assert result["qr_data_uri"].startswith("data:image/svg+xml")
-        assert result["ok"] is False  # Not yet verified
-
-    @pytest.mark.asyncio
-    async def test_totp_phase2_rejects_invalid_code(self):
-        from pmacs.installer.steps.totp_enroll import run
-        from pmacs.cortex.totp import generate_totp_secret
-
-        secret = generate_totp_secret()
-        form_data = {
-            "totp_secret": secret,
-            "totp_0": "9",
-            "totp_1": "9",
-            "totp_2": "9",
-            "totp_3": "9",
-            "totp_4": "9",
-            "totp_5": "9",
-        }
-        result = await run(form_data)
-        assert result["ok"] is False
-        assert "Invalid" in result.get("message", "")
-
-    @pytest.mark.asyncio
-    async def test_totp_phase2_accepts_valid_code(self):
-        from pmacs.installer.steps.totp_enroll import run
-        from pmacs.cortex.totp import generate_totp_secret, compute_totp
-
-        secret = generate_totp_secret()
-        code = compute_totp(secret)
-        digits = list(code)
-
-        form_data = {
-            "totp_secret": secret,
-        }
-        for i, d in enumerate(digits):
-            form_data[f"totp_{i}"] = d
-
-        with patch("pmacs.installer.steps.totp_enroll._store_totp_secret"):
-            result = await run(form_data)
-            assert result["ok"] is True
-
-    @pytest.mark.asyncio
-    async def test_totp_phase2_rejects_incomplete_code(self):
-        from pmacs.installer.steps.totp_enroll import run
-        from pmacs.cortex.totp import generate_totp_secret
-
-        secret = generate_totp_secret()
-        form_data = {
-            "totp_secret": secret,
-            "totp_0": "1",
-            "totp_1": "2",
-            # Missing digits
-        }
-        result = await run(form_data)
-        assert result["ok"] is False
-
-
 class TestWizardTemplateRendering:
     """Verify wizard templates render without errors."""
 
@@ -383,10 +321,6 @@ class TestWizardStepModulesExist:
     def test_verify_data_importable(self):
         from pmacs.installer.steps import verify_data
         assert hasattr(verify_data, "run")
-
-    def test_totp_enroll_importable(self):
-        from pmacs.installer.steps import totp_enroll
-        assert hasattr(totp_enroll, "run")
 
     def test_existing_steps_importable(self):
         from pmacs.installer.steps import check_system

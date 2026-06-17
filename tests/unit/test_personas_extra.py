@@ -99,7 +99,7 @@ class TestGrowthHunterOutput:
                 key_risk_to_growth="Competition",
                 p_up=0.5,
                 p_flat=0.3,
-                p_down=0.1,  # sums to 0.9
+                p_down=0.05,  # sums to 0.85 (>0.10 off -> rejected, not auto-normalized)
                 evidence_ids=["ev1"],
             )
 
@@ -174,7 +174,7 @@ class TestInsiderActivityOutput:
                 signal_reasoning="Routine",
                 p_up=0.5,
                 p_flat=0.3,
-                p_down=0.1,  # 0.9
+                p_down=0.05,  # 0.85 (>0.10 off -> rejected)
                 evidence_ids=["ev1"],
             )
 
@@ -224,7 +224,7 @@ class TestShortInterestOutput:
                 anomaly_reasoning="Normal range",
                 p_up=0.6,
                 p_flat=0.3,
-                p_down=0.2,  # 1.1
+                p_down=0.3,  # 1.2 (>0.10 off -> rejected)
                 evidence_ids=["ev1"],
             )
 
@@ -324,7 +324,7 @@ class TestGrowthHunterSanity:
     def test_revenue_out_of_range_fails(self):
         validator = GrowthHunterSanity()
         result = validator._persona_checks({
-            "revenue_yoy_pct": 600,
+            "revenue_yoy_pct": 9999,  # outside widened [-100, 2000] range
             "gross_margin_pct": 46.0,
             "growth_durability_reasoning": "Solid growth",
             "p_up": 0.5,

@@ -4,8 +4,7 @@ Validates every pipeline page component described in Source.md section 16:
 (a) Top filter bar: verdict multi-select, state multi-select, sector, date range, search
 (b) 4 kanban columns: STRONG_BUY, BUY, HOLD, SKIP
 (c) Per-ticker card: ticker, price, conviction, memo truncated, cycle date, action buttons on hover
-(d) Right rail P1-P4 bands with drag-and-drop
-(e) Single-ticker detail drawer
+(d) Queue management API endpoints (reorder/pin/promote/scheme)
 """
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ class TestTopFilterBar:
 
     def test_search_input(self, client):
         resp = client.get("/pipeline")
-        assert "Filter tickers" in resp.text
+        assert "Filter..." in resp.text
 
     def test_verdict_selector(self, client):
         resp = client.get("/pipeline")
@@ -43,8 +42,8 @@ class TestTopFilterBar:
 
     def test_queue_info_displayed(self, client):
         resp = client.get("/pipeline")
-        assert "Queue:" in resp.text
-        assert "Cycles today:" in resp.text
+        # Redesigned filter bar shows a live "Filtered" count
+        assert "Filtered" in resp.text
 
 
 class TestKanbanColumns:
@@ -72,14 +71,14 @@ class TestKanbanColumns:
 
     def test_column_color_coding(self, client):
         resp = client.get("/pipeline")
-        assert "text-green-600" in resp.text  # STRONG_BUY
-        assert "text-blue-600" in resp.text   # BUY
-        assert "text-amber-600" in resp.text  # HOLD
-        assert "text-red-600" in resp.text    # SKIP
+        # Redesign uses semantic token classes per verdict column
+        assert "bg-positive-soft" in resp.text  # STRONG_BUY
+        assert "bg-accent-soft" in resp.text     # BUY
+        assert "bg-crucible" in resp.text        # HOLD/SKIP
 
     def test_empty_columns_show_placeholder(self, client):
         resp = client.get("/pipeline")
-        assert "No items" in resp.text
+        assert "No strong buy signals" in resp.text
 
     def test_drag_and_drop_column_handlers(self, client):
         """Kanban columns have drag-over and drop handlers (always present)."""
@@ -99,9 +98,9 @@ class TestTickerCards:
         """Columns contain card containers (empty or populated)."""
         resp = client.get("/pipeline")
         html = resp.text
-        # Either cards exist or the empty placeholder
-        has_cards = "kanban-card" in html
-        has_empty = "No items" in html
+        # Either cards exist (data-ticker) or the empty placeholder
+        has_cards = "data-ticker" in html
+        has_empty = "No strong buy signals" in html
         assert has_cards or has_empty
 
     def test_card_template_has_ticker_data_attr(self, client):
@@ -116,57 +115,8 @@ class TestTickerCards:
     def test_empty_columns_have_no_items_message(self, client):
         """Empty columns show dashed border placeholder."""
         resp = client.get("/pipeline")
-        assert "border-dashed" in html if (html := resp.text) else False
-        assert "No items" in resp.text
-
-
-class TestPriorityQueueRail:
-    """(d) Right rail P1-P4 bands with drag-and-drop."""
-
-    def test_priority_queue_rail(self, client):
-        resp = client.get("/pipeline")
-        assert "Priority Queue" in resp.text
-
-    def test_p1_band(self, client):
-        resp = client.get("/pipeline")
-        assert "P1" in resp.text
-        assert "Highest Priority" in resp.text
-
-    def test_p2_band(self, client):
-        resp = client.get("/pipeline")
-        assert "P2" in resp.text
-        assert "Standard" in resp.text
-
-    def test_p3_band(self, client):
-        resp = client.get("/pipeline")
-        assert "P3" in resp.text
-        assert "Low Priority" in resp.text
-
-    def test_p4_band(self, client):
-        resp = client.get("/pipeline")
-        assert "P4" in resp.text
-        assert "Background" in resp.text
-
-    def test_promote_all_p1_button(self, client):
-        resp = client.get("/pipeline")
-        assert "Promote all P1" in resp.text
-
-    def test_band_drag_drop(self, client):
-        """Priority bands support drag-and-drop from kanban."""
-        resp = client.get("/pipeline")
-        assert "onBandDrop" in resp.text
-        assert "onBandDragOver" in resp.text
-
-    def test_scheme_save_load(self, client):
-        """Priority scheme save/load UI."""
-        resp = client.get("/pipeline")
-        assert "Scheme name" in resp.text
-        assert "Save" in resp.text
-
-    def test_empty_band_indicator(self, client):
-        """Empty bands show 'Empty' placeholder."""
-        resp = client.get("/pipeline")
-        assert "Empty" in resp.text
+        assert "border-dashed" in resp.text
+        assert "No strong buy signals" in resp.text
 
 
 class TestPipelineAPIEndpoints:

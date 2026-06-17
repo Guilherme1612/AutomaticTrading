@@ -55,8 +55,8 @@ class TestCurrentTickerPanel:
 
     def test_run_new_cycle_button(self, client):
         resp = client.get("/agents")
-        # "Run new cycle" shown when queue empty; "Run cycle" in queue strip when ticker queued
-        assert "Run new cycle" in resp.text or "Run cycle" in resp.text
+        # "Run Full Cycle" when nothing analyzed yet; "Re-analyze All" after a prior cycle
+        assert "Run Full Cycle" in resp.text or "Re-analyze All" in resp.text
 
 
 class TestPersonaRow:
@@ -106,7 +106,7 @@ class TestPersonaRow:
     def test_persona_role_descriptions(self, client):
         """Each persona card shows role description."""
         resp = client.get("/agents")
-        assert "Queue screening" in resp.text
+        assert "Final gate check" in resp.text
         assert "Adversarial testing" in resp.text
 
     def test_persona_grid_layout(self, client):

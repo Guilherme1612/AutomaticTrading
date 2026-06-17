@@ -1,11 +1,11 @@
-"""Integration tests for kill switch — full engage/block/TOTP/resume flow.
+"""Integration tests for kill switch — full engage/block/resume flow.
 
 Verifies Phase 4 exit test #2:
-  engage -> verify no new cycles start -> disengage with TOTP -> cycles resume
+  engage -> verify no new cycles start -> operator disengage -> cycles resume
 
 Covers:
   - Engage blocks cycle initiation
-  - TOTP disengage resumes cycles
+  - Operator disengage resumes cycles
   - Engage emits SSE event
   - Crash loop triggers kill switch
 """
@@ -26,7 +26,6 @@ from pmacs.cortex.kill_switch import (
     is_engaged,
     get_state,
 )
-from pmacs.cortex.totp import compute_totp, generate_totp_secret
 from pmacs.nervous.orchestrator import (
     KillSwitchEngagedError,
     initiate_cycle,
@@ -53,12 +52,6 @@ def tmp_env(tmp_path: Path) -> dict:
         "heartbeat_dir": heartbeat_dir,
         "tmp_path": tmp_path,
     }
-
-
-@pytest.fixture
-def totp_secret() -> str:
-    """Generate a fresh TOTP secret for testing."""
-    return generate_totp_secret()
 
 
 class TestEngageBlocksCycle:
@@ -100,13 +93,13 @@ class TestEngageBlocksCycle:
         assert "integration test reason" in content
 
 
-class TestTOTPDisengageResumes:
-    """TOTP disengage allows cycles to resume."""
+class TestDisengageResumes:
+    """Operator disengage allows cycles to resume."""
 
-    def test_totp_disengage_resumes_cycles(
-        self, tmp_env: dict, totp_secret: str
+    def test_disengage_resumes_cycles(
+        self, tmp_env: dict
     ) -> None:
-        """Full flow: engage -> disengage with TOTP -> cycle succeeds."""
+        """Full flow: engage -> operator disengage -> cycle succeeds."""
         db = tmp_env["db_path"]
         audit = tmp_env["audit_path"]
 
@@ -118,11 +111,8 @@ class TestTOTPDisengageResumes:
         with pytest.raises(KillSwitchEngagedError):
             initiate_cycle("TIMER", db_path=db)
 
-        # 3. Disengage with valid TOTP
-        code = compute_totp(totp_secret)
-        result = disengage(
-            totp_secret, code, "operator cleared", db_path=db, audit_path=audit
-        )
+        # 3. Operator disengage
+        result = disengage("operator cleared", db_path=db, audit_path=audit)
         assert result is True
         assert is_engaged(db_path=db) is False
 
@@ -143,7 +133,7 @@ class TestTOTPDisengageResumes:
             conn.close()
 
     def test_disengage_emits_audit_event(
-        self, tmp_env: dict, totp_secret: str
+        self, tmp_env: dict
     ) -> None:
         """disengage() emits KILL_SWITCH_DISENGAGED audit event."""
         db = tmp_env["db_path"]
@@ -151,27 +141,11 @@ class TestTOTPDisengageResumes:
 
         engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db, audit_path=audit)
 
-        code = compute_totp(totp_secret)
-        disengage(totp_secret, code, "operator cleared", db_path=db, audit_path=audit)
+        disengage("operator cleared", db_path=db, audit_path=audit)
 
         content = audit.read_text()
         assert "KILL_SWITCH_ENGAGED" in content
         assert "KILL_SWITCH_DISENGAGED" in content
-
-    def test_invalid_totp_keeps_kill_switch_engaged(
-        self, tmp_env: dict, totp_secret: str
-    ) -> None:
-        """Invalid TOTP code does not disengage kill switch."""
-        db = tmp_env["db_path"]
-
-        engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=db)
-
-        result = disengage(totp_secret, "000000", "bad attempt", db_path=db)
-        assert result is False
-        assert is_engaged(db_path=db) is True
-
-        with pytest.raises(KillSwitchEngagedError):
-            initiate_cycle("TIMER", db_path=db)
 
 
 class TestEngageEmitsSSE:

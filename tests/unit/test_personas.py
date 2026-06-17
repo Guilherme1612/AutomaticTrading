@@ -70,7 +70,7 @@ class TestMacroRegimeOutput:
                 sector_rotation_summary="test",
                 p_up=0.5,
                 p_flat=0.3,
-                p_down=0.1,
+                p_down=0.05,  # sum 0.85: >0.10 off -> rejected (not auto-normalized)
                 evidence_ids=["ev-001"],
             )
 
@@ -307,6 +307,6 @@ class TestMoatAnalystOutput:
                 competitive_entry_reasoning="test",
                 p_up=0.5,
                 p_flat=0.3,
-                p_down=0.1,
+                p_down=0.05,  # sum 0.85: >0.10 off -> rejected (not auto-normalized)
                 evidence_ids=["ev-001"],
             )

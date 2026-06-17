@@ -114,7 +114,8 @@ class TestLastEventIDHeader:
 
     def test_last_event_id_property(self):
         pub = SSEPublisher()
-        assert pub.last_event_id == 0
+        # IDs are seeded from a ms timestamp; track increments from baseline.
+        base = pub.last_event_id
         pub.publish("cycle", "e1", {"n": 1})
         pub.publish("cycle", "e2", {"n": 2})
-        assert pub.last_event_id == 2
+        assert pub.last_event_id == base + 2

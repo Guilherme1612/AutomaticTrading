@@ -49,6 +49,4 @@ class TokenBucket:
 
 
 # Named bucket instances for different rate limit categories
-BUCKETS: dict[str, TokenBucket] = {
-    "totp_verify": TokenBucket(rate=5, period=60.0),
-}
+BUCKETS: dict[str, TokenBucket] = {}

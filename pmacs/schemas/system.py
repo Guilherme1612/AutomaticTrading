@@ -44,7 +44,7 @@ class ModeTransition(BaseModel):
     to_mode: Mode
     changed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     reason: str = ""
-    operator_totp_verified: bool = False
+    operator_confirmed: bool = False
     triggered_by: str = "OPERATOR"  # OPERATOR / AUTO_DEMOTION
 
 

@@ -16,7 +16,6 @@ router = APIRouter()
 
 class KillSwitchRequest(BaseModel):
     """Request body for kill switch actions."""
-    totp_code: str = ""
     reason: str = ""
 
 
@@ -125,7 +124,7 @@ async def reconcile():
 async def kill_switch_engage(req: KillSwitchRequest):
     """Engage the kill switch (Source.md §18.5).
 
-    Engagement does NOT require TOTP — any trigger can engage (safer to over-trigger).
+    Engagement does NOT require operator confirmation — any trigger can engage (safer to over-trigger).
     """
     cfg = get_config()
     try:
@@ -145,16 +144,14 @@ async def kill_switch_engage(req: KillSwitchRequest):
 
 @router.post("/api/cortex/kill-switch/disengage")
 async def kill_switch_disengage(req: KillSwitchRequest):
-    """Disengage the kill switch (Source.md §18.5, TOTP-gated).
+    """Disengage the kill switch (Source.md §18.5).
 
-    Only the operator can disengage — requires valid TOTP code.
+    Only the operator can disengage — requires an explicit operator action.
     """
     cfg = get_config()
     try:
         from pmacs.cortex.kill_switch import disengage
         success = disengage(
-            totp_secret="",
-            totp_code="000000",
             reason=req.reason or "Manual disengagement via Cortex page",
             db_path=cfg.sqlite_path,
             audit_path=cfg.audit_path,
@@ -169,24 +166,3 @@ async def kill_switch_disengage(req: KillSwitchRequest):
         import logging
         logging.getLogger("pmacs.web").error("Kill switch disengage failed: %s", exc, exc_info=True)
         return JSONResponse({"ok": False, "error": "Failed to disengage kill switch"}, status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# TOTP verification (standalone — mirrors nervous/api.py endpoint)
-# ---------------------------------------------------------------------------
-
-class TOTPVerifyRequest(BaseModel):
-    """Request body for TOTP verification."""
-    code: str
-    action_id: str = ""
-
-
-@router.post("/api/totp/verify")
-async def totp_verify(req: TOTPVerifyRequest):
-    """Verify a TOTP code for gated actions (Source.md §18, Architecture.md §16.3).
-
-    Standalone endpoint so the dashboard can verify TOTP without nervous running.
-    Rate-limited via BUCKETS["totp_verify"] (5 attempts per 60s).
-    """
-    # TOTP disabled — always verify successfully
-    return JSONResponse({"verified": True, "action_id": req.action_id})

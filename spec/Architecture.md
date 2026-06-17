@@ -168,15 +168,15 @@ Holding state transitions use `pmacs.engines.state_machine.transition(holding, n
 ### 1.13 Mutation Engine never writes production state directly
 
 `pmacs-mutation` proposes only. Promotions are explicit writes by `pmacs-nervous` triggered by:
-- Operator TOTP approval (all mutations require explicit operator confirmation)
-- Operator TOTP via Settings → Mutation Engine
+- Operator approval (all mutations require explicit operator confirmation)
+- Operator action via Settings → Mutation Engine
 
 This is structural, not procedural. The mutation process has no write access to `model_registry.json`, prompts, or thresholds. It writes only to `mutation_proposals` and `mutation_outcomes`.
 
 ### 1.14 Configuration is two-tier: code-versioned and runtime-editable
 
 - **Code-versioned** (requires git commit + restart): arbitration formula, conviction formula, audit log format, DB schemas, anti-pattern thresholds, the 18 failure taxonomy types, cycle order sequence.
-- **Runtime-editable** (Settings page, often TOTP-gated; writes use flock-based file locking to prevent concurrent write corruption): risk thresholds, Crucible time budget, mutation enable/disable, persona enable/disable, queue priorities, broker credentials.
+- **Runtime-editable** (Settings page, often operator-confirmed; writes use flock-based file locking to prevent concurrent write corruption): risk thresholds, Crucible time budget, mutation enable/disable, persona enable/disable, queue priorities, broker credentials.
 
 CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
 
@@ -231,7 +231,7 @@ CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
 ### 2.1 Data flow rules (allowed paths)
 
 - **L7 → L2 storage** (read-only via `pmacs-dashboard`)
-- **L7 → L5 nervous** (write actions, TOTP-gated POST)
+- **L7 → L5 nervous** (write actions, operator-confirmed POST)
 - **L7 ← L5 nervous** via SSE (real-time event stream, see §4.3)
 - **L5 → L4 agents** (LLM call orchestration)
 - **L5 → L3 engines** (deterministic computation)
@@ -407,7 +407,7 @@ pmacs/
 │   │   ├── api.py                  # FastAPI app for write actions + SSE
 │   │   ├── sse_publisher.py
 │   │   ├── checkpoint.py           # cycle resume from idempotency log
-│   │   └── auth.py                 # session token + TOTP verification
+│   │   └── auth.py                 # session token verification
 │   ├── cortex/
 │   │   ├── __init__.py
 │   │   ├── daemon.py               # main loop
@@ -415,7 +415,6 @@ pmacs/
 │   │   ├── health.py               # process heartbeat checks
 │   │   ├── kill_switch.py
 │   │   ├── sleep_watch.py          # macOS sleep/wake detection
-│   │   ├── totp.py                 # TOTP verification helper
 │   │   ├── flywheel_monitor.py
 │   │   ├── disk_monitor.py
 │   │   ├── clock_monitor.py        # NTP drift detection
@@ -457,12 +456,11 @@ pmacs/
 │   │   │   ├── statblock.html
 │   │   │   ├── persona_card.html
 │   │   │   ├── ticker_chip.html
-│   │   │   ├── totp_field.html
 │   │   │   └── ...
 │   │   └── static/                 # Tailwind CSS, minimal JS, D3 for sankey
 │   └── installer/
 │       ├── __init__.py
-│       ├── wizard.py               # the 11-step run wizard (Source.md §12)
+│       ├── wizard.py               # the 10-step run wizard (Source.md §12)
 │       └── steps/
 │           ├── step_01_welcome.py
 │           ├── step_02_backend.py
@@ -472,9 +470,8 @@ pmacs/
 │           ├── step_06_connectivity.py
 │           ├── step_07_universe.py
 │           ├── step_08_preferences.py
-│           ├── step_09_totp.py
-│           ├── step_10_smoketest.py
-│           └── step_11_promote.py
+│           ├── step_09_smoketest.py
+│           └── step_10_promote.py
 ├── gbnf/                           # GBNF grammar files (mirrored in pmacs/agents/grammars/)
 ├── prompts/                        # canonical persona prompts (mirrored)
 ├── tests/
@@ -532,7 +529,7 @@ PMACS runs as **eight launchd processes** in dependency order. Each has a single
 | `pmacs-nervous` | :8000 localhost | none | data API allowlist | r/w app tables | 4 |
 | `pmacs-stoploss` | daemon (RTH only) | none | quote API only | r/w stop_events | 5 |
 | `pmacs-mutation` | daemon | none | NONE | r/w `mutation_*` tables | 6 |
-| `pmacs-dashboard` | :8001 localhost (loopback) | none | NONE | r/o all DBs | 7 |
+| `pmacs-dashboard` | :8000 localhost (loopback), served in-process by `pmacs-nervous` | none | NONE | r/o all DBs | 7 |
 
 ### 4.2 launchd configuration
 
@@ -550,7 +547,7 @@ Heartbeats: each process writes `/var/db/pmacs/heartbeat/<proc>.ts` (Unix epoch 
 
 | From → To | Protocol | Auth | Purpose |
 |---|---|---|---|
-| Web → Nervous (write) | HTTP/JSON on :8000 | TOTP per write request (high-impact); session token (low-impact) | Operator actions |
+| Web → Nervous (write) | HTTP/JSON on :8000 | operator confirmation per write request (high-impact); session token (low-impact) | Operator actions |
 | Web ← Nervous (live events) | SSE on :8000/events | Session token; bound to operator session | Real-time UI updates |
 | Nervous → Inference | HTTP/JSON on :8080 | Local API key (Keychain) | LLM calls |
 | Nervous → Execution | UDS `/var/db/pmacs/exec.sock` | Ed25519 signature on TradePlan | Trade submission |
@@ -769,7 +766,7 @@ Every event REQUIRES `cycle_id` except cross-cycle system events (kill switch, m
 
 ### 5.3 Audit retention and replication
 
-**Retention:** 1-year hot. First 7 days uncompressed; days 8-365 gzipped daily. After 1 year: archived to operator-configured offsite location via TOTP-gated rsync.
+**Retention:** 1-year hot. First 7 days uncompressed; days 8-365 gzipped daily. After 1 year: archived to operator-configured offsite location via operator-confirmed rsync.
 
 **Replication:** rsync to operator-configured offsite location hourly. Post-rsync, the destination's chain is verified by computing `this_sha256` from each line's components and comparing to stored value. Mismatch → emit `AUDIT_REPLICATION_CORRUPTION` and engage kill switch.
 
@@ -1414,7 +1411,7 @@ CREATE TABLE mode_history (
     to_mode TEXT NOT NULL,
     changed_at TIMESTAMP NOT NULL,
     reason TEXT,
-    operator_totp_verified INTEGER NOT NULL DEFAULT 0,
+    operator_confirmed INTEGER NOT NULL DEFAULT 0,
     triggered_by TEXT NOT NULL    -- 'OPERATOR' / 'AUTO_DEMOTION'
 );
 
@@ -1498,7 +1495,7 @@ CREATE TABLE kill_switch (
     engaged_reason TEXT,
     engaged_trigger TEXT,            -- one of the 10 triggers
     disengaged_at TIMESTAMP,
-    disengaged_by_totp INTEGER DEFAULT 0,
+    disengaged_by_operator INTEGER DEFAULT 0,
     disengaged_reason TEXT
 );
 
@@ -1687,7 +1684,6 @@ pmacs.data.finnhub
 pmacs.data.fred
 pmacs.data.edgar_user_agent
 pmacs.system.audit_replication_target  # rsync destination URL
-pmacs.system.totp_secret
 pmacs.system.signing_key_ed25519       # private key for trade signing
 pmacs.system.signing_key_pub_ed25519   # public key (also stored at ~/.pmacs/signing.pub for verification)
 ```
@@ -1933,19 +1929,19 @@ Active flywheel (`Source.md §10`). Continuously hunts for underperforming compo
 
 | Dimension | What mutates | Approval required |
 |---|---|---|
-| `prompts` | Persona system prompts (variants tested in SHADOW alongside production) | **No — operator TOTP** |
-| `source_weights` | Per-source Brier-derived adjustments to arbitration weights | **No — operator TOTP** |
-| `thresholds` | Conviction cutoffs, Crucible severity multipliers, bootstrap haircuts | **No — operator TOTP** |
-| `persona_affinity` | Per-persona-per-ticker weight adjustment based on track record | **No — operator TOTP** |
+| `prompts` | Persona system prompts (variants tested in SHADOW alongside production) | **No — operator confirmation** |
+| `source_weights` | Per-source Brier-derived adjustments to arbitration weights | **No — operator confirmation** |
+| `thresholds` | Conviction cutoffs, Crucible severity multipliers, bootstrap haircuts | **No — operator confirmation** |
+| `persona_affinity` | Per-persona-per-ticker weight adjustment based on track record | **No — operator confirmation** |
 | `universe_flags` | Tickers with chronic uncertainty get flagged for review | **No — operator review (no code change, just flag)** |
 
-**All mutations require operator TOTP to apply.** The Mutation Engine is an advisor: it detects, hypothesizes, A/B tests, and recommends. It never auto-applies. This prevents the flywheel from degrading the base system. Auto-rollback on regression remains as a safety net for operator-approved mutations that underperform.
+**All mutations require operator confirmation to apply.** The Mutation Engine is an advisor: it detects, hypothesizes, A/B tests, and recommends. It never auto-applies. This prevents the flywheel from degrading the base system. Auto-rollback on regression remains as a safety net for operator-approved mutations that underperform.
 
 ### 10.3 Lifecycle
 
 ```
 Detection -> Hypothesis -> Shadow A/B (>= 20 cycles) -> Statistical test -> Classification ->
-  \-- ALL mutations -> Settings page -> operator reviews evidence -> TOTP -> applied
+  \-- ALL mutations -> Settings page -> operator reviews evidence -> confirm -> applied
        |
        v
        30-cycle probation (locked from further mutation)
@@ -2048,16 +2044,14 @@ sample_size >= 20
 effect_magnitude < 0.10  # mutation magnitude — avoid promoting drastic auto changes
 ```
 
-Recommendations meeting these thresholds are surfaced to the operator in Settings → Mutation Engine. **The operator must TOTP-approve before any mutation is applied to production.**
+Recommendations meeting these thresholds are surfaced to the operator in Settings → Mutation Engine. **The operator must confirm before any mutation is applied to production.**
 
 ### 10.7 Promotion
 
 ```python
 # pmacs/mutation/promotion.py
-def operator_promote(proposal_id: str, totp: str):
-    """Called from Settings page; TOTP-verified."""
-    if not totp_verify(totp):
-        raise PermissionError("invalid TOTP")
+def operator_promote(proposal_id: str):
+    """Called from Settings page; requires explicit operator action."""
     proposal = load(proposal_id)
     apply_candidate_to_registry(proposal)
     log_audit("mutation_operator_promoted", {
@@ -2077,9 +2071,9 @@ def operator_promote(proposal_id: str, totp: str):
 
 ### 10.8 Rollback
 
-Triggered automatically when a promoted mutation post-probation (cycles > probation_cycles after promotion, default 30) shows the controlling metric (Brier or Sharpe) below the **baseline window** (last 50 cycles before promotion). Manual rollback button in Settings (TOTP).
+Triggered automatically when a promoted mutation post-probation (cycles > probation_cycles after promotion, default 30) shows the controlling metric (Brier or Sharpe) below the **baseline window** (last 50 cycles before promotion). Manual rollback button in Settings (operator-confirmed).
 
-**Rollback window expiration:** Auto-rollback monitors a promoted mutation for 50 cycles after probation ends (cycles 30-80 post-promotion). After cycle 80, auto-monitoring stops and the mutation is considered 'naturalized' — it has accumulated enough evidence to be a baseline component. Manual rollback via Settings remains available indefinitely (TOTP-gated). The rollback_config remains stored in the mutation_proposals table forever; the operator can always manually revert any promoted mutation.
+**Rollback window expiration:** Auto-rollback monitors a promoted mutation for 50 cycles after probation ends (cycles 30-80 post-promotion). After cycle 80, auto-monitoring stops and the mutation is considered 'naturalized' — it has accumulated enough evidence to be a baseline component. Manual rollback via Settings remains available indefinitely (operator-confirmed). The rollback_config remains stored in the mutation_proposals table forever; the operator can always manually revert any promoted mutation.
 
 ### 10.9 Activation timing
 
@@ -2098,7 +2092,7 @@ Candidate arms run in SHADOW only, never PAPER or LIVE. The same evidence and ga
 Mutation Engine UI (Settings → Mutation Engine, `Source.md §20.8`):
 - Hidden during the first 5 cycles of A/B (per Q-M3 design)
 - After cycle 5: visible with progress bar (sample_size / sample_size_min) and trending direction (current candidate-control delta with confidence interval)
-- After stat-sig: full results displayed with promote / reject buttons (TOTP for substantive mutations)
+- After stat-sig: full results displayed with promote / reject buttons (operator confirmation for substantive mutations)
 
 ---
 
@@ -2374,10 +2368,10 @@ The persona dispatch is parallel within slots and concurrent across slots. Total
 ### 13.2 Disengagement
 
 Requires:
-- TOTP from operator
+- Explicit operator action from the Cortex page
 - Explicit acknowledgment of trigger reason (typed reason field)
 - Cortex confirms underlying condition resolved
-- Audit log entry with operator identity (TOTP-derived)
+- Audit log entry with operator identity (operator-set)
 
 While engaged: no new positions; no normal exits (only stop-loss and catastrophe-net fire); StopLossMonitor continues running.
 
@@ -2394,7 +2388,7 @@ class KillSwitchState(str, Enum):
     ENGAGED = "ENGAGED"
 
 def engage(trigger: str, reason: str):
-    """Engagement does NOT require TOTP; engagement is the safer option."""
+    """Engagement does NOT require operator confirmation; engagement is the safer option."""
     sqlite.execute("""
         UPDATE kill_switch SET state='ENGAGED', engaged_at=?, engaged_trigger=?, engaged_reason=?
     """, (datetime.utcnow(), trigger, reason))
@@ -2404,14 +2398,12 @@ def engage(trigger: str, reason: str):
     # SSE broadcast
     sse.publish("system", "system.kill_switch_engaged", {"trigger": trigger, "reason": reason})
 
-def disengage(operator_reason: str, totp: str):
-    """Disengagement requires TOTP and operator-typed reason."""
-    if not totp_verify(totp):
-        raise PermissionError("invalid TOTP")
+def disengage(operator_reason: str):
+    """Disengagement requires explicit operator action and an operator-typed reason."""
     if not condition_resolved():
         raise RuntimeError("kill switch condition not yet resolved")
     sqlite.execute("""
-        UPDATE kill_switch SET state='ARMED', disengaged_at=?, disengaged_by_totp=1, disengaged_reason=?
+        UPDATE kill_switch SET state='ARMED', disengaged_at=?, disengaged_by_operator=1, disengaged_reason=?
     """, (datetime.utcnow(), operator_reason))
     log_audit("kill_switch_disengaged", {"operator_reason": operator_reason})
     nervous.resume()
@@ -2606,7 +2598,7 @@ def update_prompt(name, new_prompt):
 
 # ✅ REQUIRED — operator submission stages a candidate
 @app.post("/settings/persona/{name}/propose_mutation")
-def propose_mutation(name, new_prompt, totp):
+def propose_mutation(name, new_prompt):
     sqlite.execute("INSERT INTO mutation_proposals ... status='PROPOSED'", ...)
 ```
 
@@ -2718,7 +2710,7 @@ sample_size_min = 20
 shadow_tickers_per_cycle = 5
 
 [recommendation]
-# All mutations require operator TOTP. No auto-promote.
+# All mutations require operator confirmation. No auto-promote.
 stat_sig_p_threshold = 0.05
 stat_sig_cohens_d_min = 0.20
 stat_sig_sample_min = 20
@@ -2841,9 +2833,9 @@ All secrets in macOS Keychain with `pmacs.<category>.<key>` naming (§8.8). Read
 - Caches in-process for single use, never written to disk
 - Wipes on process exit (best-effort; macOS handles process memory cleanup)
 
-### 18.4 TOTP
+### 18.4 Operator action authorization
 
-`pyotp`-based. Secret stored in Keychain at `pmacs.system.totp_secret`. Verification has a ±30s window. Used for (exhaustive list matching Source.md §6 decision rights matrix):
+This is a single-operator, loopback-only system; there is no second-factor authentication gate. Sensitive writes still require an explicit operator action through the dashboard (a confirmation step, and a typed reason where noted) and every such action is hash-chain audited. The actions requiring explicit operator confirmation (exhaustive list matching Source.md §6 decision rights matrix):
 - Mode promotion (PAPER → PAPER_VALIDATED → LIVE_*)
 - Kill switch disengage
 - Universe ticker add
@@ -2859,7 +2851,7 @@ Keypair in Keychain. Private key only readable by `_pmacs_exec` (math process) U
 
 ### 18.6 Dashboard CSRF and XSS
 
-- CSRF: every write endpoint requires a same-origin token plus TOTP for sensitive ops. Origin checked against `localhost:8001`.
+- CSRF: every write endpoint requires a same-origin token for sensitive ops. Origin checked against `localhost:8000`.
 - XSS: HTMX templates use Jinja2 autoescape. JSON responses use `Content-Type: application/json` with `X-Content-Type-Options: nosniff`.
 - CSP: strict policy disallowing inline scripts and external resources.
 

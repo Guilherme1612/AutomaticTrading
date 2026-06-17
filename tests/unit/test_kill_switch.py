@@ -18,7 +18,6 @@ from pmacs.cortex.kill_switch import (
     check_all_triggers,
     TRIGGER_IDS,
 )
-from pmacs.cortex.totp import compute_totp, generate_totp_secret
 from pmacs.storage.sqlite import init_db
 
 
@@ -39,12 +38,6 @@ def tmp_env(tmp_path: Path) -> dict[str, Path]:
         "audit_path": audit_path,
         "heartbeat_dir": heartbeat_dir,
     }
-
-
-@pytest.fixture
-def totp_secret() -> str:
-    """Generate a fresh TOTP secret for testing."""
-    return generate_totp_secret()
 
 
 class TestEngage:
@@ -87,44 +80,25 @@ class TestEngage:
 class TestDisengage:
     """Tests for disengage()."""
 
-    def test_disengage_with_valid_totp(self, tmp_env: dict[str, Path], totp_secret: str) -> None:
-        """disengage() with valid TOTP sets state back to ARMED."""
+    def test_disengage_sets_armed(self, tmp_env: dict[str, Path]) -> None:
+        """disengage() sets state back to ARMED."""
         engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=tmp_env["db_path"])
         assert is_engaged(db_path=tmp_env["db_path"]) is True
 
-        code = compute_totp(totp_secret)
-        result = disengage(
-            totp_secret, code, "operator cleared", db_path=tmp_env["db_path"]
-        )
+        result = disengage("operator cleared", db_path=tmp_env["db_path"])
         assert result is True
         assert is_engaged(db_path=tmp_env["db_path"]) is False
 
-    def test_disengage_with_invalid_totp(self, tmp_env: dict[str, Path], totp_secret: str) -> None:
-        """disengage() with invalid TOTP returns False, state stays ENGAGED."""
-        engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=tmp_env["db_path"])
-
-        result = disengage(
-            totp_secret, "000000", "bad attempt", db_path=tmp_env["db_path"]
-        )
-        assert result is False
-        assert is_engaged(db_path=tmp_env["db_path"]) is True
-
-    def test_disengage_when_not_engaged_raises(self, tmp_env: dict[str, Path], totp_secret: str) -> None:
+    def test_disengage_when_not_engaged_raises(self, tmp_env: dict[str, Path]) -> None:
         """disengage() when state is ARMED raises ValueError."""
-        code = compute_totp(totp_secret)
         with pytest.raises(ValueError, match="not ENGAGED"):
-            disengage(
-                totp_secret, code, "no-op", db_path=tmp_env["db_path"]
-            )
+            disengage("no-op", db_path=tmp_env["db_path"])
 
-    def test_disengage_writes_audit(self, tmp_env: dict[str, Path], totp_secret: str) -> None:
+    def test_disengage_writes_audit(self, tmp_env: dict[str, Path]) -> None:
         """disengage() writes to audit log when audit_path provided."""
         engage("test", "AUDIT_CHAIN_INTEGRITY", db_path=tmp_env["db_path"])
 
-        code = compute_totp(totp_secret)
         disengage(
-            totp_secret,
-            code,
             "operator cleared",
             db_path=tmp_env["db_path"],
             audit_path=tmp_env["audit_path"],
@@ -146,15 +120,14 @@ class TestStatePersistence:
         # is_engaged opens a new connection each time
         assert is_engaged(db_path=db) is True
 
-    def test_engage_disengage_persists(self, tmp_env: dict[str, Path], totp_secret: str) -> None:
+    def test_engage_disengage_persists(self, tmp_env: dict[str, Path]) -> None:
         """Full cycle: engage -> disengage -> check persists."""
         db = tmp_env["db_path"]
 
         engage("test", "DISK_SPACE_LOW", db_path=db)
         assert is_engaged(db_path=db) is True
 
-        code = compute_totp(totp_secret)
-        disengage(totp_secret, code, "cleared", db_path=db)
+        disengage("cleared", db_path=db)
         assert is_engaged(db_path=db) is False
 
         # Re-read from fresh connection

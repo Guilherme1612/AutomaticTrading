@@ -262,7 +262,10 @@ class TestSSEPublisher:
         """Publishing with no clients does not raise."""
         pub = SSEPublisher()
         eid = pub.publish("cycle", "cycle.open", {"cycle_id": "test"})
-        assert eid == "1"
+        # IDs are monotonic numeric strings seeded from a ms timestamp.
+        assert eid.isdigit()
+        eid2 = pub.publish("cycle", "cycle.open", {"cycle_id": "test2"})
+        assert int(eid2) == int(eid) + 1
 
     def test_publish_delivers_to_client(self) -> None:
         """Events are delivered to subscribed clients."""
@@ -329,17 +332,17 @@ class TestSessionManager:
         mgr.invalidate_session(info.token)
         assert not mgr.verify_session(info.token)
 
-    def test_verify_write_access_no_totp(self) -> None:
-        """Write access without require_totp skips TOTP check."""
+    def test_verify_write_access_valid_session(self) -> None:
+        """Write access succeeds with a valid session (no second-factor gate)."""
         from pmacs.nervous.auth import SessionManager
 
         mgr = SessionManager()
         info = mgr.create_session()
-        assert mgr.verify_write_access(info.token, None, "secret", require_totp=False)
+        assert mgr.verify_write_access(info.token)
 
     def test_verify_write_access_bad_session(self) -> None:
         """Write access with bad session fails."""
         from pmacs.nervous.auth import SessionManager
 
         mgr = SessionManager()
-        assert not mgr.verify_write_access("bad_token", None, "secret", require_totp=False)
+        assert not mgr.verify_write_access("bad_token")

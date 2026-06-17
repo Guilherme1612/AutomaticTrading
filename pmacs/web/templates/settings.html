@@ -135,6 +135,7 @@
                 <label class="flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-all
                              {{ 'border-accent bg-accent-soft' if provider.id == inference.active else 'border-border hover:border-border-strong hover:bg-surface-sunken/30' }}">
                     <input type="radio" name="inference-provider" value="{{ provider.id }}"
+                           aria-label="Select {{ provider.id }} inference provider"
                            {{ 'checked' if provider.id == inference.active else '' }}
                            onchange="switchProvider(this.value)"
                            class="accent-blue-600 shrink-0">
@@ -170,6 +171,7 @@
                 <label class="flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-all
                              {{ 'border-accent bg-accent-soft' if provider.id == inference.active else 'border-border hover:border-border-strong hover:bg-surface-sunken/30' }}">
                     <input type="radio" name="inference-provider" value="{{ provider.id }}"
+                           aria-label="Select {{ provider.id }} inference provider"
                            {{ 'checked' if provider.id == inference.active else '' }}
                            onchange="switchProvider(this.value)"
                            class="accent-blue-600 shrink-0">
@@ -787,7 +789,7 @@ function saveBudgetCaps() {
     if (isNaN(dailyCap) || isNaN(monthlyCap) || dailyCap <= 0 || monthlyCap <= 0) {
         showToast('Enter valid amounts', 'error'); return;
     }
-    open_totp_modal({
+    confirmAction({
         actionId: 'settings.cost_caps',
         description: 'Update budget caps: $' + dailyCap.toFixed(2) + '/day, $' + monthlyCap.toFixed(2) + '/month',
         consequences: 'Lowering caps may block LLM calls mid-cycle.',
@@ -815,7 +817,7 @@ function refreshPricing() {
 <!-- Mutation functions -->
 <script>
 function promoteMutation(candidateId) {
-    open_totp_modal({
+    confirmAction({
         actionId: 'mutation.promote.' + candidateId,
         description: 'Promote mutation: ' + candidateId,
         consequences: 'Applied to production config. Monitored for 50 cycles.',
@@ -828,7 +830,7 @@ function promoteMutation(candidateId) {
 }
 
 function rejectMutation(candidateId) {
-    open_totp_modal({
+    confirmAction({
         actionId: 'mutation.reject.' + candidateId,
         description: 'Reject mutation: ' + candidateId,
         consequences: 'Permanently rejected.',
@@ -841,7 +843,7 @@ function rejectMutation(candidateId) {
 }
 
 function rollbackMutation(candidateId) {
-    open_totp_modal({
+    confirmAction({
         actionId: 'mutation.rollback.' + candidateId,
         description: 'Rollback mutation: ' + candidateId,
         consequences: 'Config reverts to pre-mutation state.',

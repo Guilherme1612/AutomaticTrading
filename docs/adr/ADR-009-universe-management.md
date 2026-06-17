@@ -20,7 +20,7 @@ The universe is operator-curated. The operator selects ~16 growth-tech tickers a
 
 An optional Nasdaq-100 overlay is available via Settings (Index Overlay = on), but it is opt-in and supplementary, not the primary universe.
 
-No automatic universe expansion via screener in v1. The operator may add or remove tickers through the Settings page (TOTP-gated write through nervous).
+No automatic universe expansion via screener in v1. The operator may add or remove tickers through the Settings page (operator-confirmed write through nervous).
 
 `pmacs-mutation` can flag tickers with chronic uncertainty (universe_flags dimension) for operator review, but cannot add or remove tickers directly.
 
@@ -36,7 +36,7 @@ No automatic universe expansion via screener in v1. The operator may add or remo
 **Negative:**
 
 - The universe is limited to what the operator knows. Emerging opportunities outside the operator's awareness are missed.
-- Adding a new ticker requires manual action (Settings page + TOTP). If the operator is slow to add a name that a screener would have caught, the system misses early entry opportunities.
+- Adding a new ticker requires manual action (Settings page, operator confirmation). If the operator is slow to add a name that a screener would have caught, the system misses early entry opportunities.
 - The ~16-ticker seed is small. For meaningful diversification across catalyst types, the operator must actively maintain and refresh the list.
 
 **References:** spec/Source.md §8 (universe management), §8.4 (no screener), spec/Architecture.md §10.2 (universe_flags mutation dimension).

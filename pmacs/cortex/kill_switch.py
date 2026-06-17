@@ -1,8 +1,8 @@
 """Kill switch state machine — ARMED / ENGAGED (Architecture.md §13).
 
 The kill switch is the primary safety mechanism. Any trigger can ENGAGE
-without TOTP (safer to over-trigger). Only the operator can DISENGAGE
-via valid TOTP code.
+(safer to over-trigger). Only the operator can DISENGAGE via an explicit
+operator action.
 
 State persisted in SQLite `kill_switch` singleton table.
 """
@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pmacs.cortex.totp import verify_totp
 from pmacs.logsys import log_debug
 from pmacs.nervous.sse_publisher import publish_system_event
 
@@ -106,7 +105,7 @@ def engage(
     audit_path: str | Path | None = None,
     cycle_id: str = "",
 ) -> None:
-    """Engage the kill switch. Does NOT require TOTP.
+    """Engage the kill switch. Does NOT require operator confirmation.
 
     Any trigger can engage — it is safer to over-trigger than under-trigger.
     Sets state to ENGAGED, logs to audit and debug.
@@ -204,43 +203,29 @@ def engage(
 
 
 def disengage(
-    totp_secret: str,
-    totp_code: str,
     reason: str,
     db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     cycle_id: str = "",
 ) -> bool:
-    """Disengage the kill switch. Requires valid TOTP.
+    """Disengage the kill switch. Requires an explicit operator action.
 
-    Only the operator can disengage. Verifies TOTP code before clearing.
+    Only the operator can disengage. Single-operator, loopback-only system —
+    no second-factor gate; the action is recorded in the hash-chained audit log.
 
     Args:
-        totp_secret: The TOTP secret (base32) for verification.
-        totp_code: The 6-digit TOTP code provided by operator.
         reason: Human-readable reason for disengagement.
         db_path: Path to SQLite database.
         audit_path: Optional path to audit log file.
         cycle_id: Optional cycle ID for audit traceability.
 
     Returns:
-        True if disengaged successfully, False if TOTP invalid.
+        True if disengaged successfully.
 
     Raises:
         ValueError: If kill switch is not currently ENGAGED.
     """
     db_path = _resolve_db(db_path)
-    if not verify_totp(totp_secret, totp_code):
-        log_debug(
-            "KILL_SWITCH_DISENGAGE_TOTP_FAILED",
-            payload={"reason": reason},
-            level="WARN",
-            error_code="KILL_SWITCH_ENGAGED",
-            cycle_id=cycle_id or None,
-            msg="Kill switch disengage FAILED: invalid TOTP code",
-        )
-        return False
-
     conn = _get_db(db_path)
     try:
         current = conn.execute("SELECT state FROM kill_switch WHERE id = 1").fetchone()
@@ -267,7 +252,7 @@ def disengage(
                         cycle_id=cycle_id or None,
                         msg=f"Kill switch disengaged but condition {trigger_name[0]} may still be active: {reasons}",
                     )
-                    # Operator TOTP takes precedence — log warning but allow disengage
+                    # Operator action takes precedence — log warning but allow disengage
             except Exception:
                 # If re-check fails, allow disengage (operator explicitly overriding)
                 pass

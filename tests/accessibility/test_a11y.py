@@ -129,13 +129,13 @@ class TestAccessibilityStructural:
         css = css_path.read_text()
         assert "prefers-reduced-motion" in css, "Missing reduced-motion media query"
 
-    def test_viewport_guard_exists(self, dashboard_client):
-        """1024px minimum viewport guard must exist in base template."""
+    def test_responsive_layout_exists(self, dashboard_client):
+        """The redesign replaced the 1024px viewport guard with a responsive
+        layout (collapsible mobile sidebar + lg: breakpoints)."""
         response = dashboard_client.get("/")
         html = response.text.lower()
-        # Must have the viewport guard element with 1024px reference
-        assert "viewport-guard" in html or ("1024" in html and "wider" in html), \
-            "Viewport guard overlay not found in base template"
+        assert "mobile-sidebar-overlay" in html and "lg:" in html, \
+            "Responsive layout markers not found in base template"
 
     def test_color_contrast_tokens_defined(self):
         """CSS must define color tokens that meet WCAG AA contrast."""
@@ -353,14 +353,13 @@ class TestAxeCoreCI:
             browser.close()
 
     @pytest.fixture(scope="class")
-    def base_url(self, dashboard_client):
+    def base_url(self):
         """Get the base URL from the live test server."""
         # TestClient doesn't expose a port, so we start a real server
         import threading, time
         import uvicorn
-        from pmacs.web.app import create_app
+        from pmacs.web.app import app
 
-        app = create_app()
         server_url = "http://127.0.0.1:18765"
 
         def _serve():
@@ -368,7 +367,16 @@ class TestAxeCoreCI:
 
         t = threading.Thread(target=_serve, daemon=True)
         t.start()
-        time.sleep(1)  # Wait for server ready
+
+        # Poll until the server accepts connections instead of a fixed sleep.
+        import urllib.request
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(server_url, timeout=1)
+                break
+            except Exception:
+                time.sleep(0.25)
         yield server_url
 
     @pytest.mark.parametrize("page_path", PAGES)
@@ -376,7 +384,9 @@ class TestAxeCoreCI:
         """axe-core scan must find zero WCAG 2.1 AA violations."""
         page = browser.new_page()
         try:
-            page.goto(f"{base_url}{page_path}", wait_until="networkidle", timeout=10000)
+            # Pages hold a persistent SSE connection, so "networkidle" never
+            # settles — wait for DOM content instead.
+            page.goto(f"{base_url}{page_path}", wait_until="domcontentloaded", timeout=10000)
 
             # Inject axe-core and run
             from axe_playwright_python.sync_playwright import Axe

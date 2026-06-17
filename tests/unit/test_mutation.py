@@ -183,49 +183,20 @@ class TestABRunner:
 
 
 # ---------------------------------------------------------------------------
-# Promotion (TOTP required)
+# Promotion (explicit operator action — no second-factor gate)
 # ---------------------------------------------------------------------------
 
 
 class TestPromotion:
-    def test_invalid_totp_raises(self) -> None:
-        verify_fn = lambda c: False
-        with pytest.raises(PermissionError, match="Invalid TOTP"):
-            operator_promote("proposal_1", "000000", verify_fn=verify_fn)
-
-    def test_valid_totp_succeeds(self) -> None:
-        from pmacs.cortex.totp import generate_totp_secret, compute_totp, verify_totp
-
-        secret = generate_totp_secret()
-        code = compute_totp(secret)
-        verify_fn = lambda c: verify_totp(secret, c)
-        result = operator_promote("proposal_1", code, verify_fn=verify_fn)
+    def test_promote_succeeds(self) -> None:
+        result = operator_promote("proposal_1")
         assert result["proposal_id"] == "proposal_1"
         assert result["promoted_by"] == "operator"
         assert "probation_cycles" in result
 
-    def test_callback_based_totp(self) -> None:
-        """Verify verify_fn callback works without exposing secret to caller."""
-        from pmacs.cortex.totp import generate_totp_secret, compute_totp, verify_totp
-
-        secret = generate_totp_secret()
-        code = compute_totp(secret)
-        verify_fn = lambda c: verify_totp(secret, c)
-        result = operator_promote("proposal_1", code, verify_fn=verify_fn)
-        assert result["proposal_id"] == "proposal_1"
-
-    def test_callback_invalid_raises(self) -> None:
-        verify_fn = lambda c: False
-        with pytest.raises(PermissionError, match="Invalid TOTP"):
-            operator_promote("proposal_1", "123456", verify_fn=verify_fn)
-
     def test_promotion_with_registry_apply(self, tmp_path) -> None:
         """Promotion applies to registry when paths provided."""
-        from pmacs.cortex.totp import generate_totp_secret, compute_totp, verify_totp
         from pmacs.storage.sqlite import init_db
-
-        secret = generate_totp_secret()
-        code = compute_totp(secret)
 
         db_path = tmp_path / "test.db"
         init_db(db_path)
@@ -243,9 +214,8 @@ class TestPromotion:
         registry_path.write_text('{"active": "test"}')
         audit_path = tmp_path / "audit.log"
 
-        verify_fn = lambda c: verify_totp(secret, c)
         result = operator_promote(
-            "p1", code, verify_fn=verify_fn,
+            "p1",
             registry_path=registry_path, db_path=db_path, audit_path=audit_path,
             candidate_value='{"new": true}', target="moat_analyst",
             dimension="prompts",

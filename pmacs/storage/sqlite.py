@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS mode_history (
     to_mode TEXT NOT NULL,
     changed_at TEXT NOT NULL,
     reason TEXT,
-    operator_totp_verified INTEGER NOT NULL DEFAULT 0,
+    operator_confirmed INTEGER NOT NULL DEFAULT 0,
     triggered_by TEXT NOT NULL
 );
 

@@ -2,13 +2,17 @@
 
 ## Status
 
-Accepted
+Superseded — the dashboard and nervous were later merged into a single FastAPI
+process serving on port 8000 (one launchd plist, no inter-process SSE hop). The
+read-only design (no dashboard write endpoints; all writes via nervous's operator-confirmed
+POST API) and the server-rendered Jinja2 + HTMX choice below still hold. Only the
+process/port separation was reversed.
 
 ## Context
 
 PMACS has two FastAPI processes serving HTTP on localhost: `pmacs-nervous` (port 8000) handles orchestration, write API, and SSE event streaming; `pmacs-dashboard` (port 8001) renders the web UI that the operator interacts with. Both could be merged into a single process to simplify deployment (one plist, one port, shared state).
 
-The dashboard uses Jinja2 server-side templates with HTMX for interactivity. It subscribes to `pmacs-nervous` via SSE for real-time data and exposes no write endpoints of its own. All write actions are proxied through nervous's TOTP-gated POST API.
+The dashboard uses Jinja2 server-side templates with HTMX for interactivity. It subscribes to `pmacs-nervous` via SSE for real-time data and exposes no write endpoints of its own. All write actions are proxied through nervous's operator-confirmed POST API.
 
 Merging the two processes would reduce operational overhead (one launchd plist instead of two, no inter-process SSE subscription) and eliminate the latency of the SSE hop between processes on the same machine.
 

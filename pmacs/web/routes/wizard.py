@@ -15,7 +15,7 @@ from pmacs.storage.sqlite import connect as _sql_connect
 
 router = APIRouter(prefix="/wizard", tags=["wizard"])
 
-# Step number -> template name mapping (Source.md §12: 11 steps)
+# Step number -> template name mapping (Source.md §12: 10 steps)
 STEP_TEMPLATES: dict[int, str] = {
     1: "wizard/step01_welcome.html",
     2: "wizard/step02_inference.html",
@@ -25,12 +25,11 @@ STEP_TEMPLATES: dict[int, str] = {
     6: "wizard/step07_dataping.html",
     7: "wizard/step08_universe.html",
     8: "wizard/step09_cycleprefs.html",
-    9: "wizard/step10_totp.html",
-    10: "wizard/step10_smoke_test.html",
-    11: "wizard/step11_complete.html",
+    9: "wizard/step10_smoke_test.html",
+    10: "wizard/step11_complete.html",
 }
 
-TOTAL_STEPS = 11
+TOTAL_STEPS = 10
 
 
 def _db_path() -> Path:
@@ -603,22 +602,7 @@ async def _execute_step(request: Request, step: int) -> dict:
         return {"ok": True, "context": {}}
 
     elif step == 9:
-        # TOTP enrollment (Source.md §12 Step 9)
-        from pmacs.installer.steps.totp_enroll import run as totp_run
-        result = await totp_run(dict(form_data))
-        # Only set verify_result when user actually submitted a code (phase 2)
-        # Phase 1 (generation) should NOT show error UI
-        has_code = bool(form_data.get("totp_secret", ""))
-        return {
-            "ok": result.get("ok", False),
-            "context": {
-                "totp_result": result,
-                "verify_result": result if has_code else None,
-            },
-        }
-
-    elif step == 10:
-        # Smoke-test cycle (Source.md §12 Step 10)
+        # Smoke-test cycle (Source.md §12 Step 9)
         # Run a full synthetic pipeline to verify the system works before PAPER promotion
         smoke_result = {"all_ok": False, "checks": {}}
         try:
@@ -705,11 +689,11 @@ async def _execute_step(request: Request, step: int) -> dict:
         except Exception as exc:
             smoke_result["error"] = str(exc)
 
-        # Always stay on step 10 — user must explicitly click "Promote" to advance to step 11
+        # Always stay on step 9 — user must explicitly click "Promote" to advance to step 10
         return {"ok": False, "context": {"smoke_result": smoke_result}}
 
-    elif step == 11:
-        # Complete / promote to SHADOW + PAPER (Source.md §12 Step 11)
+    elif step == 10:
+        # Complete / promote to SHADOW + PAPER (Source.md §12 Step 10)
         import json as _json
 
         from pathlib import Path as _Path
@@ -756,7 +740,7 @@ async def _execute_step(request: Request, step: int) -> dict:
                     from_mode=Mode.INSTALLING,
                     to_mode=Mode.PAPER,
                     reason="Wizard setup complete — promoting to SHADOW + PAPER",
-                    totp_verified=False,  # PAPER doesn't require TOTP
+                    operator_confirmed=False,  # PAPER doesn't require operator confirmation
                     triggered_by="OPERATOR",
                 )
 

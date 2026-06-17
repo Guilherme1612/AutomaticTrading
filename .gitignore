@@ -28,6 +28,9 @@ credentials.json
 # PMACS runtime data
 data/
 *.db
+*.duckdb
+*.sqlite
+*.sqlite3
 *.log
 
 # Test artifacts

@@ -18,11 +18,16 @@ from pmacs.nervous.auth import SessionManager
 @pytest.fixture(autouse=True)
 def _setup(tmp_path):
     """Configure app with fresh instances for each test."""
+    from pmacs.nervous import api as _api
+    _orig = (_api._publisher, _api._session_mgr, _api._heartbeat_dir)
     publisher = SSEPublisher()
     session_mgr = SessionManager()
     hb_dir = tmp_path / "heartbeat"
     configure(publisher=publisher, session_manager=session_mgr, heartbeat_dir=hb_dir)
     yield
+    # Restore globals so this file's tmp heartbeat dir doesn't leak into
+    # later tests served by the same app.
+    _api._publisher, _api._session_mgr, _api._heartbeat_dir = _orig
 
 
 @pytest.fixture
@@ -75,9 +80,11 @@ class TestSSEPublisher:
 
     def test_last_event_id_tracks(self, publisher):
         """last_event_id returns the ID of the most recent publish."""
-        assert publisher.last_event_id == 0
+        # IDs are seeded from a ms timestamp, so track increments relative
+        # to the current baseline rather than from 0.
+        base = publisher.last_event_id
         publisher.publish("system", "test", {})
-        assert publisher.last_event_id == 1
+        assert publisher.last_event_id == base + 1
 
     def test_multiple_clients_receive_events(self, publisher):
         """All subscribed clients receive published events."""

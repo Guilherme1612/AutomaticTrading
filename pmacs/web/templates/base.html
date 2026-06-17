@@ -264,7 +264,7 @@
                 <div>
                     <h4 class="text-xs font-semibold text-text-muted uppercase tracking-wider mb-4">Actions</h4>
                     <div class="space-y-3">
-                        {% for name, key in [("Command palette","K"),("Refresh page","R"),("Kill switch","⇧K"),("Open TOTP","T"),("Focus search","/")] %}
+                        {% for name, key in [("Command palette","K"),("Refresh page","R"),("Kill switch","⇧K"),("Focus search","/")] %}
                         <div class="flex justify-between items-center">
                             <span class="text-sm text-text-secondary">{{ name }}</span>
                             <kbd class="font-mono text-[10px] bg-surface-sunken px-2 py-1 rounded-md border border-border-subtle text-text-muted">{{ key }}</kbd>
@@ -292,9 +292,6 @@
             </div>
         </div>
     </div>
-
-    <!-- TOTP Modal -->
-    {% include "components/totp_modal.html" %}
 
     <!-- Blocking modal -->
     <div id="blocking-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="alertdialog" aria-modal="true">

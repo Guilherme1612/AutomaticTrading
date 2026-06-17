@@ -89,12 +89,12 @@ Including engine-internal models. Engines import: `from pmacs.schemas.arbitratio
 
 Service names: `pmacs.<category>.<key>`. Read via `pmacs/storage/keychain.py`. Never environment variables. Never config files. Never the repository. Never logged. Never serialized.
 
-Implements `Source.md §4` promise 2 (local-only) and `Source.md §6` decision rights for credentials.
+Implements `Source.md §4` promise 2 (no telemetry / no external observation; secrets never leave the machine — including cloud-backend API keys, which are Keychain-stored and never logged or serialized) and `Source.md §6` decision rights for credentials.
 
 ### 1.4 Process isolation is structural, not procedural
 
 - `pmacs-execution` is the ONLY process that imports broker SDK code.
-- `pmacs-inference` (llama-server) has zero internet egress (enforced by `pf` rules in `ops/install_pf_rules.sh`).
+- `pmacs-inference` (llama-server, local backend) has zero internet egress (enforced by `pf` rules in `ops/install_pf_rules.sh`). This guarantee covers the *local* inference process only. When the operator selects a cloud API backend (OpenRouter/Anthropic/OpenAI) in Settings, persona calls take a separate, explicitly operator-enabled egress path to that provider — `pmacs-inference` is not the conduit and its `pf` block remains intact. The local backend is the default; cloud is opt-in (`Source.md §4`).
 - `pmacs-dashboard` has read-only DB access; writes go through `pmacs-nervous` via authenticated POST.
 - `pmacs-mutation` reads from storage; writes only to its own scoped tables (`mutation_*`).
 - Verified at runtime by `pmacs cortex audit-isolation` (cron'd hourly).
@@ -246,9 +246,17 @@ CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
 
 Any other data flow is forbidden. Verified by `pmacs cortex audit-isolation`.
 
-### 2.2 ADR: Why dashboard process stays separate
+### 2.2 ADR: Dashboard and write-API are one combined server (`:8000`), isolation is connection-level
 
-Reviewers periodically ask why `pmacs-dashboard` isn't merged into `pmacs-nervous` since both are FastAPI servers. The answer: **attack surface isolation**. The dashboard runs HTMX/SSE endpoints the operator's browser hits constantly. Nervous has the orchestration logic and SQLite write access. A vulnerability in dashboard HTTP handling (XSS, CSRF, header injection, debugger leak) cannot escalate to write access because the dashboard process literally cannot write — its SQLite connection is opened with `mode=ro` and its filesystem permissions deny write. This defense-in-depth is intentional. Cost: one extra launchd plist.
+**Superseded design (v1):** the dashboard once ran as a separate `pmacs-dashboard` process from `pmacs-nervous` for process-level attack-surface isolation (its own launchd plist, `mode=ro` SQLite connection).
+
+**Current design:** the dashboard (HTMX/SSE read UI) and the write API are served by a **single combined FastAPI app** — `pmacs/web/app.py`, "combined web + API server (port :8000)" — bound to `localhost` loopback only. The consolidation removed the second port/plist; isolation is now enforced at the **connection and route level rather than the process level**:
+
+- Every read path opens its DB via `data_layer.get_readonly_db(...)` (read-only connection). A vulnerability in HTMX/SSE handling cannot escalate to a write because the read handlers hold no writable connection.
+- Every write goes through the operator-confirmed POST API path (`Source.md §6` decision rights); high-impact writes require explicit operator confirmation, low-impact writes a session token.
+- The single-writer discipline (`§1.x`) is preserved: orchestration owns mutations; the dashboard surface never writes app state directly.
+
+Trade-off: one less process to supervise and a single loopback port, at the cost of the strict process boundary. Defense-in-depth is retained through read-only connections, route-level write gating, and loopback-only binding.
 
 See ADR-001 in §21.
 
@@ -2474,7 +2482,7 @@ The short-term memory enhancement for the flywheel. Each persona run, `EpisodicC
 - Persona's own Brier on this ticker (from `persona_ticker_affinity`)
 - Persona's own Brier on this sub-sector (from `persona_subsector_affinity`)
 
-Compresses to a 200-word "context brief" prepended to the persona prompt as a system-message append. This is the **short-term memory enhancement** that powers the flywheel (`Source.md §10`).
+Compresses to a ~400-word "context brief" (~700 words on re-analysis of a previously seen ticker) prepended to the persona prompt as a system-message append. This is the **short-term memory enhancement** that powers the flywheel (`Source.md §10`).
 
 Logged via audit `episodic_context_injected` event with content hash (not the full content — that goes to debug log only).
 

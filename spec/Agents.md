@@ -540,7 +540,7 @@ class GrowthHunterOutput(BaseModel):
 
 ### 8.5 Sanity validator
 
-- If `revenue_yoy_pct` is provided: must be between -100% and +500% (catches hallucinated numbers)
+- If `revenue_yoy_pct` is provided: must be between -100% and +2000% (catches hallucinated numbers; the upper bound is wide enough to admit legitimate hypergrowth and post-IPO/turnaround YoY spikes while still rejecting clearly fabricated values)
 - If `gross_margin_pct` is provided: must be between -50% and 100%
 - `revenue_acceleration` should be consistent with available YoY data direction
 - Evidence_ids resolve
@@ -1359,17 +1359,21 @@ At most **3 A/B tests** can run simultaneously (across all dimensions). This cap
 
 ### 18.1 Purpose
 
-Each persona receives a 200-word "context brief" prepended to its system prompt as a system-message append. This brief contains recent short-term memory relevant to this persona's analysis of this specific ticker. It is the mechanism by which the flywheel feeds back into reasoning.
+Each persona receives a ~400-word "context brief" (extended to ~700 words on re-analysis of a ticker already seen) prepended to its system prompt as a system-message append. This brief contains recent short-term memory relevant to this persona's analysis of this specific ticker. It is the mechanism by which the flywheel feeds back into reasoning.
 
 ### 18.2 What gets injected (per persona, per ticker)
 
 ```python
 # pmacs/agents/episodic_context.py
-def build_context_brief(persona: str, ticker: str, cycle_id: str) -> str:
+def build_context_brief(persona: str, ticker: str, cycle_id: str,
+                        ticker_analysis_count: int = 0) -> str:
     """
-    Builds a 200-word context brief for this persona on this ticker.
-    Returns a string to be appended to the persona's system prompt.
+    Builds a ~400-word context brief (~700 words on re-analysis) for this
+    persona on this ticker. Returns a string appended to the persona's system prompt.
     """
+    # First analysis: ~400 words. Re-analysis (ticker_analysis_count > 0): ~700
+    # words, to carry more prior detail (prior verdict, conviction, key signal).
+    word_limit = 700 if ticker_analysis_count > 0 else 400
     sections = []
 
     # 1. Macro regime (always included for all personas)
@@ -1429,10 +1433,10 @@ def build_context_brief(persona: str, ticker: str, cycle_id: str) -> str:
                            "; ".join(l.lesson_text[:100] for l in similar_lessons))
 
     brief = " ".join(sections)
-    # Truncate to ~200 words
+    # Truncate to the word_limit chosen above (400 first analysis / 700 re-analysis)
     words = brief.split()
-    if len(words) > 200:
-        brief = " ".join(words[:200]) + "..."
+    if len(words) > word_limit:
+        brief = " ".join(words[:word_limit]) + "..."
 
     return brief
 ```
@@ -1515,7 +1519,7 @@ Beyond prompt injection, LLMs hallucinate on their own — fabricating data, inv
 
 5. **Temperature constraint.** 0.2 for analysis personas. Low temperature reduces creative hallucination at the cost of diversity — acceptable for structured financial analysis.
 
-6. **Sanity validator plausibility checks.** E.g., `revenue_yoy_pct` between -100% and +500%, `gross_margin_pct` between -50% and 100%.
+6. **Sanity validator plausibility checks.** E.g., `revenue_yoy_pct` between -100% and +2000%, `gross_margin_pct` between -50% and 100%.
 
 ### 20.2 What the system does when hallucination is detected
 

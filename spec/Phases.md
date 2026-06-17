@@ -487,7 +487,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 **Exit test:**
 1. `pytest tests/integration/test_episodic.py` — a persona running on a ticker with 5+ past cycles receives a non-empty context brief containing persona-ticker affinity, recent failures, and macro context
-2. Context brief is ≤ 200 words
+2. Context brief is ≤ 400 words on first analysis (≤ 700 words on re-analysis of a previously seen ticker)
 3. Audit event `episodic_context_injected` is logged with content_hash
 4. A persona running on a ticker with zero history receives a minimal brief (macro context only)
 5. Before-and-after comparison: same ticker, same evidence, with vs without episodic context → outputs differ (demonstrating the context influences reasoning)

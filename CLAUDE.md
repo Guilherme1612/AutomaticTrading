@@ -41,7 +41,7 @@ These are absolute. They are not guidelines. Violating any of them is a bug.
 1. **LLMs never sign trades.** Trades are Ed25519-signed by `pmacs-execution`. An LLM cannot directly cause a trade.
 2. **LLMs never math.** Probabilities are combined, sized, and arbitrated by Python. LLMs produce structured outputs only.
 3. **Every state transition is hash-chained.** Audit log with `prev_sha256`. Tampering with one line breaks the chain.
-4. **Local-only execution.** No cloud LLM calls. No telemetry. The inference process is pf-blocked from internet.
+4. **No telemetry; backend is operator-selectable.** PMACS never phones home with operator behavior or decisions. The LLM backend is operator-selected: local inference (default — `pmacs-inference` is pf-blocked from internet) **or** a cloud API (OpenRouter/Anthropic/OpenAI) when the operator opts in via Settings. Opting into cloud trades the offline-privacy guarantee for accessibility; it never enables telemetry or external observation. See `Source.md §4`.
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
 ## Anti-Patterns (enforce via pre-commit + CI)

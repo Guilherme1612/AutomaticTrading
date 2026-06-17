@@ -79,7 +79,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | Field | Value |
 |---|---|
 | **Name** | PMACS — Portfolio Management and Catalyst Automation System |
-| **Kind** | Single-operator, local-only, catalyst-driven, LLM-assisted decision engine with deterministic arbitration |
+| **Kind** | Single-operator, local-first, catalyst-driven, LLM-assisted decision engine with deterministic arbitration (LLM backend operator-selectable: local inference or cloud API) |
 | **Holding style** | Thesis-bound. Hold while thesis is valid and risk-adjusted. No time-based forced exits. |
 | **Cadence** | Boot-driven. One cycle per 24h+ gap detected at startup. Manual single-ticker re-runs from UI. |
 | **Host** | Apple M1 Max, 64GB unified memory, macOS |
@@ -91,7 +91,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | **Capital (paper)** | $5,000 simulated. 20% max single position ($1,000). |
 | **Modes** | SHADOW + PAPER (concurrent) → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDARD → LIVE_EXPANDED |
 | **Realistic timeline** | ~6 weeks to first PAPER cycles; 3-6 months to PAPER_VALIDATED depending on boot frequency |
-| **Network** | `localhost`-only. No telemetry. No cloud LLM. No external observation. |
+| **Network** | UI + orchestration are `localhost`-only. No telemetry. No external observation of operator decisions. LLM backend is operator-selectable: local inference (default; fully offline, `pf`-blocked) **or** cloud API (OpenRouter/Anthropic/OpenAI) when the operator opts in. |
 | **Tone** | Notion aesthetic. Information-dense without clutter. Numbers in JetBrains Mono. |
 
 ---
@@ -138,7 +138,7 @@ A vision document without a trust contract is marketing. This is the binding sta
 
 1. **Every decision is auditable in deterministic detail.** Hash-chained immutable log. The operator can prove what the system saw, what each persona said, how they were weighted, what the Crucible found, what was sized, what was traded, and what filled — for every cycle, forever.
 
-2. **Local-only execution.** No cloud LLM calls. No telemetry. No external observation of operator decisions. The audit log replicates only to operator-controlled destinations.
+2. **No telemetry, no external observation of operator decisions.** PMACS never phones home with operator behavior, holdings, or cycle outcomes. The audit log replicates only to operator-controlled destinations. The LLM backend is operator-selectable: local inference (the default, fully offline and `pf`-blocked) or a cloud API (OpenRouter/Anthropic/OpenAI). When the operator opts into a cloud backend, analysis prompts and evidence are sent to that provider — this privacy trade-off is explicit, operator-chosen, and surfaced in Settings; it never enables telemetry or external observation of the operator's decisions.
 
 3. **The operator controls the kill switch.** PMACS can engage it autonomously when triggered. Only the operator can disengage it, with a typed reason.
 
@@ -178,7 +178,7 @@ These are repeated in `Architecture.md §1.1-1.15` as code-level invariants. The
 
 3. **Every state transition is hash-chained.** Including audit log entries, holding state changes (via the state machine), and mode promotions. Tampering with one line breaks the chain. Cortex verifies on startup and hourly.
 
-4. **Local-only execution.** No cloud calls of any kind. The inference process is `pf`-blocked from internet egress.
+4. **Backend is operator-selectable; local is the default.** With the local backend, the inference process is `pf`-blocked from internet egress and no analysis data leaves the machine. The operator may instead opt into a cloud API backend (OpenRouter/Anthropic/OpenAI) via Settings — an explicit, auditable choice that trades the offline-privacy guarantee for accessibility. Regardless of backend, PMACS emits no telemetry and performs no external observation of operator decisions.
 
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
@@ -1413,10 +1413,10 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 
 - **Short positions, options, futures, crypto.** Risk model and Crucible are calibrated for long-equity. Adding these without recalibration is unsafe.
 - **Brokers other than Alpaca paper (v1) and IBKR earmarked (v2 live).** Each broker integration carries credential, reconciliation, and corporate-action surface.
-- **Cloud LLM calls, telemetry, external observation.** Local-only is structural.
+- **Telemetry, external observation of operator decisions.** Structurally excluded regardless of LLM backend. (Cloud LLM calls are *not* excluded — they are an operator-selectable backend; see §4.)
 - **Multi-user, multi-operator, team collaboration.** Single-operator simplifies the trust contract dramatically.
 - **Tax reporting (Modelo 3, Anexo J for Portugal).** Tax is the operator's responsibility offline.
-- **Mobile app.** Dashboard is desktop-web on `localhost`. Mobile would require remote access, which conflicts with local-only.
+- **Mobile app.** Dashboard is desktop-web on `localhost`. Mobile would require remote access, which conflicts with the localhost-only UI.
 - **SMS, email, or push alerting.** Notifications are in-UI. Future versions may add macOS native notifications via `osascript`.
 - **Backtesting against historical LLM outputs.** Epistemically invalid (the model's training data contains the test period's future).
 - **Self-play, agent-vs-agent training.** Deferred to v2.

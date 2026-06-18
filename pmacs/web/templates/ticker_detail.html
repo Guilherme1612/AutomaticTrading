@@ -188,7 +188,7 @@
                 <span class="text-text-muted">3Y average unavailable</span>
                 {%- endif -%}
             </div>
-            {%- if note -%}
+            {%- if note and not has_avg -%}
             <div class="mt-2 text-[10px] text-text-muted leading-tight">{{ note }}</div>
             {%- endif -%}
         </div>
@@ -307,11 +307,20 @@
         <span class="text-[10px] text-text-muted">Current value + 3-year historical average where computable</span>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {# "needs historical X" notes are only accurate when the underlying series
+           is genuinely absent. When the series is present but the multiple is
+           uncomputable (e.g. negative EBITDA / book value), the per-year table
+           and derived.notes already explain why — so we suppress the note here. #}
+        {%- set has_book_series = (derived.per_year|map(attribute='book_value_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_ebitda_series = (derived.per_year|map(attribute='ebitda_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_debt_series = (derived.per_year|map(attribute='total_debt_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_cash_series = (derived.per_year|map(attribute='cash_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set ev_series_complete = has_ebitda_series and has_debt_series and has_cash_series -%}
         {{ metric_card("P/E", derived.current.pe, derived.pe_3y_avg) }}
         {{ metric_card("Forward P/E", derived.current.forward_pe, none, note="Forward multiple; no historical average available.") }}
         {{ metric_card("P/S", derived.current.ps, derived.ps_3y_avg) }}
-        {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet).") }}
-        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash.") }}
+        {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
+        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
         {{ metric_card("PEG", derived.current.peg, none, note="Point-in-time PEG ratio.") }}
     </div>
 </section>

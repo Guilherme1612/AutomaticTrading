@@ -275,7 +275,7 @@
                 {# -- Empty column state -- #}
                 <div class="flex flex-col items-center justify-center py-8 text-center">
                     <span class="text-{{ col_colors.get(col.verdict, 'text-muted') }}/30 mb-1">{{ col_icons.get(col.verdict, '')|safe }}</span>
-                    <p class="text-[10px] text-text-muted/70 font-medium">No {{ col.verdict | replace('_', ' ') | lower }} signals</p>
+                    <p class="text-[10px] text-text-muted font-medium">No {{ col.verdict | replace('_', ' ') | lower }} signals</p>
                 </div>
                 {% endfor %}
             </div>

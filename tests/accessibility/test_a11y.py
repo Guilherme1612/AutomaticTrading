@@ -342,7 +342,8 @@ class TestAxeCoreCI:
     This is the CI-grade check that the structural tests above approximate.
     """
 
-    PAGES = ["/", "/agents", "/pipeline", "/universe", "/cortex", "/settings", "/debug"]
+    PAGES = ["/", "/agents", "/pipeline", "/universe", "/cortex", "/settings", "/debug",
+             "/ticker/AAPL"]
 
     @pytest.fixture(scope="class")
     def browser(self):
@@ -382,19 +383,42 @@ class TestAxeCoreCI:
     @pytest.mark.parametrize("page_path", PAGES)
     def test_axe_core_no_violations(self, browser, base_url, page_path):
         """axe-core scan must find zero WCAG 2.1 AA violations."""
+        from axe_playwright_python.sync_playwright import Axe
+
         page = browser.new_page()
         try:
             # Pages hold a persistent SSE connection, so "networkidle" never
             # settles — wait for DOM content instead.
             page.goto(f"{base_url}{page_path}", wait_until="domcontentloaded", timeout=10000)
 
-            # Inject axe-core and run
-            from axe_playwright_python.sync_playwright import Axe
+            # Stabilize before scanning. Pages hydrate/theme-apply AFTER
+            # domcontentloaded; scanning too early reads transient
+            # pre-hydration colors (e.g. axe reports #949da9 on elements
+            # whose settled computed color is #0f172a) and produces
+            # false-positive color-contrast violations. Color-contrast is
+            # the only hydration-sensitive rule; rescan until it stops
+            # changing so the result is deterministic regardless of host
+            # load (a fixed sleep is brittle when the machine is busy).
+            SETTLE_MS = 500
+            MAX_SETTLE_PASSES = 5
             axe = Axe()
             results = axe.run(page)
-
-            violations = results.response.get("violations", [])
-            critical = [v for v in violations if v.get("impact") in ("critical", "serious")]
+            critical = [v for v in results.response.get("violations", [])
+                        if v.get("impact") in ("critical", "serious")]
+            cc_count = lambda: sum(len(v.get("nodes", [])) for v in critical
+                                   if v.get("id") == "color-contrast")
+            prev_cc = cc_count()
+            for _ in range(MAX_SETTLE_PASSES):
+                if prev_cc == 0:
+                    break
+                page.wait_for_timeout(SETTLE_MS)
+                results = axe.run(page)
+                critical = [v for v in results.response.get("violations", [])
+                            if v.get("impact") in ("critical", "serious")]
+                cur_cc = cc_count()
+                if cur_cc == prev_cc:
+                    break  # settled — no further hydration changes
+                prev_cc = cur_cc
 
             assert len(critical) == 0, (
                 f"{page_path}: {len(critical)} critical/serious axe-core violations found:\n"

@@ -24,11 +24,11 @@
             --text-secondary: #334155;
             --text-muted: #475569;
             --accent: #2563eb;
-            --positive: #15803d;
-            --negative: #dc2626;
+            --positive: #166534;
+            --negative: #b91c1c;
             --warning: #b45309;
-            --strong-buy: #15803d;
-            --crucible: #a855f7;
+            --strong-buy: #166534;
+            --crucible: #7e22ce;
             /* Status tints */
             --accent-soft: rgba(59,130,246,0.08);
             --accent-ring: rgba(59,130,246,0.25);
@@ -183,7 +183,7 @@
                    title="{{ name }}">
                     <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">{{ icon_path }}</svg>
                     <span class="nav-label">{{ name }}</span>
-                    <kbd class="ml-auto text-[10px] text-text-muted font-mono hidden lg:inline nav-label opacity-50">{{ shortcut }}</kbd>
+                    <kbd class="ml-auto text-[10px] text-text-muted font-mono hidden lg:inline nav-label">{{ shortcut }}</kbd>
                 </a>
             </li>
             {% endfor %}
@@ -229,7 +229,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
                     <input id="cmd-k-input" type="text" placeholder="Search tickers, pages, actions..."
-                           class="flex-1 bg-transparent text-base outline-none text-text-primary placeholder-text-muted"
+                           class="flex-1 bg-transparent text-base outline-none text-text-primary placeholder:text-text-muted/80"
                            aria-label="Search commands"
                            autocomplete="off" spellcheck="false">
                     <kbd class="text-[10px] font-mono text-text-muted bg-surface-sunken px-1.5 py-0.5 rounded">esc</kbd>

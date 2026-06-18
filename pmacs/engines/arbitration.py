@@ -38,6 +38,9 @@ MIN_HISTORICAL_N_FOR_MATURE = 30
 MACRO_REGIME_WEIGHT_MULTIPLIER = 0.5
 EXTREME_PROB_DAMPENING_THRESHOLD = 0.9
 EXTREME_PROB_DAMPENING_FACTOR = 0.5
+CATALYST_SUMMARIZER_WEIGHT_MULTIPLIER = 0.5
+FORENSICS_MATERIAL_CONCERNS_MULTIPLIER = 1.5
+DATALESS_PERSONA_WEIGHT_MULTIPLIER = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +62,12 @@ class ArbitrationSignal:
         *,
         historical_n: int = 0,
         rolling_brier: float = UNINFORMED_3STATE_BRIER,
+        quality_tag: str | None = None,
     ):
         self.dp = dp
         self.historical_n = historical_n
         self.rolling_brier = rolling_brier
+        self.quality_tag = (quality_tag or "").upper()
 
     @property
     def persona(self) -> PersonaName:
@@ -94,6 +99,22 @@ class ArbitrationSignal:
             self.p_up > EXTREME_PROB_DAMPENING_THRESHOLD
             or self.p_down > EXTREME_PROB_DAMPENING_THRESHOLD
         )
+
+    @property
+    def is_dataless(self) -> bool:
+        """True when the persona explicitly reported no usable data.
+
+        Agents.md §10/§9: ShortInterest and InsiderActivity must emit
+        INSUFFICIENT_DATA / NO_SIGNAL when they lack data. Arbitration
+        should ignore those signals rather than let near-uniform probabilities
+        anchor conviction.
+        """
+        if self.persona not in (
+            PersonaName.SHORT_INTEREST,
+            PersonaName.INSIDER_ACTIVITY,
+        ):
+            return False
+        return self.quality_tag in ("INSUFFICIENT_DATA", "NO_SIGNAL")
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +245,16 @@ def arbitrate(
     mature = [s for s in signals if s.is_mature]
     immature = [s for s in signals if not s.is_mature]
 
+    # 1a. Exclude dataless signals from decision-making. They remain in audit
+    # output with zero weight so the operator can see they fired but did not
+    # contribute to conviction.
+    usable_immature = [s for s in immature if not s.is_dataless]
+    usable_mature = [s for s in mature if not s.is_dataless]
+
     # 2. No mature sources -> bootstrap logic
-    if not mature:
-        has_majority, majority_dir, majority_signals = _majority_direction(immature)
-        if immature and has_majority:
+    if not usable_mature:
+        has_majority, majority_dir, majority_signals = _majority_direction(usable_immature)
+        if usable_immature and has_majority:
             # Average only majority-agreeing personas to keep signal clean
             use = majority_signals
             n = len(use)
@@ -295,14 +322,14 @@ def arbitrate(
                 abort_reason="NO_MAJORITY_DIRECTION",
             )
 
-    # 8. Agreement check on mature sources
-    if _mature_disagree(mature):
+    # 8. Agreement check on usable mature sources
+    if _mature_disagree(usable_mature):
         log_debug(
             "ARBITRATION_MATURE_DISAGREEMENT",
             payload={
                 "ticker": ticker,
-                "mature_count": len(mature),
-                "severity": round(disagreement_severity(mature), 3),
+                "mature_count": len(usable_mature),
+                "severity": round(disagreement_severity(usable_mature), 3),
             },
             cycle_id=cycle_id,
             error_code="ARBITRATION_DISAGREEMENT",
@@ -316,23 +343,41 @@ def arbitrate(
             p_flat=1.0 / 3,
             p_down=1.0 / 3,
             persona_outputs=[s.dp for s in mature],
-            matured_sources_used=len(mature),
+            matured_sources_used=len(usable_mature),
             decision=ArbitrationDecision.ABORT_DISAGREEMENT,
             abort_reason="MATURE_SOURCES_DISAGREE",
         )
 
-    # 3. Compute Brier-inverse weights for mature sources
+    # 3. Compute Brier-inverse weights for usable mature sources
     raw_weights: list[float] = []
-    for s in mature:
+    applied_multipliers: dict[str, float] = {}
+    for s in usable_mature:
         w = 1.0 / (s.rolling_brier + WEIGHT_EPSILON)
 
         # 4. MacroRegime weight multiplier
         if s.persona == PersonaName.MACRO_REGIME:
             w *= MACRO_REGIME_WEIGHT_MULTIPLIER
+            applied_multipliers[s.persona.value] = MACRO_REGIME_WEIGHT_MULTIPLIER
 
         # 5. Extreme-probability dampening (anti-injection, Agents.md §19.2)
         if s.has_extreme_prob:
             w *= EXTREME_PROB_DAMPENING_FACTOR
+            applied_multipliers[s.persona.value] = applied_multipliers.get(
+                s.persona.value, 1.0
+            ) * EXTREME_PROB_DAMPENING_FACTOR
+
+        # IMP-1: CatalystSummarizer perma-bull dampening
+        if s.persona == PersonaName.CATALYST_SUMMARIZER:
+            w *= CATALYST_SUMMARIZER_WEIGHT_MULTIPLIER
+            applied_multipliers[s.persona.value] = CATALYST_SUMMARIZER_WEIGHT_MULTIPLIER
+
+        # IMP-3: Forensics boost when material accounting concerns are flagged
+        if (
+            s.persona == PersonaName.FORENSICS
+            and s.quality_tag in ("MATERIAL_CONCERNS", "SEVERE_RISK")
+        ):
+            w *= FORENSICS_MATERIAL_CONCERNS_MULTIPLIER
+            applied_multipliers[s.persona.value] = FORENSICS_MATERIAL_CONCERNS_MULTIPLIER
 
         raw_weights.append(w)
 
@@ -342,20 +387,20 @@ def arbitrate(
         # All weights zeroed out — log WARN and fall back to equal weighting
         log_debug(
             "ARBITRATION_WEIGHT_COLLAPSE",
-            payload={"ticker": ticker, "mature_count": len(mature)},
+            payload={"ticker": ticker, "mature_count": len(usable_mature)},
             cycle_id=cycle_id,
             level="WARN",
             error_code="ARBITRATION_WEIGHT_COLLAPSE",
             msg="All Brier-inverse weights zeroed — falling back to equal weighting",
         )
-        norm_weights = [1.0 / len(mature)] * len(mature)
+        norm_weights = [1.0 / len(usable_mature)] * len(usable_mature)
     else:
         norm_weights = [w / total_w for w in raw_weights]
 
     # 7. Weighted average of probability vectors
-    p_up = sum(s.p_up * w for s, w in zip(mature, norm_weights))
-    p_flat = sum(s.p_flat * w for s, w in zip(mature, norm_weights))
-    p_down = sum(s.p_down * w for s, w in zip(mature, norm_weights))
+    p_up = sum(s.p_up * w for s, w in zip(usable_mature, norm_weights))
+    p_flat = sum(s.p_flat * w for s, w in zip(usable_mature, norm_weights))
+    p_down = sum(s.p_down * w for s, w in zip(usable_mature, norm_weights))
 
     # Re-normalize to correct floating-point drift (sum may deviate from 1.0)
     _prob_total = p_up + p_flat + p_down
@@ -374,19 +419,29 @@ def arbitrate(
         p_flat /= _prob_total
         p_down /= _prob_total
 
-    # Build persona weights list
+    # Build persona weights list (include dataless mature signals with zero weight)
+    weight_by_persona = {
+        s.persona.value: w for s, w in zip(usable_mature, norm_weights)
+    }
     persona_weights = [
         PersonaWeight(
             persona=s.persona,
-            weight=w,
+            weight=weight_by_persona.get(s.persona.value, 0.0),
             brier_score=s.rolling_brier,
             calibration_count=s.historical_n,
+            weight_multiplier=applied_multipliers.get(
+                s.persona.value,
+                DATALESS_PERSONA_WEIGHT_MULTIPLIER if s.is_dataless else 1.0,
+            ),
         )
-        for s, w in zip(mature, norm_weights)
+        for s in mature
     ]
 
-    # Compute agreement score as fraction of mature sources agreeing with plurality direction
-    directions = [_dominant_direction(s.p_up, s.p_flat, s.p_down) for s in mature]
+    # Compute agreement score as fraction of usable mature sources agreeing with plurality direction
+    directions = [
+        _dominant_direction(s.p_up, s.p_flat, s.p_down)
+        for s in usable_mature
+    ]
     if directions:
         plurality_dir = max(set(directions), key=directions.count)
         agreement = directions.count(plurality_dir) / len(directions)
@@ -400,8 +455,10 @@ def arbitrate(
             "p_up": round(p_up, 4),
             "p_flat": round(p_flat, 4),
             "p_down": round(p_down, 4),
-            "matured_sources_used": len(mature),
+            "matured_sources_used": len(usable_mature),
+            "dataless_sources": sum(1 for s in mature if s.is_dataless),
             "agreement": round(agreement, 3),
+            "applied_multipliers": applied_multipliers,
         },
         cycle_id=cycle_id,
         msg="Arbitration completed successfully",

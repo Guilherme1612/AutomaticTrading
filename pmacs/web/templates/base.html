@@ -154,7 +154,7 @@
     </header>
 
     <!-- Left sidebar: glassmorphic -->
-    <nav id="sidebar" class="fixed left-0 top-14 bottom-0 w-60 border-r border-border-subtle p-4 overflow-y-auto"
+    <nav id="sidebar" class="fixed left-0 top-14 bottom-0 w-60 border-r border-border-subtle p-4 overflow-y-auto" tabindex="0"
          role="navigation" aria-label="Main navigation">
         {% set pages = [
             ("dashboard", "Dashboard", "/", "1", '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>'),
@@ -234,7 +234,7 @@
                            autocomplete="off" spellcheck="false">
                     <kbd class="text-[10px] font-mono text-text-muted bg-surface-sunken px-1.5 py-0.5 rounded">esc</kbd>
                 </div>
-                <ul id="cmd-k-results" class="max-h-72 overflow-y-auto py-1" role="listbox"></ul>
+                <ul id="cmd-k-results" class="max-h-72 overflow-y-auto py-1" role="listbox" tabindex="0"></ul>
             </div>
         </div>
     </div>

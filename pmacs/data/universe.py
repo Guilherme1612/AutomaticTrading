@@ -81,3 +81,34 @@ def flag_halted(conn: sqlite3.Connection, ticker: str, halted: bool = True) -> N
     """Flag/unflag a ticker as halted."""
     conn.execute("UPDATE universe SET halted = ? WHERE ticker = ?", (int(halted), ticker))
     conn.commit()
+
+
+_DEFAULT_UNIVERSE: dict[str, dict[str, str | None]] = {
+    # Large-cap tech with richest data for all 7 agents (IMP-5)
+    "MSFT": {"sector": "Technology", "subsector": "Cloud / Enterprise"},
+    "AMZN": {"sector": "Technology", "subsector": "E-Commerce / Cloud"},
+}
+
+
+def seed_default_universe(conn: sqlite3.Connection) -> list[str]:
+    """Insert default tickers into the universe if they are missing.
+
+    Idempotent: uses INSERT OR IGNORE. Returns the list of tickers actually
+    inserted in this call.
+    """
+    from datetime import datetime, timezone
+
+    init_universe_table(conn)
+    inserted: list[str] = []
+    now = datetime.now(timezone.utc).isoformat()
+    for ticker, meta in _DEFAULT_UNIVERSE.items():
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO universe
+               (ticker, sector, subsector, halted, delisted, catalyst_type, pinned_priority, added_at)
+               VALUES (?, ?, ?, 0, 0, NULL, NULL, ?)""",
+            (ticker, meta.get("sector"), meta.get("subsector"), now),
+        )
+        if cursor.rowcount > 0:
+            inserted.append(ticker)
+    conn.commit()
+    return inserted

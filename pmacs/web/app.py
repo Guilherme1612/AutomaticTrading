@@ -62,6 +62,30 @@ async def _close_stuck_cycles() -> None:
         pass  # Non-fatal: don't block startup
 
 
+@app.on_event("startup")
+async def _seed_universe() -> None:
+    """Ensure default universe tickers are present (IMP-5)."""
+    try:
+        from pmacs.web.config import get_config
+        from pmacs.storage.sqlite import connect as _sql_connect
+        from pmacs.data.universe import seed_default_universe
+        cfg = get_config()
+        db = _sql_connect(cfg.sqlite_path)
+        try:
+            inserted = seed_default_universe(db)
+            if inserted:
+                from pmacs.logsys import log_debug
+                log_debug(
+                    "UNIVERSE_SEEDED",
+                    payload={"inserted": inserted},
+                    msg=f"Seeded universe tickers: {', '.join(inserted)}",
+                )
+        finally:
+            db.close()
+    except Exception:
+        pass  # Non-fatal: don't block startup
+
+
 # ---------------------------------------------------------------------------
 # Heartbeat middleware — writes nervous heartbeat on every request
 # ---------------------------------------------------------------------------

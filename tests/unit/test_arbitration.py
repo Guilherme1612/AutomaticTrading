@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from pmacs.engines.arbitration import (
-    MACRO_REGIME_WEIGHT_MULTIPLIER,
+    CATALYST_SUMMARIZER_WEIGHT_MULTIPLIER,
+    DATALESS_PERSONA_WEIGHT_MULTIPLIER,
     EXTREME_PROB_DAMPENING_FACTOR,
+    FORENSICS_MATERIAL_CONCERNS_MULTIPLIER,
+    MACRO_REGIME_WEIGHT_MULTIPLIER,
     ArbitrationSignal,
     arbitrate,
 )
@@ -27,6 +30,7 @@ def _dp(
     p_down: float = 0.2,
     historical_n: int = 30,
     rolling_brier: float = 0.3,
+    quality_tag: str | None = None,
 ) -> ArbitrationSignal:
     """Build an ArbitrationSignal with sensible defaults."""
     dp = DirectionalProbability(
@@ -36,7 +40,12 @@ def _dp(
         p_flat=p_flat,
         p_down=p_down,
     )
-    return ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=rolling_brier)
+    return ArbitrationSignal(
+        dp,
+        historical_n=historical_n,
+        rolling_brier=rolling_brier,
+        quality_tag=quality_tag,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -357,3 +366,201 @@ class TestMajorityThreshold60Percent:
         """2/5 = 40% up, with 1 flat and 2 down — no direction holds 60%."""
         result = arbitrate(self._make(2, 1, 2), cycle_id="c017")
         assert result.decision == ArbitrationDecision.ABORT_NO_MATURE_SOURCES
+
+
+class TestCatalystSummarizerWeightMultiplier:
+    """CatalystSummarizer gets 0.5x weight multiplier (IMP-1)."""
+
+    def test_catalyst_weight_reduced(self):
+        catalyst = _dp(
+            persona=PersonaName.CATALYST_SUMMARIZER,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([catalyst, analyst], cycle_id="c018")
+
+        assert result.decision == ArbitrationDecision.PROCEED
+        catalyst_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.CATALYST_SUMMARIZER
+        ][0]
+        analyst_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.MOAT_ANALYST
+        ][0]
+
+        # Same Brier, but catalyst gets 0.5x
+        assert abs(catalyst_w.weight - 1.0 / 3) < 0.01
+        assert abs(analyst_w.weight - 2.0 / 3) < 0.01
+        assert catalyst_w.weight_multiplier == CATALYST_SUMMARIZER_WEIGHT_MULTIPLIER
+        assert analyst_w.weight_multiplier == 1.0
+        assert analyst_w.weight > catalyst_w.weight
+
+
+class TestForensicsMaterialConcernsMultiplier:
+    """Forensics gets 1.5x weight when it flags material concerns (IMP-3)."""
+
+    def test_forensics_material_concerns_boosted(self):
+        forensics = _dp(
+            persona=PersonaName.FORENSICS,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="MATERIAL_CONCERNS",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([forensics, analyst], cycle_id="c019")
+
+        assert result.decision == ArbitrationDecision.PROCEED
+        forensics_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.FORENSICS
+        ][0]
+        analyst_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.MOAT_ANALYST
+        ][0]
+
+        # Same Brier, but forensics gets 1.5x
+        assert abs(forensics_w.weight - 0.6) < 0.01
+        assert abs(analyst_w.weight - 0.4) < 0.01
+        assert (
+            forensics_w.weight_multiplier
+            == FORENSICS_MATERIAL_CONCERNS_MULTIPLIER
+        )
+        assert analyst_w.weight_multiplier == 1.0
+        assert forensics_w.weight > analyst_w.weight
+
+    def test_forensics_no_concerns_not_boosted(self):
+        forensics = _dp(
+            persona=PersonaName.FORENSICS,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="CLEAN",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([forensics, analyst], cycle_id="c020")
+
+        assert result.decision == ArbitrationDecision.PROCEED
+        forensics_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.FORENSICS
+        ][0]
+        analyst_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.MOAT_ANALYST
+        ][0]
+
+        # No concerns -> equal weight
+        assert abs(forensics_w.weight - 0.5) < 0.01
+        assert abs(analyst_w.weight - 0.5) < 0.01
+        assert forensics_w.weight_multiplier == 1.0
+
+
+class TestDatalessPersonaExclusion:
+    """ShortInterest / InsiderActivity with no data are excluded (IMP-2)."""
+
+    def test_short_interest_no_signal_excluded(self):
+        short = _dp(
+            persona=PersonaName.SHORT_INTEREST,
+            p_up=0.33, p_flat=0.34, p_down=0.33,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="NO_SIGNAL",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([short, analyst], cycle_id="c021")
+
+        assert result.decision == ArbitrationDecision.PROCEED
+        # Analyst alone drives the probability
+        assert abs(result.p_up - 0.6) < 1e-6
+        short_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.SHORT_INTEREST
+        ][0]
+        analyst_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.MOAT_ANALYST
+        ][0]
+
+        assert short_w.weight == 0.0
+        assert short_w.weight_multiplier == DATALESS_PERSONA_WEIGHT_MULTIPLIER
+        assert abs(analyst_w.weight - 1.0) < 1e-6
+        assert analyst_w.weight_multiplier == 1.0
+
+    def test_insider_activity_insufficient_data_excluded(self):
+        insider = _dp(
+            persona=PersonaName.INSIDER_ACTIVITY,
+            p_up=0.33, p_flat=0.34, p_down=0.33,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="INSUFFICIENT_DATA",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([insider, analyst], cycle_id="c022")
+
+        assert result.decision == ArbitrationDecision.PROCEED
+        assert abs(result.p_up - 0.6) < 1e-6
+        insider_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.INSIDER_ACTIVITY
+        ][0]
+        assert insider_w.weight == 0.0
+        assert insider_w.weight_multiplier == DATALESS_PERSONA_WEIGHT_MULTIPLIER
+
+    def test_dataless_does_not_count_toward_mature_sources(self):
+        """A dataless mature persona must not inflate matured_sources_used."""
+        short = _dp(
+            persona=PersonaName.SHORT_INTEREST,
+            p_up=0.33, p_flat=0.34, p_down=0.33,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="NO_SIGNAL",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([short, analyst], cycle_id="c023")
+
+        # Only the usable mature source should count as "used"
+        assert result.matured_sources_used == 1
+
+    def test_quality_tag_case_is_normalized(self):
+        """Quality tags are normalized to upper case before checking."""
+        short = _dp(
+            persona=PersonaName.SHORT_INTEREST,
+            p_up=0.33, p_flat=0.34, p_down=0.33,
+            historical_n=50, rolling_brier=0.3,
+            quality_tag="no_signal",
+        )
+        analyst = _dp(
+            persona=PersonaName.MOAT_ANALYST,
+            p_up=0.6, p_flat=0.3, p_down=0.1,
+            historical_n=50, rolling_brier=0.3,
+        )
+        result = arbitrate([short, analyst], cycle_id="c024")
+
+        short_w = [
+            pw for pw in result.persona_weights
+            if pw.persona == PersonaName.SHORT_INTEREST
+        ][0]
+        assert short_w.weight == 0.0

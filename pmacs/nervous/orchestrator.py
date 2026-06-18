@@ -1506,7 +1506,15 @@ class CycleOrchestrator:
                     skipped_insufficient.append(persona_name_str)
                     continue
                 avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
-                signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
+                quality_tag = self._extract_quality_tag(persona_name_str, raw_output)
+                signals.append(
+                    ArbitrationSignal(
+                        dp,
+                        historical_n=historical_n,
+                        rolling_brier=avg_brier,
+                        quality_tag=quality_tag,
+                    )
+                )
 
         if skipped_insufficient:
             log_debug(
@@ -2817,6 +2825,48 @@ class CycleOrchestrator:
             )
         except Exception:
             return None
+
+    def _extract_quality_tag(self, persona_name_str: str, persona_output: Any) -> str:
+        """Extract a quality tag from a persona's raw JSON output.
+
+        Used by arbitration to apply persona-specific weight multipliers:
+          - forensics: MATERIAL_CONCERNS / SEVERE_RISK boosts weight
+          - short_interest: INSUFFICIENT_DATA (defense-in-depth)
+          - insider_activity: NO_SIGNAL / INSUFFICIENT_DATA (defense-in-depth)
+        """
+        import json
+
+        raw_json = getattr(persona_output, "raw_output", "")
+        if not raw_json:
+            return ""
+        try:
+            data = json.loads(raw_json)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
+        if persona_name_str == "forensics":
+            eq = data.get("earnings_quality") or data.get("forensics_quality", "")
+            if eq in ("MATERIAL_CONCERNS", "SEVERE_RISK"):
+                return eq
+            red_flags = data.get("red_flags", [])
+            if red_flags:
+                max_sev = max(
+                    (rf.get("severity", 0.0) for rf in red_flags if isinstance(rf, dict)),
+                    default=0.0,
+                )
+                if max_sev >= 0.7:
+                    return "SEVERE_RISK"
+                if max_sev >= 0.4:
+                    return "MATERIAL_CONCERNS"
+            return ""
+
+        if persona_name_str == "short_interest":
+            return str(data.get("anomaly", "")).upper()
+
+        if persona_name_str == "insider_activity":
+            return str(data.get("signal", "")).upper()
+
+        return ""
 
     def _run_post_cycle(self, cycle_id: str, op_seq: int) -> int:
         """Steps 14-28: Post-cycle flywheel processing (Architecture.md §9).

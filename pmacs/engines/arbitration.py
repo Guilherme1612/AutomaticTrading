@@ -263,17 +263,23 @@ def arbitrate(
             p_down = sum(s.p_down for s in use) / n
 
             # Include all immature in output for audit, but weight only majority
+            # Dataless signals get explicit zero multiplier.
             weights = [
                 PersonaWeight(
                     persona=s.persona,
                     weight=1.0 / n if s in use else 0.0,
                     brier_score=s.rolling_brier,
                     calibration_count=s.historical_n,
+                    weight_multiplier=(
+                        DATALESS_PERSONA_WEIGHT_MULTIPLIER if s.is_dataless else 1.0
+                    ),
                 )
                 for s in immature
             ]
 
-            agreement_score = len(majority_signals) / len(immature)
+            agreement_score = (
+                len(majority_signals) / len(usable_immature) if usable_immature else 0.0
+            )
 
             log_debug(
                 "ARBITRATION_BOOTSTRAP_MAJORITY",
@@ -282,13 +288,15 @@ def arbitrate(
                     "majority_dir": majority_dir,
                     "majority_count": len(majority_signals),
                     "total_immature": len(immature),
+                    "usable_immature": len(usable_immature),
+                    "dataless_immature": len(immature) - len(usable_immature),
                     "agreement_score": round(agreement_score, 3),
                     "p_up": round(p_up, 4),
                     "p_flat": round(p_flat, 4),
                     "p_down": round(p_down, 4),
                 },
                 cycle_id=cycle_id,
-                msg=f"Bootstrap majority ({len(majority_signals)}/{len(immature)}) on {majority_dir}",
+                msg=f"Bootstrap majority ({len(majority_signals)}/{len(usable_immature)}) on {majority_dir}",
             )
 
             return Arbitrated(
@@ -306,7 +314,12 @@ def arbitrate(
         else:
             log_debug(
                 "ARBITRATION_NO_MATURE_DISAGREE",
-                payload={"ticker": ticker, "immature_count": len(immature)},
+                payload={
+                    "ticker": ticker,
+                    "immature_count": len(immature),
+                    "usable_immature": len(usable_immature),
+                    "dataless_immature": len(immature) - len(usable_immature),
+                },
                 cycle_id=cycle_id,
                 msg="Immature sources have no majority direction, no mature sources",
             )
@@ -473,6 +486,6 @@ def arbitrate(
         persona_outputs=[s.dp for s in mature],
         persona_weights=persona_weights,
         agreement_score=agreement,
-        matured_sources_used=len(mature),
+        matured_sources_used=len(usable_mature),
         decision=ArbitrationDecision.PROCEED,
     )

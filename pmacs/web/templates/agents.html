@@ -67,7 +67,7 @@
             </svg>
         </div>
         <input id="solo-ticker-input" type="text" placeholder="Research a ticker... (e.g. AAPL, NVDA)"
-               class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm font-mono bg-transparent border-none text-text-primary placeholder-text-muted/50 focus:outline-none"
+               class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm font-mono bg-transparent border-none text-text-primary placeholder:text-text-muted/80 focus:outline-none"
                maxlength="10" autocomplete="off" spellcheck="false"
                onkeydown="if(event.key==='Enter')runSoloAnalysis()">
         <button type="button" id="solo-run-btn"
@@ -187,7 +187,7 @@
                         </span>
                         {% endif %}
                     </div>
-                    <p class="text-[10px] text-text-muted/70 truncate">{{ persona.role }}</p>
+                    <p class="text-[10px] text-text-muted/80 truncate">{{ persona.role }}</p>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
                     {% if persona.status == 'complete' and persona.confidence is defined and persona.confidence > 0 %}
@@ -276,7 +276,7 @@
                 {% endif %}
             </div>
             {% if persona.completed_at %}
-            <p class="text-[9px] text-text-muted/50 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
+            <p class="text-[9px] text-text-muted/80 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
             {% endif %}
         </div>
         </div>
@@ -478,8 +478,8 @@
             <span class="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Live Activity</span>
             <span id="session-pipeline-stage" class="text-[10px] font-mono font-medium text-text-muted px-2 py-0.5 bg-surface-sunken rounded-lg">{{ 'Idle' if not is_cycle_running else 'Running' }}</span>
         </div>
-        <div id="cycle-log-entries" class="max-h-24 overflow-y-auto space-y-0.5">
-            <p id="cycle-log-empty" class="text-[10px] text-text-muted/50 text-center py-2">Activity will appear here during cycles</p>
+        <div id="cycle-log-entries" class="max-h-24 overflow-y-auto space-y-0.5" tabindex="0">
+            <p id="cycle-log-empty" class="text-[10px] text-text-muted/80 text-center py-2">Activity will appear here during cycles</p>
         </div>
     </div>
 </div>
@@ -1378,7 +1378,7 @@ function _cycleLogAdd(eventType, description) {
     var row = document.createElement("div");
     row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
     row.innerHTML =
-        '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(ts.slice(0, 5)) + '</span>' +
+        '<span class="font-mono text-text-muted/80 shrink-0">' + escapeHtml(ts.slice(0, 5)) + '</span>' +
         '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(description) + '</span>';
     var firstChild = feed.querySelector(":not(#cycle-log-empty)");
     feed.insertBefore(row, firstChild || null);
@@ -1398,7 +1398,7 @@ function _cycleLogRender() {
         var row = document.createElement("div");
         row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
         row.innerHTML =
-            '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(entry.ts.slice(0, 5)) + '</span>' +
+            '<span class="font-mono text-text-muted/80 shrink-0">' + escapeHtml(entry.ts.slice(0, 5)) + '</span>' +
             '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(entry.desc) + '</span>';
         feed.appendChild(row);
     });

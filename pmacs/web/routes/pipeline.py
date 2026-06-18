@@ -59,6 +59,21 @@ async def pipeline_page(request: Request):
             queue = data_layer.get_queue_status(db)
             banded = data_layer.get_priority_banded_queue(db)
 
+            # FIX-2: compute total/completed/failed cycle counts (mirrors dashboard.py)
+            try:
+                cycle_row = db.execute("SELECT COUNT(*) FROM cycles").fetchone()
+                cycle_count = int(cycle_row[0]) if cycle_row else 0
+            except Exception:
+                cycle_count = 0
+            try:
+                dec_row = db.execute("SELECT COUNT(DISTINCT cycle_id) FROM decisions").fetchone()
+                decision_cycles = int(dec_row[0]) if dec_row else 0
+            except Exception:
+                decision_cycles = 0
+            total_cycles = max(cycle_count, decision_cycles)
+            completed_cycles = cycle_count
+            failed_cycles = max(0, total_cycles - completed_cycles)
+
             # Build a lookup of recent cycle decisions for thesis/timestamp
             recent_thesis: dict[str, dict] = {}
             try:
@@ -200,6 +215,9 @@ async def pipeline_page(request: Request):
                 "columns": columns,
                 "queue_size": len(queue),
                 "cycles_today": len(decisions),
+                "total_cycles": total_cycles,
+                "completed_cycles": completed_cycles,
+                "failed_cycles": failed_cycles,
                 "priority_bands": priority_bands,
                 "active_tickers": [h["ticker"] for h in holdings],
             },
@@ -305,6 +323,59 @@ async def queue_add_ticker(req: AddTickerRequest):
         db.close()
 
     return JSONResponse({"ok": True, "ticker": ticker})
+
+
+# FIX-1: Tickers that failed on CYCLE-20260606T114225 due to keyring/auth issue.
+# Enqueue them for operator-triggered re-analysis from the Pipeline page.
+_FAILED_TICKERS_TO_RERUN: list[str] = [
+    "TEM", "ZETA", "NU", "OUST", "KOD", "INFQ", "SWMR", "ASTS", "RBRK", "NOK"
+]
+
+
+@router.post("/pipeline/queue/rerun-failed")
+async def queue_rerun_failed():
+    """Bulk-enqueue the tickers that failed due to the 2026-06-06 auth issue.
+
+    Does NOT start a cycle automatically — the operator still clicks Run cycle
+    on the Agents page. This just repopulates the queue so the failed tickers
+    are included in the next analysis pass.
+    """
+    import sqlite3 as _sqlite3
+    from datetime import datetime, timezone
+
+    cfg = get_config()
+    db = data_layer.get_readwrite_db(cfg.sqlite_path)
+    enqueued: list[str] = []
+    skipped: list[str] = []
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        for ticker in _FAILED_TICKERS_TO_RERUN:
+            ticker = ticker.upper().strip()
+            # Skip if already in queue
+            row = db.execute(
+                "SELECT 1 FROM queue WHERE ticker = ? AND completed_at IS NULL",
+                (ticker,),
+            ).fetchone()
+            if row:
+                skipped.append(ticker)
+                continue
+            cycle_id = f"RERUN-{ticker}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+            db.execute(
+                "INSERT OR REPLACE INTO queue (cycle_id, ticker, priority_band, pinned, enqueued_at) "
+                "VALUES (?, ?, ?, 0, ?)",
+                (cycle_id, ticker, 1, now),  # P1 priority for re-analysis
+            )
+            enqueued.append(ticker)
+        db.commit()
+    finally:
+        db.close()
+
+    return JSONResponse({
+        "ok": True,
+        "enqueued": enqueued,
+        "skipped": skipped,
+        "count": len(enqueued),
+    })
 
 
 @router.post("/pipeline/queue/promote")

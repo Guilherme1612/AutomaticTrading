@@ -170,11 +170,11 @@ All in `config/`:
 
 | Process | Port | Responsibility |
 |---|---|---|
-| pmacs-inference | :8080 | llama-server (pf-blocked from internet) |
+| pmacs-inference | internal | llama-server (pf-blocked from internet) |
 | pmacs-cortex | daemon | Health monitoring, kill switch, boot detection |
 | pmacs-cortex-self-check | daemon | Meta-monitor: pings cortex every 60s |
 | pmacs-execution | UDS | Trade signing (Ed25519) + broker submission |
-| pmacs-nervous | :8000 | Orchestration, SSE, write API |
+| pmacs-nervous | :8000 | Orchestration, SSE, write API, dashboard UI |
 | pmacs-stoploss | daemon | RTH position monitoring every 30 min |
 | pmacs-mutation | daemon | Active flywheel (dormant first 50 cycles) |
 | pmacs-dashboard | :8000 | Read-only web UI, served by pmacs-nervous (loopback only) |

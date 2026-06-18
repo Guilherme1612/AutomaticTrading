@@ -312,3 +312,48 @@ class TestBootstrapNotAllAgree:
         # _all_agree_direction checks if ALL directions are the same
         # flat != up -> disagree -> ABORT_NO_MATURE_SOURCES
         assert result.decision == ArbitrationDecision.ABORT_NO_MATURE_SOURCES
+
+
+class TestMajorityThreshold60Percent:
+    """Majority direction requires >= 60% of signals (true ceiling)."""
+
+    def _make(self, n_up: int, n_flat: int, n_down: int) -> list[ArbitrationSignal]:
+        signals = []
+        personas = [
+            PersonaName.MOAT_ANALYST,
+            PersonaName.GROWTH_HUNTER,
+            PersonaName.CATALYST_SUMMARIZER,
+            PersonaName.INSIDER_ACTIVITY,
+            PersonaName.SHORT_INTEREST,
+            PersonaName.FORENSICS,
+            PersonaName.MACRO_REGIME,
+        ]
+        for i in range(n_up):
+            signals.append(_dp(persona=personas[i], p_up=0.6, p_flat=0.3, p_down=0.1, historical_n=5))
+        for i in range(n_flat):
+            signals.append(_dp(persona=personas[n_up + i], p_up=0.2, p_flat=0.7, p_down=0.1, historical_n=5))
+        for i in range(n_down):
+            signals.append(_dp(persona=personas[n_up + n_flat + i], p_up=0.1, p_flat=0.3, p_down=0.6, historical_n=5))
+        return signals
+
+    def test_four_of_seven_is_not_majority(self):
+        """4/7 = 57%, below true 60% threshold."""
+        result = arbitrate(self._make(4, 3, 0), cycle_id="c014")
+        assert result.decision == ArbitrationDecision.ABORT_NO_MATURE_SOURCES
+        assert result.abort_reason == "NO_MAJORITY_DIRECTION"
+
+    def test_five_of_seven_is_majority(self):
+        """5/7 = 71%, meets true 60% threshold."""
+        result = arbitrate(self._make(5, 2, 0), cycle_id="c015")
+        assert result.decision == ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE
+        assert result.abort_reason is None
+
+    def test_three_of_five_is_majority(self):
+        """3/5 = 60%, exactly meets threshold."""
+        result = arbitrate(self._make(3, 2, 0), cycle_id="c016")
+        assert result.decision == ArbitrationDecision.PROCEED_BOOTSTRAP_LOW_CONFIDENCE
+
+    def test_two_of_five_is_not_majority(self):
+        """2/5 = 40% up, with 1 flat and 2 down — no direction holds 60%."""
+        result = arbitrate(self._make(2, 1, 2), cycle_id="c017")
+        assert result.decision == ArbitrationDecision.ABORT_NO_MATURE_SOURCES

@@ -83,7 +83,7 @@
             <span class="text-negative text-lg">&#10007;</span>
             <div>
                 <p class="text-sm font-medium text-negative">{{ llm_result.get("title", "Detection failed") if llm_result else "Checking..." }}</p>
-                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No inference server found on 127.0.0.1:8080") if llm_result else "" }}</p>
+                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No local inference server found.") if llm_result else "" }}</p>
             </div>
         </div>
 

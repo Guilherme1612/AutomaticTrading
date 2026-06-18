@@ -44,7 +44,7 @@
 </div>
 
 <!-- Group tabs -->
-<div class="flex gap-2 mb-8 bg-surface-sunken/50 rounded-xl p-1 w-full overflow-x-auto reveal" id="group-tabs" style="-webkit-overflow-scrolling:touch">
+<div class="flex gap-2 mb-8 bg-surface-sunken/50 rounded-xl p-1 w-full overflow-x-auto" tabindex="0" reveal" id="group-tabs" style="-webkit-overflow-scrolling:touch">
     {% for group in groups %}
     <button type="button" onclick="filterByGroup('{{ group }}', this)"
             class="px-4 py-1.5 text-xs rounded-xl transition-colors font-medium
@@ -58,13 +58,13 @@
 <!-- Ticker list -->
 <div class="card card-elevated overflow-hidden reveal">
     {% if tickers %}
-    <div class="overflow-x-auto">
+    <div class="overflow-x-auto" tabindex="0">
     <table class="w-full text-sm min-w-[600px]">
         <thead>
             <tr class="text-left text-text-secondary bg-surface-sunken/50 border-b border-border">
                 <th class="px-4 py-3 font-medium">
                     <input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)"
-                           class="rounded border-border">
+                           class="rounded border-border" aria-label="Select all tickers">
                 </th>
                 <th class="px-4 py-3 text-xs font-semibold uppercase tracking-widest">Ticker</th>
                 <th class="px-4 py-3 text-xs font-semibold uppercase tracking-widest">Name</th>
@@ -108,8 +108,12 @@
                 </td>
                 <td class="px-4 py-3">
                     <div class="flex items-center gap-3">
+                        <a href="/ticker/{{ t.symbol }}"
+                           class="text-xs text-accent hover:underline font-medium">View data &rarr;</a>
+                        {% if t.has_been_cycled %}
                         <a href="/memo/{{ t.symbol }}"
                            class="text-xs text-accent hover:underline font-medium">View memo &rarr;</a>
+                        {% endif %}
                         <button type="button" onclick="removeTicker('{{ t.symbol }}')"
                                 class="text-xs text-negative hover:underline font-medium">Remove</button>
                     </div>

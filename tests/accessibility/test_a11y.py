@@ -390,10 +390,10 @@ class TestAxeCoreCI:
 
             # Inject axe-core and run
             from axe_playwright_python.sync_playwright import Axe
-            axe = Axe(page)
-            results = axe.run()
+            axe = Axe()
+            results = axe.run(page)
 
-            violations = results.get("violations", [])
+            violations = results.response.get("violations", [])
             critical = [v for v in violations if v.get("impact") in ("critical", "serious")]
 
             assert len(critical) == 0, (
@@ -405,3 +405,40 @@ class TestAxeCoreCI:
             )
         finally:
             page.close()
+
+
+class TestTickerDataPageAccessibility:
+    """Structural a11y checks for the Ticker Data page (Source.md §16.8).
+
+    The dashboard_client fixture uses an empty tmp database, so the page renders
+    its no-data branch — which still emits the full base chrome (main landmark,
+    lang, title) that these checks assert.
+    """
+
+    URL = "/ticker/AAPL"
+
+    def test_renders_200(self, dashboard_client):
+        assert dashboard_client.get(self.URL).status_code == 200
+
+    def test_has_main_landmark(self, dashboard_client):
+        html = dashboard_client.get(self.URL).text
+        assert "<main" in html or 'role="main"' in html
+
+    def test_has_lang_attribute(self, dashboard_client):
+        assert 'lang="en"' in dashboard_client.get(self.URL).text
+
+    def test_has_descriptive_title(self, dashboard_client):
+        html = dashboard_client.get(self.URL).text
+        assert "<title>" in html and "AAPL" in html
+
+    def test_no_data_branch_has_heading(self, dashboard_client):
+        """Empty-state must expose a heading for screen-reader navigation."""
+        # Use a ticker guaranteed absent from the evidence cache.
+        html = dashboard_client.get("/ticker/ZZNODATA").text
+        assert "No data for ZZNODATA" in html
+
+    def test_multiples_table_is_accessible_when_rendered(self):
+        """If the per-year table renders, it must have a caption and scoped headers."""
+        template = Path("pmacs/web/templates/ticker_detail.html").read_text()
+        assert "<caption" in template, "multiples table missing <caption>"
+        assert 'scope="col"' in template, "multiples table headers missing scope"

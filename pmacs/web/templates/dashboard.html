@@ -95,13 +95,13 @@
                 </div>
                 <div class="text-center">
                     <p class="text-[10px] text-text-muted uppercase tracking-wider">Completed</p>
-                    <p class="text-sm font-mono text-green-400">{{ completed_cycles | default(0) }}</p>
+                    <p class="text-sm font-mono text-positive">{{ completed_cycles | default(0) }}</p>
                 </div>
                 {% set failed = (total_cycles | default(0)) - (completed_cycles | default(0)) %}
                 {% if failed > 0 %}
                 <div class="text-center">
                     <p class="text-[10px] text-text-muted uppercase tracking-wider">Failed</p>
-                    <p class="text-sm font-mono text-red-400">{{ failed }}</p>
+                    <p class="text-sm font-mono text-negative">{{ failed }}</p>
                 </div>
                 {% endif %}
                 <div class="text-center">
@@ -226,7 +226,7 @@
             Active Positions
         </h3>
         {% if positions %}
-        <div class="overflow-x-auto -mx-6 px-6">
+        <div class="overflow-x-auto -mx-6 px-6" tabindex="0">
         <table class="w-full text-sm">
             <thead>
                 <tr class="text-left text-text-muted border-b border-border-subtle">

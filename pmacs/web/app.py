@@ -254,6 +254,7 @@ from pmacs.web.routes import (  # noqa: E402
     memo,
     pipeline,
     settings,
+    ticker_data,
     universe,
     wizard,
 )
@@ -268,6 +269,7 @@ app.include_router(debug.router)
 app.include_router(settings.router)
 app.include_router(wizard.router)
 app.include_router(memo.router)
+app.include_router(ticker_data.router)
 
 
 # ---------------------------------------------------------------------------

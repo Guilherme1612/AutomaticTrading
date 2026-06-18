@@ -43,7 +43,6 @@ PMACS runs 8 processes managed by launchd:
 
 | Process | Port | Role |
 |---|---|---|
-| pmacs-inference | :8080 | llama-server (pf-blocked from internet) |
 | pmacs-cortex | daemon | Health monitoring, kill switch, boot detection |
 | pmacs-cortex-self-check | daemon | Meta-monitor: pings cortex every 60s |
 | pmacs-execution | UDS | Trade signing (Ed25519) + broker submission |

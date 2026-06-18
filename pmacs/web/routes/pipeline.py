@@ -2059,13 +2059,18 @@ async def _run_demo_cycle(cycle_id: str, tickers: list[str]) -> None:
             else:
                 source_status["evidence_router"] = False
 
-            # 2. Basic Finnhub fundamentals (fast, supplement)
-            finnhub_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
-            if finnhub_ev:
-                parts.append(finnhub_ev)
-                source_status["finnhub"] = True
-            else:
-                source_status["finnhub"] = False
+            # 2. Finnhub fundamentals — FALLBACK ONLY. The evidence router now
+            # uses yfinance as the primary fundamentals source (accurate annual
+            # cash-flow series). Finnhub is only pulled when the router failed, so
+            # agents never see Finnhub's incomplete/quirky numbers alongside the
+            # authoritative yfinance data (operator directive, 2026-06-17).
+            if not source_status.get("evidence_router"):
+                finnhub_ev = await loop.run_in_executor(None, _fetch_ticker_fundamentals, t)
+                if finnhub_ev:
+                    parts.append(finnhub_ev)
+                    source_status["finnhub_fallback"] = True
+                else:
+                    source_status["finnhub_fallback"] = False
 
             # 3. Yahoo enrichment (price targets + technicals)
             enrichment = await loop.run_in_executor(None, _fetch_enrichment_data, t)

@@ -53,7 +53,7 @@
             <input type="text" placeholder="Filter..."
                    data-page-search
                    class="px-3 py-1.5 text-xs border border-border rounded-xl focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none w-28 transition-colors bg-surface-elevated/50">
-            <select id="verdict-filter-select" class="px-3 py-1.5 text-xs border border-border rounded-xl bg-surface-elevated/50 focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
+            <select id="verdict-filter-select" aria-label="Filter by verdict" class="px-3 py-1.5 text-xs border border-border rounded-xl bg-surface-elevated/50 focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
                 <option>All Verdicts</option>
                 <option>STRONG_BUY</option>
                 <option>BUY</option>
@@ -82,7 +82,7 @@
         </div>
         <div class="card card-elevated rounded-xl p-3 text-center">
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Avg Conviction</p>
-            <p class="text-xl font-bold font-mono {{ 'text-positive' if ns_stats.avg_conv >= 0.3 else 'text-amber-400' if ns_stats.avg_conv >= 0.1 else 'text-text-muted' }}">{{ "%.0f"|format(ns_stats.avg_conv * 100) }}%</p>
+            <p class="text-xl font-bold font-mono {{ 'text-positive' if ns_stats.avg_conv >= 0.3 else 'text-warning' if ns_stats.avg_conv >= 0.1 else 'text-text-muted' }}">{{ "%.0f"|format(ns_stats.avg_conv * 100) }}%</p>
             <p class="text-[10px] text-text-muted">across all</p>
         </div>
         <div class="card card-elevated rounded-xl p-3 text-center">
@@ -99,7 +99,7 @@
 </div>
 
 {# -- Kanban Board -------------------------------------------------------- #}
-<div class="overflow-x-auto -mx-2 px-2">
+<div class="overflow-x-auto -mx-2 px-2" tabindex="0">
     {% set col_tints = {
         'STRONG_BUY': 'bg-positive-soft/40',
         'BUY': 'bg-accent-soft/40',
@@ -154,7 +154,7 @@
                         {# -- Row 1: Ticker + Price + Conviction -- #}
                         <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
-                                <a href="/memo/{{ item.ticker }}" class="font-mono font-bold text-[15px] text-text-primary hover:text-accent transition-colors">{{ item.ticker }}</a>
+                                <a href="/ticker/{{ item.ticker }}" class="font-mono font-bold text-[15px] text-text-primary hover:text-accent transition-colors">{{ item.ticker }}</a>
                                 {% if item.price_usd %}
                                 <span class="text-xs text-text-muted font-mono">${{ "%.2f"|format(item.price_usd) }}</span>
                                 {% endif %}
@@ -163,14 +163,14 @@
                                 {% if upside != 0 %}
                                 <span class="text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded {{ 'bg-positive-soft text-positive' if upside > 0 else 'bg-negative-soft text-negative' }}">{{ "+" if upside > 0 else "" }}{{ "%.0f"|format(upside) }}%</span>
                                 {% endif %}
-                                <span class="text-xs font-mono font-bold {{ 'text-positive' if (item.conviction or 0) >= 0.3 else 'text-accent' if (item.conviction or 0) >= 0.15 else 'text-amber-400' if (item.conviction or 0) >= 0.05 else 'text-text-muted' }}">{{ "%.0f"|format([(item.conviction or 0) * 100, 0]|max) }}%</span>
+                                <span class="text-xs font-mono font-bold {{ 'text-positive' if (item.conviction or 0) >= 0.3 else 'text-accent' if (item.conviction or 0) >= 0.15 else 'text-warning' if (item.conviction or 0) >= 0.05 else 'text-text-muted' }}">{{ "%.0f"|format([(item.conviction or 0) * 100, 0]|max) }}%</span>
                             </div>
                         </div>
 
                         {# -- Conviction bar (thin) -- #}
                         {% set conv_pct = [(item.conviction or 0) * 100, 0]|max %}
                         <div class="h-1 bg-surface-sunken/60 rounded-full overflow-hidden mb-2.5">
-                            <div class="h-full rounded-full transition-all duration-700 {{ 'bg-positive' if conv_pct >= 30 else 'bg-accent' if conv_pct >= 15 else 'bg-amber-400' if conv_pct >= 5 else 'bg-border' }}" style="width: {{ [conv_pct, 100]|min }}%"></div>
+                            <div class="h-full rounded-full transition-all duration-700 {{ 'bg-positive' if conv_pct >= 30 else 'bg-accent' if conv_pct >= 15 else 'bg-warning' if conv_pct >= 5 else 'bg-border' }}" style="width: {{ [conv_pct, 100]|min }}%"></div>
                         </div>
 
                         {# -- Row 2: Fair Value target -- #}
@@ -217,7 +217,7 @@
                                 </div>
                                 {% if item.crucible_severity is not none %}
                                 {% set sev_pct = (item.crucible_severity * 100)|int %}
-                                <span class="font-mono {{ 'text-positive' if sev_pct < 30 else 'text-amber-400' if sev_pct < 50 else 'text-negative' }}">
+                                <span class="font-mono {{ 'text-positive' if sev_pct < 30 else 'text-warning' if sev_pct < 50 else 'text-negative' }}">
                                     {{ 'pass' if item.crucible_survives else 'fail' }} {{ sev_pct }}%
                                 </span>
                                 {% endif %}
@@ -251,6 +251,7 @@
                                 <button type="button" onclick="queueTickerNow('{{ item.ticker }}')"
                                         class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Re-run</button>
                                 {% endif %}
+                                <a href="/ticker/{{ item.ticker }}" class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Data</a>
                                 <a href="/memo/{{ item.ticker }}" class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Memo</a>
                             </div>
                         </div>

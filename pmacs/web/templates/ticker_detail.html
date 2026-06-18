@@ -1,0 +1,619 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ticker }} — Data{% endblock %}
+
+{% block content %}
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% elif no_data %}
+<section class="card card-elevated reveal" aria-labelledby="nd-heading">
+    <h2 id="nd-heading" class="text-lg font-semibold text-text-primary mb-2">No data for {{ ticker }} yet</h2>
+    <p class="text-sm text-text-secondary mb-4">
+        This ticker hasn't been analyzed in a cycle, so no evidence has been collected.
+        Once {{ ticker }} runs through a cycle, its fundamentals appear here.
+    </p>
+    <a href="/universe" class="text-sm text-accent hover:underline">Go to Universe &rarr;</a>
+</section>
+{% else %}
+{% macro fmt(value, unit="") -%}
+    {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
+    {%- elif unit == "$" -%}${{ "%.2f"|format(value) }}
+    {%- elif unit == "%" -%}{{ "%.1f"|format(value) }}%
+    {%- elif value is number -%}{{ "%.2f"|format(value) }}
+    {%- else -%}{{ value }}{%- endif -%}
+{%- endmacro %}
+
+{# Format a dollar value in human-readable B/M. #}
+{% macro fmt_money(value) -%}
+    {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
+    {%- elif value >= 1e12 -%}${{ "%.2f"|format(value/1e12) }}T
+    {%- elif value >= 1e9 -%}${{ "%.2f"|format(value/1e9) }}B
+    {%- elif value >= 1e6 -%}${{ "%.2f"|format(value/1e6) }}M
+    {%- else -%}${{ "%.2f"|format(value) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{# Tone class for a number. ``kind`` is "multiple" (P/E, P/FCF — bands cheap/fair/expensive)
+   or "yield" (FCF yields, margins — only the negative case differs from default). #}
+{% macro tone_class(value, kind="multiple") -%}
+    {%- if value is none -%}text-text-muted italic
+    {%- elif kind == "multiple" -%}
+        {%- if value < 0 -%}text-negative
+        {%- elif value <= 15 -%}text-positive
+        {%- elif value <= 30 -%}text-warning
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif kind == "nrr" -%}
+        {%- if value >= 115 -%}text-positive
+        {%- elif value >= 105 -%}text-accent
+        {%- elif value >= 100 -%}text-warning
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif kind == "rule40" -%}
+        {%- if value >= 40 -%}text-positive
+        {%- elif value >= 30 -%}text-accent
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif value < 0 -%}text-negative font-semibold
+    {%- elif value == 0 -%}text-text-secondary
+    {%- else -%}text-text-primary
+    {%- endif -%}
+{%- endmacro %}
+
+{# Human-readable band label for a valuation multiple. #}
+{%- macro mult_label(value) -%}
+    {%- if value is none -%}&mdash;
+    {%- elif value < 0 -%}Loss
+    {%- elif value <= 15 -%}Cheap
+    {%- elif value <= 30 -%}Fair
+    {%- else -%}Expensive
+    {%- endif -%}
+{%- endmacro %}
+
+{# Context label for SaaS KPIs. #}
+{%- macro kpi_label(value, kind) -%}
+    {%- if value is none -%}Not disclosed
+    {%- elif kind == "nrr" -%}
+        {%- if value >= 115 -%}Excellent
+        {%- elif value >= 105 -%}Good
+        {%- elif value >= 100 -%}Okay
+        {%- else -%}Concerning
+        {%- endif -%}
+    {%- elif kind == "rule40" -%}
+        {%- if value >= 40 -%}Excellent
+        {%- elif value >= 30 -%}Healthy
+        {%- else -%}Weak
+        {%- endif -%}
+    {%- else -%}{{ fmt(value) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#
+  Inline-SVG sparkline WITH labeled data points.
+  values        — list of numbers, oldest first → newest last.
+  periods       — list of period strings (e.g. "FY2022"), same length as values.
+  lower_better  — true for P/E and P/FCF (rising = red); false for yields/margins.
+#}
+{% macro sparkline_svg(values, periods, lower_better, height_px=140) -%}
+    {%- set pairs = [] -%}
+    {%- for v in values -%}
+        {%- if v is not none -%}
+            {%- set p = (periods[loop.index0] if (periods is defined and periods and loop.index0 < periods|length) else loop.index|string) -%}
+            {%- set _ = pairs.append({"v": v, "p": p}) -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {%- if pairs|length < 2 -%}
+    <div class="h-[{{ height_px }}px] flex items-center justify-center text-[10px] text-text-muted" aria-hidden="true">No trend data</div>
+    {%- else -%}
+        {%- set vals = pairs|map(attribute='v')|list -%}
+        {%- set ps = pairs|map(attribute='p')|list -%}
+        {%- set vmin = vals|min -%}
+        {%- set vmax = vals|max -%}
+        {%- set vrange = (vmax - vmin) or 1 -%}
+        {%- set n = vals|length -%}
+        {%- if vals[-1] > vals[0] -%}
+            {%- set line_color = "var(--negative)" if lower_better else "var(--positive)" -%}
+            {%- set dir_color = line_color -%}
+        {%- elif vals[-1] < vals[0] -%}
+            {%- set line_color = "var(--positive)" if lower_better else "var(--negative)" -%}
+            {%- set dir_color = line_color -%}
+        {%- else -%}
+            {%- set line_color = "var(--accent)" -%}
+            {%- set dir_color = line_color -%}
+        {%- endif -%}
+        {# Reserve top 22px for the value labels and bottom 14px for the period labels. #}
+        {%- set plot_top = 22 -%}
+        {%- set plot_height = 100 -%}
+        {%- set plot_bottom = plot_top + plot_height -%}
+        {%- set points = [] -%}
+        {%- for v in vals -%}
+            {%- set x = (loop.index0 / (n - 1) * 100) -%}
+            {%- set y = plot_bottom - ((v - vmin) / vrange * plot_height) -%}
+            {%- set _ = points.append({"x": x, "y": y, "v": v, "p": ps[loop.index0]}) -%}
+        {%- endfor -%}
+        {%- set poly_pts = points|map('format_xy_poly')|join(' ') -%}
+    <svg viewBox="0 0 100 {{ plot_bottom + 16 }}" preserveAspectRatio="none"
+         class="w-full h-[{{ height_px }}px]" role="img"
+         aria-label="Trend from {{ "%.1f"|format(vals[0]) }} to {{ "%.1f"|format(vals[-1]) }} across {{ n }} periods">
+        {# Horizontal gridline at the average for quick visual anchoring. #}
+        {%- set vavg = (vals|sum / n) -%}
+        {%- set yavg = plot_bottom - ((vavg - vmin) / vrange * plot_height) -%}
+        <line x1="0" y1="{{ '%.2f'|format(yavg) }}" x2="100" y2="{{ '%.2f'|format(yavg) }}"
+              stroke="var(--border-subtle)" stroke-width="0.4" stroke-dasharray="2 2"/>
+        <polyline fill="none" stroke="{{ line_color }}" stroke-width="0.8"
+                  stroke-linecap="round" stroke-linejoin="round"
+                  points="{{ poly_pts }}"/>
+        {%- for pt in points -%}
+            {%- set _ = pt.update({"above": pt.y < (plot_top + 12)}) -%}
+            {%- if pt.above -%}
+                {%- set label_y = pt.y - 4 -%}
+            {%- else -%}
+                {%- set label_y = pt.y + 8 -%}
+            {%- endif -%}
+            {%- set year_y = pt.y + 12 -%}
+            <circle cx="{{ '%.2f'|format(pt.x) }}" cy="{{ '%.2f'|format(pt.y) }}"
+                    r="1.2" fill="{{ line_color }}"/>
+            <text x="{{ '%.2f'|format(pt.x) }}" y="{{ '%.2f'|format(label_y) }}"
+                  font-size="3.6" fill="var(--text-secondary)"
+                  text-anchor="middle" font-family="ui-monospace, monospace" font-weight="600">{{ "%.1f"|format(pt.v) }}</text>
+            <text x="{{ '%.2f'|format(pt.x) }}" y="{{ '%.2f'|format(year_y) }}"
+                  font-size="3.2" fill="var(--text-muted)"
+                  text-anchor="middle" font-family="ui-monospace, monospace">{{ pt.p }}</text>
+        {%- endfor -%}
+    </svg>
+    {%- endif -%}
+{%- endmacro %}
+
+{# ── Compact metric card: current value + optional 3Y average. ── #}
+{% macro metric_card(label, current, average, unit="", note="") -%}
+    {%- set has_current = current is not none -%}
+    {%- set has_avg = average is not none -%}
+    {%- set tone = tone_class(average if has_avg else current, "multiple") -%}
+    <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
+        <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">{{ label }}</div>
+        <div>
+            <div class="text-3xl font-bold tabular-nums {{ tone if has_current else 'text-text-muted' }}">{{ fmt(current, unit) if has_current else '&mdash;' }}</div>
+            <div class="mt-1 flex items-center gap-2 text-xs">
+                {%- if has_avg -%}
+                <span class="text-text-muted">3Y avg {{ fmt(average, unit) }}</span>
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-{{ tone }}-soft text-{{ tone }} text-[10px] font-semibold uppercase tracking-widest">
+                    <span class="w-1 h-1 rounded-full bg-{{ tone }}"></span>{{ mult_label(average) }}
+                </span>
+                {%- else -%}
+                <span class="text-text-muted">3Y average unavailable</span>
+                {%- endif -%}
+            </div>
+            {%- if note -%}
+            <div class="mt-2 text-[10px] text-text-muted leading-tight">{{ note }}</div>
+            {%- endif -%}
+        </div>
+    </div>
+{%- endmacro %}
+
+{# ── SaaS KPI card with context placement. ── #}
+{% macro kpi_card(label, value, kind="nrr", note="", approx=false) -%}
+    {%- set has_value = value is not none -%}
+    {%- set tone = tone_class(value, kind) -%}
+    <div class="rounded-xl bg-surface-sunken/40 p-4 border border-violet-500/10">
+        <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">{{ label }}</div>
+        <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tabular-nums {{ tone if has_value else 'text-text-muted' }}">
+                {%- if has_value -%}
+                    {%- if kind == "arr" -%}{{ fmt_money(value) }}
+                    {%- elif kind == "nrr" or kind == "rule40" -%}{{ fmt(value, "%") }}
+                    {%- else -%}{{ fmt(value) }}
+                    {%- endif -%}
+                {%- else -%}&mdash;{%- endif -%}
+            </div>
+            {%- if approx -%}
+            <span class="text-[10px] text-warning font-medium">approx.</span>
+            {%- endif -%}
+        </div>
+        <div class="mt-1 flex items-center gap-1.5">
+            {%- if has_value -%}
+            <span class="w-1.5 h-1.5 rounded-full bg-{{ tone }}"></span>
+            <span class="text-xs font-medium {{ tone }}">{{ kpi_label(value, kind) }}</span>
+            {%- else -%}
+            <span class="text-xs text-text-muted">{{ kpi_label(value, kind) }}</span>
+            {%- endif -%}
+        </div>
+        {%- if note -%}
+        <div class="mt-2 text-[10px] text-text-muted leading-tight">{{ note }}</div>
+        {%- endif -%}
+    </div>
+{%- endmacro %}
+
+{# ── Header ── #}
+<header class="mb-6 reveal">
+    <div class="flex items-center gap-3 flex-wrap">
+        <h1 class="text-2xl font-bold text-text-primary font-mono">{{ ticker }}</h1>
+        {% if company_name %}<span class="text-sm text-text-secondary">{{ company_name }}</span>{% endif %}
+        {% if sector %}<span class="text-xs text-text-muted bg-surface-sunken/60 px-2 py-0.5 rounded-lg">{{ sector }}</span>{% endif %}
+        <a href="/memo/{{ ticker }}" class="ml-auto text-sm text-accent hover:underline">View memo &rarr;</a>
+    </div>
+    <div class="mt-2 flex items-center gap-3 text-xs">
+        {% if derived.most_recent_period %}
+        <span class="text-text-muted">Latest filing period: <span class="font-mono">{{ derived.most_recent_period }}</span></span>
+        {% endif %}
+        {% if derived.has_stale_data %}
+        <span class="px-2 py-0.5 rounded-lg bg-warning-soft text-warning font-medium" role="status">
+            Stale data &mdash; underlying filings are over 15 months old
+        </span>
+        {% endif %}
+    </div>
+    <p class="mt-2 text-xs text-text-muted">Rendered from stored evidence (the figures the analysis personas used) &mdash; never re-fetched.</p>
+
+    {# ── Verdict strip ── #}
+    {%- set pe_count = derived.per_year|selectattr('pe')|list|length -%}
+    {%- set pfcf_count = derived.per_year|selectattr('pfcf')|list|length -%}
+    {%- set ps_count = derived.per_year|selectattr('ps')|list|length -%}
+    {%- set pb_count = derived.per_year|selectattr('pb')|list|length -%}
+    {%- set ev_count = derived.per_year|selectattr('ev_ebitda')|list|length -%}
+    {%- set pe_first = (derived.per_year|selectattr('pe')|list|first).pe if (derived.per_year|selectattr('pe')|list) else none -%}
+    {%- set pe_last = (derived.per_year|selectattr('pe')|list|last).pe if (derived.per_year|selectattr('pe')|list) else none -%}
+    {%- if pe_first is not none and pe_last is not none -%}
+        {%- if pe_last < pe_first -%}{% set trend_label = 'P/E ↓ improving' %}
+        {%- elif pe_last > pe_first -%}{% set trend_label = 'P/E ↑ worsening' %}
+        {%- else -%}{% set trend_label = 'P/E → flat' %}
+        {%- endif -%}
+    {%- else -%}{% set trend_label = '&mdash;' %}
+    {%- endif -%}
+    <div class="mt-3 flex items-center gap-2 flex-wrap" role="list" aria-label="At-a-glance verdict">
+        {# Chip 1: Cash (FCF yield) #}
+        {%- if derived.fcf_yield_pct is none -%}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Cash: &mdash;
+        </span>
+        {%- else -%}
+        {%- set c_tone = 'negative' if derived.fcf_yield_pct < 0 else 'positive' -%}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-{{ c_tone }}-soft text-{{ c_tone }} text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-{{ c_tone }}"></span>Cash: {{ fmt(derived.fcf_yield_pct, '%') }}
+        </span>
+        {%- endif %}
+
+        {# Chip 2: Forward P/E #}
+        {%- if derived.current.forward_pe is none -%}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Fwd P/E: &mdash;
+        </span>
+        {%- else -%}
+        {%- set fpe_tone = tone_class(derived.current.forward_pe, 'multiple') -%}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-{{ fpe_tone }}-soft text-{{ fpe_tone }} text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-{{ fpe_tone }}"></span>Fwd P/E: {{ fmt(derived.current.forward_pe) }}
+        </span>
+        {%- endif %}
+
+        {# Chip 3: Trend #}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-secondary text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Trend: {{ trend_label|safe }}
+        </span>
+
+        {# Chip 4: Coverage #}
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
+            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Coverage: {{ pe_count }}/3 P/E · {{ pfcf_count }}/3 P/FCF · {{ ps_count }}/3 P/S · {{ pb_count }}/3 P/B · {{ ev_count }}/3 EV/EBITDA
+        </span>
+    </div>
+</header>
+
+{# ── Valuation summary: current vs 3Y average ── #}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="val-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="val-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Valuation summary</h2>
+        <span class="text-[10px] text-text-muted">Current value + 3-year historical average where computable</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {{ metric_card("P/E", derived.current.pe, derived.pe_3y_avg) }}
+        {{ metric_card("Forward P/E", derived.current.forward_pe, none, note="Forward multiple; no historical average available.") }}
+        {{ metric_card("P/S", derived.current.ps, derived.ps_3y_avg) }}
+        {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet).") }}
+        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash.") }}
+        {{ metric_card("PEG", derived.current.peg, none, note="Point-in-time PEG ratio.") }}
+    </div>
+</section>
+
+{# ── FCF yield ── #}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="fcf-heading">
+    <div class="flex items-baseline justify-between mb-4 gap-4 flex-wrap">
+        <h2 id="fcf-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Free cash flow yield</h2>
+        {% if derived.fcf_yield_pct is not none and derived.fcf_yield_sbc_adjusted_pct is not none %}
+        {% set sbc_delta_pp = (derived.fcf_yield_pct - derived.fcf_yield_sbc_adjusted_pct)|round(2) %}
+        <span class="text-xs px-2 py-0.5 rounded-lg font-medium
+                     {{ 'bg-warning-soft text-warning' if sbc_delta_pp >= 2 else 'bg-surface-sunken text-text-muted' }}"
+              role="status"
+              aria-label="Stock-based compensation drag on free cash flow yield">
+            SBC drag: &minus;{{ "%.2f"|format(sbc_delta_pp) }} pp
+        </span>
+        {% endif %}
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Unadjusted</div>
+            <div class="text-2xl font-bold {{ tone_class(derived.fcf_yield_pct, 'yield') }}">
+                {{ fmt(derived.fcf_yield_pct, "%") }}
+            </div>
+            <div class="text-xs text-text-muted mt-1">FCF &divide; market cap</div>
+        </div>
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">SBC-adjusted</div>
+            <div class="text-2xl font-bold {{ tone_class(derived.fcf_yield_sbc_adjusted_pct, 'yield') }}">
+                {{ fmt(derived.fcf_yield_sbc_adjusted_pct, "%") }}
+            </div>
+            <div class="text-xs text-text-muted mt-1">(FCF &minus; stock-based comp) &divide; market cap</div>
+        </div>
+    </div>
+</section>
+
+{# ── SaaS KPIs ── #}
+{% set sk = derived.saas_kpis %}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="saas-heading">
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+        <h2 id="saas-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">SaaS / subscription KPIs</h2>
+        <span class="text-[10px] text-text-muted ml-auto">Extracted from stored evidence text; N/A = not disclosed</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {{ kpi_card("Net Revenue Retention (NRR)", sk.nrr_pct, "nrr",
+                    note="NRR >100% means existing customers expand; <100% means contraction.",
+                    approx=sk.nrr_from_agent) }}
+        {{ kpi_card("Gross Retention (GRR)", sk.grr_pct, "nrr",
+                    note="Share of revenue retained from existing customers after churn.",
+                    approx=sk.grr_from_agent) }}
+        {{ kpi_card("Annual Recurring Revenue (ARR)", sk.arr_usd, "arr",
+                    note="Implied ARR when not explicitly disclosed; TTM-based fallback.",
+                    approx=sk.arr_is_approximation or sk.arr_from_agent) }}
+        {{ kpi_card("Rule of 40", sk.rule_of_40, "rule40",
+                    note="Revenue growth % + FCF margin %. >40% is the classic SaaS health threshold.") }}
+    </div>
+    {% if sk.notes %}
+    <ul class="mt-3 space-y-1 text-xs text-text-secondary list-disc list-inside">
+        {% for note in sk.notes %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+</section>
+
+{# ── Analyst consensus ── #}
+{% set a = derived.analyst %}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="analyst-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="analyst-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Analyst consensus</h2>
+        {%- if a.num_analysts is not none -%}
+        <span class="text-[10px] text-text-muted">{{ a.num_analysts }} analyst{{ 's' if a.num_analysts != 1 else '' }} covering</span>
+        {%- endif -%}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {# Price target #}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Price target</div>
+            {%- if a.target_mean is not none -%}
+            <div class="text-2xl font-bold text-text-primary">{{ fmt(a.target_mean, "$") }}</div>
+            <div class="mt-1 text-xs text-text-muted">Range {{ fmt(a.target_low, "$") }} &ndash; {{ fmt(a.target_high, "$") }} · Median {{ fmt(a.target_median, "$") }}</div>
+            {%- if a.upside_to_mean_pct is not none -%}
+            {%- set upside_tone = 'text-positive' if a.upside_to_mean_pct > 0 else ('text-negative' if a.upside_to_mean_pct < 0 else 'text-text-muted') -%}
+            <div class="mt-2 text-sm font-semibold {{ upside_tone }}">{{ "%+.1f"|format(a.upside_to_mean_pct) }}% to mean</div>
+            {%- endif -%}
+            {%- else -%}
+            <div class="text-2xl font-bold text-text-muted">&mdash;</div>
+            <div class="mt-1 text-xs text-text-muted">No analyst price target in stored evidence.</div>
+            {%- endif -%}
+        </div>
+
+        {# Ratings mix #}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Ratings mix</div>
+            {%- if a.total_analysts -%}
+            {%- set total = a.total_analysts -%}
+            <div class="space-y-1.5">
+                {% for label, count, color in [
+                    ('Strong buy', a.strong_buy or 0, 'positive'),
+                    ('Buy', a.buy or 0, 'positive'),
+                    ('Hold', a.hold or 0, 'warning'),
+                    ('Sell', a.sell or 0, 'negative'),
+                    ('Strong sell', a.strong_sell or 0, 'negative'),
+                ] %}
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 text-text-secondary">{{ label }}</span>
+                    <div class="flex-1 h-1.5 rounded-full bg-surface-sunken overflow-hidden">
+                        <div class="h-full rounded-full bg-{{ color }}" style="width: {{ '%.1f'|format((count/total*100) if total else 0) }}%"></div>
+                    </div>
+                    <span class="w-6 text-right tabular-nums text-text-primary">{{ count }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {%- if a.consensus -%}
+            <div class="mt-2 text-xs text-text-muted">Consensus: <span class="font-medium text-text-primary">{{ a.consensus }}</span></div>
+            {%- endif -%}
+            {%- else -%}
+            <div class="text-sm text-text-muted">No analyst ratings in stored evidence.</div>
+            {%- endif -%}
+        </div>
+
+        {# Current vs target quick card #}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Current price</div>
+            <div class="text-2xl font-bold text-text-primary">{{ fmt(a.current_price, "$") }}</div>
+            {%- if a.current_price is not none and a.target_mean is not none and a.target_mean > 0 -%}
+            {%- set upside = ((a.target_mean - a.current_price) / a.current_price * 100)|round(1) -%}
+            {%- set upside_tone = 'text-positive' if upside > 0 else ('text-negative' if upside < 0 else 'text-text-muted') -%}
+            <div class="mt-2 text-sm font-semibold {{ upside_tone }}">{{ "%+.1f"|format(upside) }}% to mean target</div>
+            {%- endif -%}
+        </div>
+    </div>
+</section>
+
+{# ── 3-year multiples detail ── #}
+{% set pe_values = [] %}{% set pe_periods = [] %}
+{% set pfcf_values = [] %}{% set pfcf_periods = [] %}
+{% set ps_values = [] %}{% set ps_periods = [] %}
+{% set pb_values = [] %}{% set pb_periods = [] %}
+{% set ev_values = [] %}{% set ev_periods = [] %}
+{% for y in (derived.per_year or [])|reverse %}
+    {% if y.pe is not none %}{% set _ = pe_values.append(y.pe) %}{% set _ = pe_periods.append(y.period or '?') %}{% endif %}
+    {% if y.pfcf is not none %}{% set _ = pfcf_values.append(y.pfcf) %}{% set _ = pfcf_periods.append(y.period or '?') %}{% endif %}
+    {% if y.ps is not none %}{% set _ = ps_values.append(y.ps) %}{% set _ = ps_periods.append(y.period or '?') %}{% endif %}
+    {% if y.pb is not none %}{% set _ = pb_values.append(y.pb) %}{% set _ = pb_periods.append(y.period or '?') %}{% endif %}
+    {% if y.ev_ebitda is not none %}{% set _ = ev_values.append(y.ev_ebitda) %}{% set _ = ev_periods.append(y.period or '?') %}{% endif %}
+{% endfor %}
+{% macro mult_trend_card(label, avg, values, periods, lower_better=true) -%}
+    {%- set has_data = (values|length > 0) -%}
+    {%- set has_avg = (avg is not none) -%}
+    {%- set tone = tone_class(avg if has_avg else (values[-1] if values else none), "multiple") -%}
+    <div class="rounded-xl bg-surface-sunken/40 p-4">
+        <div class="flex items-baseline justify-between gap-3 mb-3">
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">{{ label }}</span>
+            {%- if has_avg -%}
+            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-{{ tone }}-soft text-{{ tone }} text-[10px] font-semibold uppercase tracking-widest">
+                <span class="w-1 h-1 rounded-full bg-{{ tone }}"></span>{{ mult_label(avg) }}
+            </span>
+            {%- else -%}
+            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted text-[10px] font-semibold uppercase tracking-widest">
+                <span class="w-1 h-1 rounded-full bg-text-muted"></span>No avg
+            </span>
+            {%- endif -%}
+        </div>
+
+        {%- if has_avg -%}
+        <div class="text-3xl font-bold tabular-nums text-{{ tone }}">{{ fmt(avg) }}</div>
+        {%- else -%}
+        <div class="text-3xl font-bold tabular-nums text-text-muted">&mdash;</div>
+        {%- endif -%}
+
+        {%- if values|length >= 2 -%}
+        {%- set pct_change = (((values[-1] - values[0]) / values[0] * 100) if values[0] else 0)|round(1) -%}
+        {%- set is_falling = values[-1] < values[0] -%}
+        {%- set is_rising = values[-1] > values[0] -%}
+        {%- set trend_tone = 'text-positive' if (is_falling and lower_better) or (is_rising and not lower_better) else ('text-negative' if (is_rising and lower_better) or (is_falling and not lower_better) else 'text-text-muted') -%}
+        <div class="mt-1 text-xs font-medium {{ trend_tone }}">
+            {%- if is_rising -%}&uarr;{%- elif is_falling -%}&darr;{%- else -%}&rarr;{%- endif -%}
+            {{ "%+.1f"|format(pct_change) }}% over {{ values|length }} yrs
+        </div>
+        {%- endif -%}
+
+        <div class="mt-3">
+            {{ sparkline_svg(values, periods, lower_better=lower_better, height_px=64) }}
+        </div>
+    </div>
+{%- endmacro %}
+
+<section class="card card-elevated mb-6 reveal" aria-labelledby="mult-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-5">
+        <h2 id="mult-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">3-year multiples</h2>
+        <span class="text-[10px] text-text-muted">Per-period values + trend sparklines · newest at the bottom</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
+        {{ mult_trend_card("P/E", derived.pe_3y_avg, pe_values, pe_periods, lower_better=true) }}
+        {{ mult_trend_card("P/FCF", derived.pfcf_3y_avg, pfcf_values, pfcf_periods, lower_better=true) }}
+        {{ mult_trend_card("P/S", derived.ps_3y_avg, ps_values, ps_periods, lower_better=true) }}
+        {{ mult_trend_card("P/B", derived.pb_3y_avg, pb_values, pb_periods, lower_better=true) }}
+        {{ mult_trend_card("EV/EBITDA", derived.ev_ebitda_3y_avg, ev_values, ev_periods, lower_better=true) }}
+    </div>
+
+    {# ── Per-year detail table ── #}
+    {% if derived.per_year %}
+    <details class="group">
+        <summary class="cursor-pointer text-[10px] font-semibold text-text-muted uppercase tracking-widest hover:text-text-secondary flex items-center gap-1.5 select-none">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.5l3.5 3.5-3.5 3.5"/></svg>
+            Per-fiscal-year detail ({{ derived.per_year|length }} periods)
+        </summary>
+        <table class="w-full text-sm border-collapse mt-3">
+            <caption class="sr-only">Per-fiscal-year valuation multiples for {{ ticker }}</caption>
+            <thead>
+                <tr class="text-[10px] uppercase tracking-widest text-text-muted text-left border-b border-border-subtle">
+                    <th scope="col" class="py-2 font-semibold pl-3">Period</th>
+                    <th scope="col" class="py-2 font-semibold text-right">Price</th>
+                    <th scope="col" class="py-2 font-semibold text-right">EPS</th>
+                    <th scope="col" class="py-2 font-semibold text-right">P/E</th>
+                    <th scope="col" class="py-2 font-semibold text-right">P/FCF</th>
+                    <th scope="col" class="py-2 font-semibold text-right">P/S</th>
+                    <th scope="col" class="py-2 font-semibold text-right">P/B</th>
+                    <th scope="col" class="py-2 font-semibold text-right">EV/EBITDA</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for y in derived.per_year %}
+                {%- set pe_title = '' -%}
+                {%- if y.pe is none and y.eps is not none and y.eps <= 0 -%}{% set pe_title = 'Skipped: EPS <= 0' %}
+                {%- elif y.pe is none -%}{% set pe_title = 'Missing data' %}
+                {%- endif -%}
+                {%- set pfcf_title = '' -%}
+                {%- if y.pfcf is none and y.fcf_usd is not none and y.fcf_usd <= 0 -%}{% set pfcf_title = 'Skipped: FCF <= 0' %}
+                {%- elif y.pfcf is none -%}{% set pfcf_title = 'Missing data' %}
+                {%- endif -%}
+                <tr class="border-b border-border-subtle/50 {{ 'bg-warning-soft/40' if y.shares_approximated else '' }}">
+                    <td class="py-2 pl-3 font-mono text-text-secondary">
+                        {{ y.period }}{% if y.shares_approximated %}<span class="text-warning ml-1" title="P/FCF uses current share count (historical unavailable)">*</span>{% endif %}
+                    </td>
+                    <td class="py-2 text-right tabular-nums">{{ fmt(y.price, "$") }}</td>
+                    <td class="py-2 text-right tabular-nums">{{ fmt(y.eps) }}</td>
+                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pe) }} font-medium">
+                        {%- if y.pe is not none -%}{{ "%.1f"|format(y.pe) }}
+                        {%- else -%}<span class="italic text-text-muted" title="{{ pe_title }}">&mdash;{% if pe_title %}&#9888;{% endif %}</span>
+                        {%- endif -%}
+                    </td>
+                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pfcf) }} font-medium">
+                        {%- if y.pfcf is not none -%}{{ "%.1f"|format(y.pfcf) }}
+                        {%- else -%}<span class="italic text-text-muted" title="{{ pfcf_title }}">&mdash;{% if pfcf_title %}&#9888;{% endif %}</span>
+                        {%- endif -%}
+                    </td>
+                    <td class="py-2 text-right tabular-nums {{ tone_class(y.ps) }} font-medium">
+                        {%- if y.ps is not none -%}{{ "%.1f"|format(y.ps) }}
+                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
+                        {%- endif -%}
+                    </td>
+                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pb) }} font-medium">
+                        {%- if y.pb is not none -%}{{ "%.1f"|format(y.pb) }}
+                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
+                        {%- endif -%}
+                    </td>
+                    <td class="py-2 text-right tabular-nums {{ tone_class(y.ev_ebitda) }} font-medium">
+                        {%- if y.ev_ebitda is not none -%}{{ "%.1f"|format(y.ev_ebitda) }}
+                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
+                        {%- endif -%}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </details>
+    {% if derived.notes %}
+    <ul class="mt-3 space-y-1 text-xs text-text-secondary list-disc list-inside">
+        {% for note in derived.notes %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% else %}
+    <p class="text-sm text-text-muted">No annual series available to compute multiples.</p>
+    {% endif %}
+</section>
+
+{# ── Raw fundamentals groups ── #}
+{% if groups %}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="raw-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="raw-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Raw fundamentals</h2>
+        <span class="text-[10px] text-text-muted">Values as stored in evidence</span>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% for group in groups %}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-3">{{ group.title }}</div>
+            <div class="space-y-2">
+                {% for r in group.rows %}
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-text-secondary">{{ r.label }}</span>
+                    <span class="font-mono tabular-nums text-text-primary">{{ fmt(r.value, r.unit) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% endif %}
+{% endblock %}

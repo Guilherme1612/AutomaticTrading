@@ -18,6 +18,8 @@ Steps:
 
 from __future__ import annotations
 
+import math
+
 from pmacs.logsys.debug_log import log_debug
 from pmacs.schemas.agents import DirectionalProbability, PersonaName
 from pmacs.schemas.arbitration import (
@@ -142,7 +144,7 @@ def _majority_direction(
     _tie_order = {"up": 0, "flat": 1, "down": 2}
     majority_dir = max(counts, key=lambda d: (counts[d], -_tie_order.get(d, 99)))
     majority_count = counts[majority_dir]
-    threshold = max(2, int(len(signals) * 0.60))  # 60% floor, min 2
+    threshold = max(2, math.ceil(len(signals) * 0.60))  # true 60% ceiling, min 2
     if majority_count >= threshold:
         majority_signals = [s for s in signals if dir_map[s] == majority_dir]
         return True, majority_dir, majority_signals

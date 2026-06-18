@@ -945,6 +945,75 @@ Clicking a card opens a slide-in drawer (60% viewport width):
 
 Pre-first-cycle: explanation card. Mid-cycle (running): "Cycle in progress — verdicts will appear as tickers complete. See Agents page for live view."
 
+### 16.8 Page: Ticker Data (fundamentals drill-down)
+
+**Purpose:** a read-only, single-ticker view of the *raw financial data* that the
+analysis personas actually consumed — the "data side" of the memo, isolated and
+unsummarized. The operator opens it to audit the numbers behind a verdict and to
+compare valuation across the universe without re-running anything.
+
+**Path:** `/ticker/{ticker}`. Reachable from every ticker link (Dashboard holdings,
+Memo header, Pipeline per-ticker card, Compare, Universe row).
+
+**Accuracy contract (non-negotiable):** the page **renders the stored
+`EvidencePacket` for the ticker's most recent cycle — it never re-fetches** the
+fundamentals. Because the personas were handed the same stored evidence, the
+figures on this page are by construction identical to what drove the memo. Any
+derived figure (yields, multiples, averages) is computed in **Python from those
+stored values — never by an LLM** (Five Non-Negotiables: LLMs never math).
+
+**Primary data source:** fundamentals come from **yfinance (Yahoo Finance)**, which
+returns the full annual cash-flow statement (Free Cash Flow, Stock-Based
+Compensation, Operating CF, CapEx — 4 fiscal years) plus valuation, margins, and
+growth. Finnhub is a fallback only, used to fill fields yfinance did not return —
+never to override a yfinance value (operator directive, 2026-06-17: Finnhub's free
+tier is incomplete and its percentage quirks have corrupted data before; prefer N/A
+over an unreliable number).
+
+**Data groups (all sourced from stored evidence):**
+
+- **Valuation:** P/E (`peNormalizedAnnual`), forward P/E (Yahoo), P/B (`pbAnnual`),
+  P/S (`psAnnual`), EV/EBITDA (`evToEbitdaTTM`), PEG.
+- **Cash flow:** TTM FCF margin (`fcfMarginTTM`), annual FCF series
+  (`annual_freeCashFlow`, last ~4 fiscal years), operating CF, CapEx.
+- **Stock-based compensation:** `annual_sbc` (yfinance, 4 fiscal years); EDGAR
+  `sbc_most_recent.value_usd` as fallback.
+- **FCF yield — shown as two side-by-side columns:**
+  - *Unadjusted* = latest annual FCF / market cap.
+  - *SBC-adjusted* = (latest annual FCF − SBC) / market cap. SBC is treated as a
+    real cash-equivalent cost; the gap between the columns is the dilution drag.
+- **Earnings & growth:** TTM EPS, annual EPS series, EPS YoY, 3Y EPS CAGR
+  (`epsGrowth3Y`), 3Y/5Y revenue CAGR.
+- **Multi-year multiples (computed):**
+  - *3-year average P/E* = mean of (period-end price ÷ that fiscal year's EPS) over
+    the last 3 fiscal years; years with non-positive EPS are skipped (P/E undefined)
+    and noted.
+  - *3-year FCF multiple* (P/FCF) = mean of (period-end market cap ÷ that fiscal
+    year's FCF) over the last 3 fiscal years; years with non-positive FCF are
+    skipped and noted. A per-year breakdown is shown alongside the average.
+- **Margins / returns:** gross/operating/net/EBITDA margin TTM, ROE/ROA/ROIC TTM.
+- **Analyst:** consensus target (mean/median/high/low), analyst count, buy/hold/sell.
+- **Technical:** SMA50, SMA200, RSI14, 52-week high/low, trend classification.
+
+**Historical price requirement:** the 3-year multiples need a period-end price for
+each fiscal year. The standard technical fetch only covers ~1 year, so this page
+triggers a **widened (~3-year) Polygon bar fetch** to source period-end closes. The
+default 1-year fetch is unchanged for the per-cycle agent path — the longer window
+is requested only when rendering this page, so cycle latency is unaffected.
+
+**Known limitation (documented, not a bug):** when historical share counts are
+unavailable for a fiscal period, the P/FCF multiple for that year falls back to the
+current diluted share count to derive market cap; the page labels such years so the
+operator knows the figure is an approximation.
+
+**Freshness:** a badge driven by the evidence's `_most_recent_period` / stale-data
+flag warns when the underlying annual filings are >15 months old, so the operator
+distrusts stale figures.
+
+**Empty state:** if no evidence has been collected for the ticker yet, show a card
+explaining that the ticker must be analyzed in a cycle before data is available,
+with a link to the Universe page.
+
 ---
 
 ## 17. Page: Universe

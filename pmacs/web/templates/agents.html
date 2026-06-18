@@ -61,8 +61,8 @@
 <!-- Quick Research + Solo Analysis -->
 <div class="card card-elevated rounded-2xl mb-4 sm:mb-6 reveal" data-stagger>
     <div class="flex items-center gap-2 sm:gap-3">
-        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0">
-            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-crucible-soft flex items-center justify-center shrink-0">
+            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-crucible" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
         </div>
@@ -72,7 +72,7 @@
                onkeydown="if(event.key==='Enter')runSoloAnalysis()">
         <button type="button" id="solo-run-btn"
                 onclick="runSoloAnalysis()"
-                class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-violet-500/10 text-violet-500 rounded-xl hover:bg-violet-500/20 transition-colors whitespace-nowrap">
+                class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-crucible-soft text-crucible rounded-xl hover:bg-crucible/20 transition-colors whitespace-nowrap">
             Analyze
         </button>
     </div>
@@ -288,8 +288,8 @@
 <div id="comm-layer" class="rounded-2xl border border-border/40 bg-surface-elevated mb-8 reveal" data-stagger>
     <div class="flex flex-wrap items-center justify-between gap-2 p-4 pb-0 mb-3">
         <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                <svg class="w-3.5 h-3.5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <div class="w-7 h-7 rounded-lg bg-crucible-soft flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-crucible" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             </div>
             <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">Signal Flow</h3>
         </div>
@@ -358,7 +358,7 @@
             Run a cycle to see agent signals.
         </div>
         <div id="signals-table" class="hidden">
-            <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
+            <div class="overflow-x-auto" tabindex="0" style="-webkit-overflow-scrolling:touch">
             <div class="grid grid-cols-[1fr_80px_80px_70px_50px] gap-x-3 gap-y-0 text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 pb-1.5 border-b border-border-subtle mb-1 min-w-[400px]">
                 <span>Persona</span><span class="text-center">Bullish</span><span class="text-center">Bearish</span><span class="text-center">Vote</span><span class="text-right">Evid</span>
             </div>
@@ -412,8 +412,8 @@
 <div class="rounded-2xl border border-border/40 bg-surface-elevated p-4 mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                <svg class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            <div class="w-7 h-7 rounded-lg bg-warning-soft flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
             </div>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Session Stats</h3>
         </div>
@@ -570,7 +570,7 @@ function _verdictStyle(verdict) {
     var map = {
         "STRONG_BUY": {bg: "bg-positive-soft", text: "text-positive"},
         "BUY":        {bg: "bg-accent-soft",   text: "text-accent"},
-        "HOLD":       {bg: "bg-amber-400/10",  text: "text-amber-400"},
+        "HOLD":       {bg: "bg-warning-soft",  text: "text-warning"},
         "SKIP":       {bg: "bg-negative-soft", text: "text-negative"},
     };
     return map[verdict] || {bg: "bg-surface-sunken", text: "text-text-muted"};
@@ -580,7 +580,7 @@ function _buildResultCard(result) {
     var v = _verdictStyle(result.verdict);
     var convPct = Math.round((result.conviction || 0) * 100);
     var convWidth = Math.min(convPct, 100);
-    var convColor = convPct >= 60 ? "bg-positive" : convPct >= 30 ? "bg-accent" : convPct >= 10 ? "bg-amber-400" : "bg-negative";
+    var convColor = convPct >= 60 ? "bg-positive" : convPct >= 30 ? "bg-accent" : convPct >= 10 ? "bg-warning" : "bg-negative";
 
     // Agent vote summary
     var bulls = 0, bears = 0, neutrals = 0;
@@ -1083,8 +1083,8 @@ function _renderConviction(arb, crucible) {
 
     // Bootstrap thresholds (conviction.py L79-85)
     var verdict = conviction >= 0.40 ? "STRONG_BUY" : conviction >= 0.15 ? "BUY" : conviction >= 0.05 ? "HOLD" : "SKIP";
-    var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
-    var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
+    var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-warning" : "text-negative";
+    var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-warning" : "text-negative";
 
     var dirEl = document.getElementById("cv-direction");
     var matEl = document.getElementById("cv-maturity");
@@ -1107,7 +1107,7 @@ function _renderConviction(arb, crucible) {
     var evSubEl = document.getElementById("cv-ev-sub");
     if (evEl) {
         evEl.textContent = evFactor.toFixed(2);
-        evEl.className = "text-lg font-mono font-bold " + (evFactor >= 0.5 ? "text-positive" : evFactor > 0 ? "text-amber-400" : "text-negative");
+        evEl.className = "text-lg font-mono font-bold " + (evFactor >= 0.5 ? "text-positive" : evFactor > 0 ? "text-warning" : "text-negative");
     }
     if (evSubEl) {
         evSubEl.textContent = arb.ev_multiple !== undefined ? "ev=" + arb.ev_multiple.toFixed(2) : "estimated";

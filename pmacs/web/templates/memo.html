@@ -50,6 +50,7 @@
                              {{ 'bg-negative-soft text-negative' if verdict == 'SKIP' else '' }}">
                     {{ verdict }}
                 </span>
+                <a href="/ticker/{{ ticker }}" class="ml-auto text-sm text-accent hover:underline shrink-0">View data &rarr;</a>
             </div>
             {% if memo.verdict_line %}
             <p class="text-sm text-text-secondary max-w-xl">{{ memo.verdict_line }}</p>
@@ -263,8 +264,8 @@
             'design_wins': 'Design Wins', 'backlog': 'Backlog'
         } %}
         {% for key, value in memo.industry_kpis.items() %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl border border-violet-500/20">
-            <p class="text-[10px] text-violet-400 uppercase tracking-widest mb-0.5">{{ kpi_labels.get(key, key|replace('_', ' ')|title) }}</p>
+        <div class="p-3 bg-surface-sunken/50 rounded-xl border border-crucible/20">
+            <p class="text-[10px] text-crucible uppercase tracking-widest mb-0.5">{{ kpi_labels.get(key, key|replace('_', ' ')|title) }}</p>
             <p class="text-sm font-mono font-semibold text-text-primary">{{ value }}</p>
         </div>
         {% endfor %}

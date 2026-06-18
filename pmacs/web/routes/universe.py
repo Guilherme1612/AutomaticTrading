@@ -117,6 +117,24 @@ async def universe_page(request: Request):
                 last_analyzed_map: dict[str, str] = {r[0]: r[1] for r in rows}
             except Exception:
                 last_analyzed_map = {}
+
+            # Determine which tickers have participated in at least one cycle.
+            # A ticker is considered cycled if it appears in decisions, queue, or holdings.
+            try:
+                cycled_rows = db.execute(
+                    """
+                    SELECT DISTINCT ticker FROM (
+                        SELECT ticker FROM decisions
+                        UNION
+                        SELECT ticker FROM queue
+                        UNION
+                        SELECT ticker FROM holdings WHERE cycle_id_opened IS NOT NULL
+                    )
+                    """
+                ).fetchall()
+                cycled_tickers: set[str] = {r[0] for r in cycled_rows}
+            except Exception:
+                cycled_tickers = set()
         finally:
             db.close()
 
@@ -133,6 +151,7 @@ async def universe_page(request: Request):
                 "status": _compute_status(t, t["ticker"] in active_tickers),
                 "has_position": t["ticker"] in active_tickers,
                 "is_pinned": t.get("pinned_priority") is not None,
+                "has_been_cycled": t["ticker"] in cycled_tickers,
                 "last_cycle": "--",
                 "last_analyzed": last_analyzed_map.get(t["ticker"]),
             }

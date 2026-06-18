@@ -36,8 +36,13 @@ def _setup(tmp_path):
         "INSERT INTO queue (cycle_id, ticker, priority_band, enqueued_at, completed_at) VALUES (?, ?, ?, ?, ?)",
         ("c1", "GOOG", 1, "2024-01-01T10:00:00", None),
     )
+    conn.execute(
+        "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, decided_at) VALUES (?, ?, ?, ?, ?)",
+        ("c1", "TSLA", "HOLD", 0.42, "2024-01-01T11:00:00"),
+    )
     add_ticker(conn, UniverseEntry(ticker="AAPL", sector="Technology"))
     add_ticker(conn, UniverseEntry(ticker="MSFT", sector="Technology"))
+    add_ticker(conn, UniverseEntry(ticker="TSLA", sector="Technology"))
     conn.commit()
     conn.close()
 
@@ -141,6 +146,26 @@ class TestUniverseRoute:
         with TestClient(app) as client:
             response = client.get("/universe")
             assert response.status_code == 200
+
+    def test_universe_data_link_always_present(self):
+        with TestClient(app) as client:
+            response = client.get("/universe")
+            text = response.text
+            assert response.status_code == 200
+            assert '/ticker/AAPL' in text
+            assert '/ticker/MSFT' in text
+            assert '/ticker/TSLA' in text
+
+    def test_universe_memo_link_only_for_cycled_tickers(self):
+        with TestClient(app) as client:
+            response = client.get("/universe")
+            text = response.text
+            assert response.status_code == 200
+            # AAPL has a holding, TSLA has a decision -> both cycled -> memo link shown
+            assert '/memo/AAPL' in text
+            assert '/memo/TSLA' in text
+            # MSFT has no cycle data -> memo link hidden
+            assert '/memo/MSFT' not in text
 
 
 class TestSettingsRoute:

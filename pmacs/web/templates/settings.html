@@ -76,7 +76,7 @@
         <!-- Timezone + Currency in a row -->
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="text-xs text-text-muted font-medium block mb-2">Timezone</label>
+                <label for="timezone-select" class="text-xs text-text-muted font-medium block mb-2">Timezone</label>
                 <select id="timezone-select" onchange="setDisplayPref('timezone', this.value)"
                         class="w-full text-sm border border-border rounded-xl px-3 py-2 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
                     <option value="America/New_York" selected>US Eastern</option>
@@ -87,7 +87,7 @@
                 </select>
             </div>
             <div>
-                <label class="text-xs text-text-muted font-medium block mb-2">Currency</label>
+                <label for="currency-select" class="text-xs text-text-muted font-medium block mb-2">Currency</label>
                 <select id="currency-select" onchange="setDisplayPref('currency', this.value)"
                         class="w-full text-sm border border-border rounded-xl px-3 py-2 bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
                     <option value="USD" selected>USD ($)</option>
@@ -101,7 +101,7 @@
     <section class="card card-elevated p-6 reveal" data-stagger>
         <div class="flex items-center justify-between mb-6">
             <div class="flex items-center gap-2">
-                <svg class="w-4 h-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                <svg class="w-4 h-4 text-crucible" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 <h3 class="text-sm font-semibold text-text-primary">AI Provider</h3>
             </div>
             <div class="flex items-center gap-2">
@@ -237,7 +237,7 @@
 <section class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <svg class="w-4 h-4 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <h3 class="text-sm font-semibold text-text-primary">Budget</h3>
         </div>
         {% if cost_state.avg_cycle_cost > 0 %}
@@ -316,7 +316,7 @@
             <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
             Per-persona breakdown (30 days)
         </summary>
-        <div class="mt-3 overflow-x-auto">
+        <div class="mt-3 overflow-x-auto" tabindex="0">
             <table class="w-full text-xs min-w-[400px]">
                 <thead>
                     <tr class="text-left text-text-muted border-b border-border-subtle">
@@ -356,7 +356,7 @@
             <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
             Pricing table
         </summary>
-        <div class="mt-3 overflow-x-auto">
+        <div class="mt-3 overflow-x-auto" tabindex="0">
             <table class="w-full text-xs min-w-[400px]">
                 <thead>
                     <tr class="text-left text-text-muted border-b border-border-subtle">
@@ -416,6 +416,7 @@
             </span>
             <select class="text-xs font-mono border border-border rounded-lg px-2 py-1 bg-surface-elevated notification-level-select focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors{% if event_key in ('kill_switch_engaged', 'audit_chain_failure') %} opacity-50 cursor-not-allowed{% endif %}"
                     data-event="{{ event_key }}"
+                    aria-label="Notification level for {{ event_label }}"
                     {% if event_key in ("kill_switch_engaged", "audit_chain_failure") %}disabled title="Cannot be silenced"{% endif %}>
                 <option value="toast" {{ 'selected' if notification_levels.get(event_key, 'toast') == 'toast' else '' }}>Toast</option>
                 <option value="toast+sound" {{ 'selected' if notification_levels.get(event_key) == 'toast+sound' else '' }}>Toast + Sound</option>
@@ -515,7 +516,7 @@ function resetProgress() {
 <section class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center justify-between mb-5">
         <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            <svg class="w-4 h-4 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             <h3 class="text-sm font-semibold text-text-primary">Mutations</h3>
         </div>
         <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg">Activates after 50 cycles</span>
@@ -913,7 +914,7 @@ function closeDiffModal() {
                 <button type="button" onclick="closeDiffModal()" class="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary font-medium">Close</button>
             </div>
         </div>
-        <div id="diff-container" class="overflow-auto flex-1"></div>
+        <div id="diff-container" class="overflow-auto flex-1" tabindex="0"></div>
     </div>
 </div>
 {% endif %}

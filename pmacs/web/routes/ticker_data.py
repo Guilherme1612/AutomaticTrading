@@ -169,6 +169,20 @@ def _extract(ticker: str, ev: dict) -> dict:
 
     evidence_text, agent_text = _build_evidence_text(ticker, ev)
 
+    # Authoritative SaaS KPIs lifted from EDGAR filing narrative (deterministic,
+    # no LLM). Override the regex/TTM-revenue fallback in the engine.
+    kpi = ev.get(f"edgar_kpi_{ticker}", {})
+    explicit_kpis: dict | None = None
+    if isinstance(kpi, dict) and any(kpi.get(k) is not None
+                                     for k in ("nrr_pct", "grr_pct", "arr_usd", "rpo_usd")):
+        explicit_kpis = {
+            "nrr_pct": _num(kpi.get("nrr_pct")),
+            "grr_pct": _num(kpi.get("grr_pct")),
+            "arr_usd": _num(kpi.get("arr_usd")),
+            "rpo_usd": _num(kpi.get("rpo_usd")),
+            "provenance": kpi.get("provenance", {}),
+        }
+
     return {
         "eps_series": eps_series,
         "fcf_series": fcf_series,
@@ -188,6 +202,7 @@ def _extract(ticker: str, ev: dict) -> dict:
         "revenue_ttm": _num(metrics.get("revenueTTM")),
         "evidence_text": evidence_text,
         "agent_text": agent_text,
+        "explicit_kpis": explicit_kpis,
         "analyst": _extract_analyst(ticker, ev),
         "most_recent_period": metrics.get("_most_recent_period"),
         "has_stale_data": (_num(metrics.get("_data_age_days")) or 0) > 460,

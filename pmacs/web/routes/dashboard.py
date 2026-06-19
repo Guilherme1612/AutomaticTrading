@@ -34,63 +34,11 @@ def _check_backend_type() -> str:
 
 
 def _get_cost_state_for_dashboard(cfg) -> dict:
-    """Get lightweight cost state for the dashboard cost widget."""
-    daily_cap = 2.00
-    monthly_cap = 30.00
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-redef]
-    from pathlib import Path
-    risk_path = Path(cfg.config_dir) / "risk.toml"
-    if risk_path.exists():
-        try:
-            with open(risk_path, "rb") as f:
-                risk_cfg = tomllib.load(f)
-            daily_cap = risk_cfg.get("billing", {}).get("daily_cap_usd", daily_cap)
-            monthly_cap = risk_cfg.get("billing", {}).get("monthly_cap_usd", monthly_cap)
-        except Exception:
-            pass
+    """Get lightweight cost state for the dashboard cost widget.
 
-    today_cost = 0.0
-    month_cost = 0.0
-    last_cycle_cost = 0.0
-    avg_cycle_cost = 0.0
-    try:
-        db = data_layer.get_readonly_db(cfg.sqlite_path)
-        try:
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE date(created_at) = date('now')"
-            ).fetchone()
-            today_cost = float(row[0]) if row else 0.0
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
-            ).fetchone()
-            month_cost = float(row[0]) if row else 0.0
-            row = db.execute(
-                "SELECT body_cost_usd FROM api_usage ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-            last_cycle_cost = float(row[0]) if row else 0.0
-            row = db.execute(
-                "SELECT AVG(body_cost_usd) FROM api_usage "
-                "WHERE created_at >= datetime('now', '-7 days')"
-            ).fetchone()
-            avg_cycle_cost = float(row[0]) if row and row[0] else 0.0
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-    return {
-        "today_cost": today_cost,
-        "month_cost": month_cost,
-        "daily_cap": daily_cap,
-        "monthly_cap": monthly_cap,
-        "last_cycle_cost": last_cycle_cost,
-        "avg_cycle_cost": avg_cycle_cost,
-    }
+    Delegates to the shared ``data_layer.get_cost_state`` (DuckDB-backed).
+    """
+    return data_layer.get_cost_state(cfg)
 
 
 @router.get("/")
@@ -103,6 +51,7 @@ async def dashboard_page(request: Request):
         try:
             holdings = data_layer.get_active_holdings(db)
             decisions = data_layer.get_recent_decisions(db, limit=10)
+            current_mode = data_layer.get_current_mode(db)
             risk_metrics = data_layer.get_risk_metrics(cfg.duckdb_path)
             health = data_layer.get_system_health(cfg.heartbeat_dir, audit_path=cfg.audit_path)
             sparkline_data = data_layer.get_all_sparkline_data(cfg.duckdb_path, window="1W")
@@ -189,7 +138,7 @@ async def dashboard_page(request: Request):
             name="dashboard.html",
             context={
                 "page": "dashboard",
-                "mode": "SHADOW + PAPER",
+                "mode": current_mode,
                 "portfolio_value": portfolio_value,
                 "day_change_pct": risk_metrics.get("day_change_pct", 0.0),
                 "positions": positions,

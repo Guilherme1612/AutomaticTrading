@@ -21,6 +21,7 @@ async def compare_page(request: Request):
         db = data_layer.get_readonly_db(cfg.sqlite_path)
         try:
             cycles = data_layer.get_recent_decisions(db, limit=50)
+            current_mode = data_layer.get_current_mode(db)
         finally:
             db.close()
 
@@ -29,6 +30,7 @@ async def compare_page(request: Request):
             name="compare.html",
             context={
                 "page": "compare",
+                "mode": current_mode,
                 "cycles": cycles,
             },
         )

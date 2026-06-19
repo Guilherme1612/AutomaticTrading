@@ -1536,3 +1536,20 @@ textarea:focus-visible {
 .bg-positive, .bg-negative, .bg-border-strong {
     transition: width 0.6s var(--ease-out-expo);
 }
+
+/* ─── Live-update motion: cycle progress + sparkline fades ──────────────── */
+/* Eases the cycle progress bar as SSE ticker_progress events arrive.
+   The prefers-reduced-motion block at top zeroes this for a11y users. */
+#cycle-progress-bar {
+    transition: width 0.6s var(--ease-out-expo);
+}
+
+/* Sparkline re-render fade-in — avoids a hard cut when a sparkline refreshes
+   mid-page while surrounding cards animate in on load. */
+@keyframes sparkline-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.sparkline-fade-in {
+    animation: sparkline-fade-in 0.2s var(--ease-out-expo) both;
+}

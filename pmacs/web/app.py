@@ -3,6 +3,7 @@
 import asyncio
 import json
 import secrets
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -17,17 +18,10 @@ from pmacs.nervous.api import router as _nervous_router
 
 _heartbeat_dir: Path = _data_dir() / "heartbeats"
 
-app = FastAPI(title="PMACS")
-
-# Include nervous API routes (health) into combined app
-app.include_router(_nervous_router)
-
-
 # ---------------------------------------------------------------------------
 # Startup: close any cycles stuck in RUNNING state from a prior crash
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
 async def _close_stuck_cycles() -> None:
     """Mark RUNNING cycles as ABORTED if the server was restarted mid-run.
 
@@ -62,7 +56,6 @@ async def _close_stuck_cycles() -> None:
         pass  # Non-fatal: don't block startup
 
 
-@app.on_event("startup")
 async def _seed_universe() -> None:
     """Ensure default universe tickers are present (IMP-5)."""
     try:
@@ -84,6 +77,23 @@ async def _seed_universe() -> None:
             db.close()
     except Exception:
         pass  # Non-fatal: don't block startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run startup tasks (close stuck cycles, seed universe) on boot.
+
+    Replaces the deprecated @app.on_event("startup") handlers.
+    """
+    await _close_stuck_cycles()
+    await _seed_universe()
+    yield
+
+
+app = FastAPI(title="PMACS", lifespan=lifespan)
+
+# Include nervous API routes (health) into combined app
+app.include_router(_nervous_router)
 
 
 # ---------------------------------------------------------------------------

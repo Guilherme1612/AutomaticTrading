@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pmacs.web.templating import templates
 from pmacs.web.config import get_config
 from pmacs.web import data as data_layer
-from pmacs.web.routes.settings import _load_registry
+from pmacs.web.routes.settings import _load_registry, _get_inference_state
 
 router = APIRouter()
 
@@ -44,6 +44,7 @@ async def cortex_page(request: Request):
             cortex_data = data_layer.get_cortex_status(
                 db, cfg.heartbeat_dir, cfg.audit_path
             )
+            current_mode = data_layer.get_current_mode(db)
         finally:
             db.close()
 
@@ -52,7 +53,7 @@ async def cortex_page(request: Request):
             name="cortex.html",
             context={
                 "page": "cortex",
-                "mode": "SHADOW + PAPER",
+                "mode": current_mode,
                 "audit_chain": cortex_data["audit_chain"],
                 "cross_db": cortex_data["cross_db"],
                 "processes": cortex_data["processes"],
@@ -79,6 +80,48 @@ async def cortex_page(request: Request):
 # ---------------------------------------------------------------------------
 # API endpoints (Source.md §18 interactive panel actions)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/api/health/detail")
+async def health_detail():
+    """Lightweight system-health summary for the header health strip.
+
+    Returns the current mode, the active inference backend + whether its API
+    key is present, and the last cycle timestamp. Every field is best-effort:
+    on any failure the response degrades to a safe default so the strip never
+    hard-errors. Designed to be polled cheaply (~30s) by the dashboard chrome.
+    """
+    cfg = get_config()
+    detail: dict = {
+        "status": "ok",
+        "mode": "INSTALLING",
+        "inference": {"backend": "unknown", "local": True, "key_present": False},
+        "last_cycle_at": None,
+    }
+    try:
+        try:
+            inf = _get_inference_state()
+            api_key_ref = inf.get("api_key_ref", "")
+            detail["inference"] = {
+                "backend": inf.get("active", "unknown"),
+                "local": not bool(api_key_ref),
+                "key_present": bool(inf.get("has_api_key")),
+            }
+        except Exception:
+            pass
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            detail["mode"] = data_layer.get_current_mode(db, default="INSTALLING")
+            row = db.execute(
+                "SELECT opened_at FROM cycles ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                detail["last_cycle_at"] = row[0]
+        finally:
+            db.close()
+    except Exception:
+        detail["status"] = "degraded"
+    return JSONResponse(detail)
 
 
 @router.post("/api/cortex/audit-verify")

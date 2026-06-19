@@ -132,6 +132,7 @@ async def memo_page(request: Request, ticker: str):
             decisions = data_layer.get_recent_decisions(db, limit=20)
             ticker_decisions = [d for d in decisions if d["ticker"] == ticker]
             memo_tickers = _get_memo_ticker_list(db)
+            current_mode = data_layer.get_current_mode(db)
         finally:
             db.close()
 
@@ -151,7 +152,7 @@ async def memo_page(request: Request, ticker: str):
                 name="memo.html",
                 context={
                     "page": "memo",
-                    "mode": "SHADOW + PAPER",
+                    "mode": current_mode,
                     "ticker": ticker,
                     "error": data_layer.build_error_context(
                         "memo", Exception(f"No data found for {ticker}")

@@ -562,67 +562,11 @@ async def mutation_diff(candidate_id: str):
 
 
 def _get_cost_state(cfg) -> dict:
-    """Get current budget period state for the cost widget and settings."""
-    daily_cap = 2.00
-    monthly_cap = 30.00
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-redef]
+    """Get current budget period state for the cost widget and settings.
 
-    risk_path = _Path(cfg.config_dir) / "risk.toml"
-    if risk_path.exists():
-        try:
-            with open(risk_path, "rb") as f:
-                risk_cfg = tomllib.load(f)
-            daily_cap = risk_cfg.get("billing", {}).get("daily_cap_usd", daily_cap)
-            monthly_cap = risk_cfg.get("billing", {}).get("monthly_cap_usd", monthly_cap)
-        except Exception:
-            pass
-
-    today_cost = 0.0
-    month_cost = 0.0
-    last_cycle_cost = 0.0
-    avg_cycle_cost = 0.0
-
-    try:
-        db = data_layer.get_readonly_db(cfg.sqlite_path)
-        try:
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE date(called_at) = date('now')"
-            ).fetchone()
-            today_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE strftime('%Y-%m', called_at) = strftime('%Y-%m', 'now')"
-            ).fetchone()
-            month_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT body_cost_usd FROM api_usage ORDER BY called_at DESC LIMIT 1"
-            ).fetchone()
-            last_cycle_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT AVG(body_cost_usd) FROM api_usage "
-                "WHERE called_at >= datetime('now', '-7 days')"
-            ).fetchone()
-            avg_cycle_cost = float(row[0]) if row and row[0] else 0.0
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-    return {
-        "today_cost": today_cost,
-        "month_cost": month_cost,
-        "daily_cap": daily_cap,
-        "monthly_cap": monthly_cap,
-        "last_cycle_cost": last_cycle_cost,
-        "avg_cycle_cost": avg_cycle_cost,
-    }
+    Delegates to the shared ``data_layer.get_cost_state`` (DuckDB-backed).
+    """
+    return data_layer.get_cost_state(cfg)
 
 
 def _get_persona_costs(duckdb_path: str) -> list[dict]:

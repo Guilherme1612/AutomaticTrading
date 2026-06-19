@@ -321,6 +321,95 @@ def get_system_health(heartbeat_dir: Path, audit_path: Path | str | None = None)
     }
 
 
+def get_current_mode(db: sqlite3.Connection, default: str = "SHADOW + PAPER") -> str:
+    """Read the current operating mode from the latest mode_history row.
+
+    Falls back to ``default`` when no transitions have been recorded (e.g. a
+    fresh install before the wizard promotes to PAPER). Replaces the
+    previously-hardcoded ``"SHADOW + PAPER"`` littered across route handlers.
+    """
+    try:
+        row = db.execute(
+            "SELECT to_mode FROM mode_history ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row and row[0] else default
+    except Exception:
+        return default
+
+
+def get_cost_state(cfg) -> dict[str, float]:
+    """Budget-period cost state for the dashboard + settings cost widgets.
+
+    Single source of truth for the cost widget — replaces the two divergent
+    route-local copies. Reads ``api_usage`` from DuckDB (the analytics store;
+    ``api_usage`` is NOT in SQLite) using the canonical ``called_at`` column.
+    The prior copies queried SQLite (wrong store) and one used ``created_at``
+    (non-existent column) — both silently returned $0. Returns today/month
+    spend, last-cycle cost, and 7-day average; every field degrades to 0.0.
+    """
+    daily_cap = 2.00
+    monthly_cap = 30.00
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    from pathlib import Path
+    risk_path = Path(cfg.config_dir) / "risk.toml"
+    if risk_path.exists():
+        try:
+            with open(risk_path, "rb") as f:
+                risk_cfg = tomllib.load(f)
+            daily_cap = risk_cfg.get("billing", {}).get("daily_cap_usd", daily_cap)
+            monthly_cap = risk_cfg.get("billing", {}).get("monthly_cap_usd", monthly_cap)
+        except Exception:
+            pass
+
+    today_cost = 0.0
+    month_cost = 0.0
+    last_cycle_cost = 0.0
+    avg_cycle_cost = 0.0
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+        adapter = DuckDBAdapter(db_path=Path(cfg.duckdb_path))
+        try:
+            row = adapter.execute(
+                "SELECT COALESCE(SUM(body_cost_usd), 0) AS s FROM api_usage "
+                "WHERE CAST(called_at AS DATE) = CURRENT_DATE"
+            )
+            today_cost = float(row[0]["s"]) if row and row[0]["s"] else 0.0
+            row = adapter.execute(
+                "SELECT COALESCE(SUM(body_cost_usd), 0) AS s FROM api_usage "
+                "WHERE date_trunc('month', called_at) = date_trunc('month', CURRENT_DATE)"
+            )
+            month_cost = float(row[0]["s"]) if row and row[0]["s"] else 0.0
+            row = adapter.execute(
+                "SELECT body_cost_usd FROM api_usage ORDER BY called_at DESC LIMIT 1"
+            )
+            last_cycle_cost = (
+                float(row[0]["body_cost_usd"])
+                if row and row[0]["body_cost_usd"] is not None
+                else 0.0
+            )
+            row = adapter.execute(
+                "SELECT AVG(body_cost_usd) AS a FROM api_usage "
+                "WHERE called_at >= datetime('now', '-7 days')"
+            )
+            avg_cycle_cost = float(row[0]["a"]) if row and row[0]["a"] else 0.0
+        finally:
+            adapter.close()
+    except Exception:
+        pass
+
+    return {
+        "today_cost": today_cost,
+        "month_cost": month_cost,
+        "daily_cap": daily_cap,
+        "monthly_cap": monthly_cap,
+        "last_cycle_cost": last_cycle_cost,
+        "avg_cycle_cost": avg_cycle_cost,
+    }
+
+
 def get_queue_status(db: sqlite3.Connection) -> list[dict[str, Any]]:
     """Get current queue items from SQLite.
 

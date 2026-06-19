@@ -113,15 +113,46 @@ function updateNavActive() {
     });
 }
 
+// ─── Header Health Strip (Source.md §18 at-a-glance health) ───────────────
+// Polls /api/health/detail ~30s and updates the inference + last-cycle chip
+// in the header so the operator can tell the system is alive without opening Cortex.
+
+function _updateHealthStrip(d) {
+    var inf = document.getElementById("health-inference");
+    if (!inf) return;
+    var be = (d && d.inference) || {};
+    var txt = "Inference: " + (be.backend || "unknown");
+    if (be.local) txt += " (local)";
+    else txt += be.key_present ? " ✓" : " ⚠ no key";
+    inf.textContent = txt;
+    var lc = document.getElementById("health-last-cycle");
+    if (lc) lc.textContent = (d && d.last_cycle_at) ? ("Last cycle: " + timeAgo(d.last_cycle_at)) : "Last cycle: —";
+    var dot = document.getElementById("health-dot");
+    if (dot) {
+        var ok = be.local || be.key_present;
+        dot.className = "w-1.5 h-1.5 rounded-full " + (ok ? "bg-positive live-dot" : "bg-warning anim-breathing");
+    }
+}
+
+function _pollHealth() {
+    fetch("/api/health/detail", { headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) _updateHealthStrip(d); })
+        .catch(function () { /* strip stays on last known state */ });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
     initTimeAgo();
     setInterval(initTimeAgo, 60000);
     updateNavActive();
+    _pollHealth();
+    setInterval(_pollHealth, 30000);
 });
 // Re-run after HTMX content swaps (hx-boost navigation skips DOMContentLoaded)
 document.addEventListener("htmx:afterSettle", function () {
     initTimeAgo();
     updateNavActive();
+    _pollHealth();
 });
 
 // ─── CSRF Token (Architecture.md §18) ─────────────────────────────────────────
@@ -212,6 +243,22 @@ function onSSE(stream, handler) {
     eventHandlers[stream].push(handler);
 }
 
+// Update the SSE connection pill (text + colored dot) — tone: ok|warn|err|idle.
+function _setSseStatus(text, tone) {
+    var el = document.getElementById("sse-status");
+    if (!el) return;
+    var toneText = tone === "ok" ? "text-positive" : tone === "warn" ? "text-warning" :
+        tone === "err" ? "text-negative" : "text-text-muted";
+    el.textContent = text;
+    el.className = "text-[9px] font-mono " + toneText;
+    var dot = document.getElementById("sse-status-dot");
+    if (dot) {
+        var dotCls = "w-1.5 h-1.5 rounded-full " + (tone === "ok" ? "bg-positive live-dot" :
+            tone === "warn" ? "bg-warning anim-breathing" : tone === "err" ? "bg-negative" : "bg-text-muted");
+        dot.className = dotCls;
+    }
+}
+
 function connectSSE() {
     if (sseReconnectTimer) {
         clearTimeout(sseReconnectTimer);
@@ -223,11 +270,7 @@ function connectSSE() {
 
     if (sseRetryCount >= SSE_MAX_RETRIES) {
         showToast("SSE connection permanently lost. Reload the page.", "error", 0);
-        var sseStatus = document.getElementById("sse-status");
-        if (sseStatus) {
-            sseStatus.textContent = "Disconnected";
-            sseStatus.className = "text-[9px] text-negative font-mono";
-        }
+        _setSseStatus("Disconnected", "err");
         return;
     }
 
@@ -242,11 +285,7 @@ function connectSSE() {
         eventSource.onopen = function () {
             sseRetryCount = 0;
             // IMP-8: Update SSE status indicator
-            var sseStatus = document.getElementById("sse-status");
-            if (sseStatus) {
-                sseStatus.textContent = "Connected";
-                sseStatus.className = "text-[9px] text-positive font-mono";
-            }
+            _setSseStatus("Connected", "ok");
         };
 
         eventSource.onmessage = function (event) {
@@ -270,11 +309,7 @@ function connectSSE() {
             var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
             console.warn("SSE connection lost, reconnecting in", delay, "ms (attempt", sseRetryCount + 1, "/", SSE_MAX_RETRIES, ")");
             // IMP-8: Update SSE status indicator
-            var sseStatus = document.getElementById("sse-status");
-            if (sseStatus) {
-                sseStatus.textContent = "Reconnecting...";
-                sseStatus.className = "text-[9px] text-warning font-mono";
-            }
+            _setSseStatus("Reconnecting…", "warn");
             var es = eventSource;
             if (es) { es.close(); }
             sseRetryCount++;
@@ -520,6 +555,7 @@ var CMD_K_PAGES = [
     { name: "Cortex", href: "/cortex", category: "page" },
     { name: "Debug", href: "/debug", category: "page" },
     { name: "Settings", href: "/settings", category: "page" },
+    { name: "Compare cycles", href: "/compare", category: "page" },
 ];
 
 var CMD_K_ACTIONS = [
@@ -751,7 +787,7 @@ function runSmokeTest() {
     }).then(function (data) {
         showToast(data.message || "Smoke-test passed", "success");
         if (data.reload) {
-            setTimeout(function () { window.location.reload(); }, 1500);
+            setTimeout(_partialRefreshMain, 1500);
         }
     }).catch(function (err) {
         showToast("Smoke-test failed: " + err.message, "error");
@@ -888,7 +924,7 @@ document.addEventListener("keydown", function (e) {
     // Cmd-R: refresh current page
     if (isCmd && e.key === "r") {
         e.preventDefault();
-        window.location.reload();
+        _partialRefreshMain();
         return;
     }
 
@@ -1037,7 +1073,7 @@ function confirmAction(opts) {
             if (data.ok || data.verified) {
                 if (opts.onSuccess) opts.onSuccess(data);
                 show_toast(data.message || "Action completed", "success");
-                if (data.reload) window.location.reload();
+                if (data.reload) _partialRefreshMain();
             } else {
                 show_toast(data.error || "Action failed", "error");
             }
@@ -1250,6 +1286,32 @@ function _hideCycleTicker() {
     if (running) running.style.display = "none";
 }
 
+// Morph a live-updating value element with a tween+flash (respects prefers-reduced-motion).
+// Falls back to a plain textContent swap when the animation module is unavailable.
+function _morphVerdict(elementId, value, opts) {
+    var el = document.getElementById(elementId);
+    if (!el) return;
+    if (window.PMACS_ANIM && typeof PMACS_ANIM.sseUpdate === "function") {
+        PMACS_ANIM.sseUpdate(elementId, value, opts || {});
+    } else {
+        el.textContent = value;
+    }
+}
+
+// Partial refresh of #main-content via htmx — no full-page reload, no white flash.
+// Falls back to a hard reload only when htmx is unavailable.
+function _partialRefreshMain() {
+    if (typeof htmx === "undefined" || !document.getElementById("main-content")) {
+        window.location.reload();
+        return;
+    }
+    htmx.ajax("GET", window.location.pathname, {
+        target: "#main-content",
+        select: "#main-content",
+        swap: "outerHTML transition:200ms"
+    });
+}
+
 onSSE("cycle", function (data) {
     if (data.event_type === "cycle.opened" || data.event === "cycle_start") {
         _showCycleTicker(data.tickers ? data.tickers[0] : "");
@@ -1282,7 +1344,7 @@ onSSE("cycle", function (data) {
                 htmx.ajax("GET", window.location.pathname, {
                     target: "#main-content",
                     select: "#main-content",
-                    swap: "outerHTML"
+                    swap: "outerHTML transition:200ms"
                 });
             }, 800);
         }
@@ -1326,11 +1388,9 @@ onSSE("trade", function (data) {
 // Decision events
 onSSE("decision", function (data) {
     if (data.event_type === "decision.arbitrated") {
-        var verdictEl = document.getElementById("latest-verdict");
-        if (verdictEl) {
-            verdictEl.textContent = (data.ticker || "") + ": " + (data.decision || "") +
-                " (p\u2191" + (data.p_up || "\u2014") + " p\u2193" + (data.p_down || "\u2014") + ")";
-        }
+        var arbText = (data.ticker || "") + ": " + (data.decision || "") +
+            " (p\u2191" + (data.p_up || "\u2014") + " p\u2193" + (data.p_down || "\u2014") + ")";
+        _morphVerdict("latest-verdict", arbText);
     }
     if (data.event_type === "decision.final") {
         // Only show toast for actionable decisions — SKIP is expected and noisy
@@ -1338,10 +1398,11 @@ onSSE("decision", function (data) {
             var cPct = ((data.conviction || 0) * 100).toFixed(0);
             showToast((data.ticker || "") + ": " + data.verdict + " (" + cPct + "% conviction)", "info");
         }
-        // Always update the verdict display element
-        var verdictEl2 = document.getElementById("latest-verdict");
-        if (verdictEl2) {
-            verdictEl2.textContent = (data.ticker || "") + ": " + (data.verdict || "—");
+        // Always update the verdict display element (morph + flash when motion allowed)
+        _morphVerdict("latest-verdict", (data.ticker || "") + ": " + (data.verdict || "—"));
+        // Live conviction tween when a numeric element is present on the page
+        if (typeof data.conviction === "number") {
+            _morphVerdict("latest-conviction", Math.round((data.conviction || 0) * 100), { suffix: "%" });
         }
     }
     if (data.event_type) {
@@ -1485,7 +1546,7 @@ function renderSparklineSVG(points) {
     var trendClass = 'sparkline-' + trend;
     // Area fill polygon: line points + bottom corners
     var areaPoints = pts.join(" ") + " 100," + VB_H + " 0," + VB_H;
-    return '<div class="sparkline-container ' + trendClass + '">' +
+    return '<div class="sparkline-container sparkline-fade-in ' + trendClass + '">' +
         '<svg viewBox="0 0 100 ' + VB_H + '" preserveAspectRatio="none" class="w-full" style="height:40px">' +
         '<polygon class="sparkline-area" points="' + areaPoints + '"/>' +
         '<polyline class="sparkline-line" points="' + pts.join(" ") + '"/>' +
@@ -1648,7 +1709,8 @@ onSSE("cycle", function (data) {
         var last = cycleTimings[cycleTimings.length - 1];
         if (!last) return;
         var duration = ((Date.now() - last.start) / 1000).toFixed(1);
-        el.textContent = duration + "s";
+        // Tween + flash the cycle-duration readout (falls back to plain swap)
+        _morphVerdict("cycle-timing", parseFloat(duration), { suffix: "s", decimals: 1 });
         // Keep last 20
         if (cycleTimings.length > 20) cycleTimings.shift();
     }

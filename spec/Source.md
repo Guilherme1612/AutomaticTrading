@@ -65,7 +65,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | Anti-patterns (what Claude Code must not do) | `Architecture.md` | §16 |
 | Per-persona prompts, schemas, sanity validators | `Agents.md` | §4-§13 |
 | Crucible adversarial loop | `Agents.md` | §16 |
-| Failure Diagnostic Engine — the 18 taxonomy types | `Agents.md` | §15 |
+| Failure Diagnostic Engine — 18 outcome + 5 reasoning-flaw taxonomy types | `Agents.md` | §15 |
 | Mutation Engine reasoning and candidate generation | `Agents.md` | §17 |
 | Episodic context injection (short-term memory in prompts) | `Agents.md` | §18 |
 | Build phases (Phase 1 through Phase N) | `Phases.md` | §2 |
@@ -271,6 +271,7 @@ The conviction formula is computed by `pmacs/engines/conviction.py` and its prec
 - **The Crucible can downgrade a high-probability signal.** A 0.7 directional probability with severe Crucible flaws becomes a SKIP. This is intentional. The Crucible exists precisely to override pattern-matched optimism.
 - **Maturity haircuts conviction at low source counts.** A signal supported by zero mature sources is bootstrap-only and conviction tops out at ~0.5 regardless of probability strength. This is intentional. The system distrusts itself early.
 - **EV multiple cap protects from "high probability, low expected return."** A 0.8 directional probability with EV barely above the minimum threshold caps conviction. If the bet does not pay enough to justify the risk, the system does not bet, however confident it is in the direction.
+- **Debate and audit enter through Arbitration, not conviction.** A second wave of agents (BullAdvocate, BearAdvocate, CrossPersonaAuditor; `Agents.md §11b-§11d`) runs after the 7 analysis personas. The advocates add two more *voters* (dampened until they earn a calibration track record); the auditor emits *flags* that cap a flawed persona's arbitration weight for the cycle and enrich the Crucible's attack brief. **The conviction formula itself is unchanged** (`Architecture.md §9.2`) — the new layer only changes which signals feed Arbitration and what severity the Crucible produces, never the math. This keeps the operator-facing verdict behavior above stable while the system gets adversarial pressure on consensus and a synthesis-layer integrity check.
 
 ### 7.3 Re-evaluation cadence
 
@@ -871,10 +872,6 @@ Collapsible. Bottom of page. SSE-fed live stream of debug events scoped to the c
 
 When no cycle is running, the page shows the most recent completed cycle in the same layout, with an indicator at top: "Cycle completed Tue 14:32. Showing last cycle. [Run new cycle]"
 
-### 15.9 Power user: cycle compare
-
-Cmd-K → "Compare cycles" → select two cycle IDs → side-by-side view of the same ticker across both cycles. Shows what changed (different evidence available, different persona outputs, different Crucible result, different verdict). Useful for understanding why a re-run produced a different answer.
-
 ---
 
 ## 16. Page: Pipeline
@@ -1006,6 +1003,18 @@ unavailable for a fiscal period, the P/FCF multiple for that year falls back to 
 current diluted share count to derive market cap; the page labels such years so the
 operator knows the figure is an approximation.
 
+**Valuation fingerprint:** a years × multiples heatmap that renders the multi-year
+multiples above as a single at-a-glance signature. Rows are fiscal years (oldest →
+newest) plus a trailing `now` row (current/TTM multiples — P/FCF computed as market
+cap ÷ latest annual FCF, the rest from stored current multiples) and a `3Y avg`
+footer. Columns are P/E, P/FCF, P/S, P/B, EV/EBITDA — a column is shown only when it
+has at least one historical value. Every cell shows the actual multiple (never a
+hover-gated value) and is tinted by where it sits in that metric's own 3-4y range
+(cheap end = green, pricey end = red); color is supplementary, the number is the
+encoding, so the matrix is readable without color. Pure template + CSS, no JS —
+deterministic and local-only. Falls back to a "not enough historical multiples"
+note when fewer than two fiscal years or two multiples are available.
+
 **Freshness:** a badge driven by the evidence's `_most_recent_period` / stale-data
 flag warns when the underlying annual filings are >15 months old, so the operator
 distrusts stale figures.
@@ -1013,6 +1022,16 @@ distrusts stale figures.
 **Empty state:** if no evidence has been collected for the ticker yet, show a card
 explaining that the ticker must be analyzed in a cycle before data is available,
 with a link to the Universe page.
+
+### 16.9 Memo debate + valuation sections
+
+The memo (rendered in the single-ticker drawer §16.6 and on `/memo/{ticker}`) gains three new sections from the wave-2 debate/audit layer and the deterministic valuation engines (`Architecture.md §9.4b`). These are *displays only* — they do not change the verdict, which is still produced by the unchanged conviction formula (§7.2).
+
+- **Bull vs Bear debate.** A two-column section: the BullAdvocate's thesis (and which wave-1 persona it pushed against) on the left, the BearAdvocate's thesis on the right, and a one-line "consensus lean" underneath. The operator sees the case each advocate made and which signal they contested — this is the adversarial pressure on consensus made visible, not hidden inside Arbitration weights.
+- **What would change my mind.** A short bulleted list of pre-registered falsification conditions the MemoWriter extracts from the debate (e.g. "if next-quarter revenue growth falls below 8%, the bull case fails"). These feed the weekly re-evaluation (§7.3): a trigger that fires becomes an `EXIT_THESIS_INVALIDATED` candidate without re-running the whole pipeline.
+- **Valuation anchor (reverse-DCF).** A compact block: "Market is pricing **18%** growth; GrowthHunter estimates **9%** — **BEARISH gap**" (the `growth_gap_pct` and `valuation_lean` from `ReverseDcfResult`), plus the probability-weighted expected price from `ScenarioPriceResult` against the current price. This is the deterministic bull/bear arbiter — pure math, no LLM (`Architecture.md §9.4b`) — and it gives the operator a sanity check on whether the debate's directional lean matches what the market is actually pricing.
+
+When wave-2 timed out or aborted for a cycle, these sections show a "debate unavailable this cycle" note rather than fabricated content.
 
 ---
 
@@ -1509,7 +1528,7 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 | **Cycle** | One full pipeline run across the universe. Boot-triggered. |
 | **Episodic memory** | Rolling 5/30/90-day aggregates. Lives in DuckDB. Injected into persona prompts as context. |
 | **Evidence** | A typed packet of source data (filing, quote, news article) with provenance and timestamp. |
-| **FDE** | Failure Diagnostic Engine. Classifies terminal-state holdings into 18 taxonomy types. |
+| **FDE** | Failure Diagnostic Engine. Classifies terminal-state holdings into 18 outcome taxonomy types; the CrossPersonaAuditor adds 5 reasoning-flaw types at cycle time. |
 | **Flywheel** | The self-improving feedback loop: cycles → resolutions → calibration → mutations → better cycles. |
 | **GBNF** | GGML BNF — grammar format for constraining llama-server output structure. |
 | **Holding** | A position record. Has state (CANDIDATE → ACTIVE → terminal). |

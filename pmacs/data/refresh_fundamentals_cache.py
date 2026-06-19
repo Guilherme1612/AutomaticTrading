@@ -24,7 +24,10 @@ from __future__ import annotations
 import sys
 
 from pmacs.data.evidence_router import _load_evidence_cache, _save_evidence_cache
-from pmacs.data.sources.yfinance_fundamentals import fetch_fundamentals_yf
+from pmacs.data.sources.yfinance_fundamentals import (
+    fetch_analyst_recommendations_yf,
+    fetch_fundamentals_yf,
+)
 
 
 def _is_stale(ticker: str) -> bool:
@@ -43,16 +46,28 @@ def _is_stale(ticker: str) -> bool:
 
 
 def refresh(ticker: str, *, force: bool = False) -> bool:
-    """Re-fetch yfinance fundamentals for ``ticker`` and overwrite the cache rows.
+    """Re-fetch yfinance fundamentals + analyst recommendations for ``ticker``
+    and overwrite the cache rows.
+
+    The analyst recommendations are appended to whatever fundamentals pulled in,
+    so the cache always has the most up-to-date rating mix (yfinance primary,
+    per operator directive `feedback_yfinance_primary.md`).
 
     Returns True if the cache was updated.
     """
-    if not force and not _is_stale(ticker):
+    evidence: list = []
+    if force or _is_stale(ticker):
+        packet = fetch_fundamentals_yf(ticker, None, api_key="", cycle_id="refresh")
+        evidence.extend(packet.evidence)
+
+    # Always refresh recommendations — they are cheap and the Finnhub fallback
+    # was silently failing for almost every ticker.
+    recs_packet = fetch_analyst_recommendations_yf(ticker, None, api_key="", cycle_id="refresh")
+    evidence.extend(recs_packet.evidence)
+
+    if not evidence:
         return False
-    packet = fetch_fundamentals_yf(ticker, None, api_key="", cycle_id="refresh")
-    if not packet.evidence:
-        return False
-    _save_evidence_cache(ticker, packet.evidence, cycle_id="refresh")
+    _save_evidence_cache(ticker, evidence, cycle_id="refresh")
     return True
 
 

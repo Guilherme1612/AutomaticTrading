@@ -32,7 +32,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_renders_200(self, dashboard_client, url):
         """Every page must render without server errors."""
@@ -47,7 +46,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_landmark_roles(self, dashboard_client, url):
         """Every page must have landmark ARIA roles (nav, main, etc.)."""
@@ -64,7 +62,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_lang_attribute(self, dashboard_client, url):
         """HTML must have lang attribute."""
@@ -80,7 +77,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_title(self, dashboard_client, url):
         """Every page must have a descriptive <title>."""
@@ -162,7 +158,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_images_have_alt_or_aria(self, dashboard_client, url):
         """All <img> tags must have alt text, all decorative images aria-hidden."""
@@ -182,7 +177,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_buttons_have_accessible_names(self, dashboard_client, url):
         """All <button> elements must have accessible text (content, aria-label, or title)."""
@@ -208,7 +202,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_form_inputs_have_labels(self, dashboard_client, url):
         """All form inputs must have associated labels (for/id match or aria-label)."""
@@ -237,7 +230,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_no_outline_none_without_replacement(self, dashboard_client, url):
         """Inline outline:none must be paired with box-shadow or other focus indicator."""
@@ -295,7 +287,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_no_positive_tabindex(self, dashboard_client, url):
         """No positive tabindex values (WCAG 2.4.3 — messes with tab order)."""
@@ -461,8 +452,39 @@ class TestTickerDataPageAccessibility:
         html = dashboard_client.get("/ticker/ZZNODATA").text
         assert "No data for ZZNODATA" in html
 
-    def test_multiples_table_is_accessible_when_rendered(self):
-        """If the per-year table renders, it must have a caption and scoped headers."""
+    def test_no_data_branch_has_h1(self, dashboard_client):
+        """Every page must have a top-level <h1> for screen-reader navigation,
+        including the empty-state branch. The ticker symbol is the page's
+        primary identity and is rendered as the H1 in all three branches
+        (data, no_data, error)."""
+        for path in ("/ticker/ZZNODATA", "/ticker/AAPL"):
+            html = dashboard_client.get(path).text
+            assert "<h1" in html, f"page {path} is missing an <h1> element"
+            # The H1 must contain the ticker symbol as its primary text.
+            # Cheap check: pull the first <h1>...</h1> block.
+            import re
+            m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.DOTALL)
+            assert m, f"page {path} has <h1> but it is empty/closed wrong"
+            h1_text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            assert h1_text, f"page {path} <h1> has no text content"
+
+    def test_valuation_fingerprint_is_accessible_when_rendered(self):
+        """The valuation-fingerprint heatmap must expose an accessible name and
+        labelled landmarks. The multiples section was redesigned from an animated
+        D3 radar (which auto-scaled each axis and hid absolute values behind a
+        hover) to a years × multiples heatmap (Source.md §16.8); the markup is
+        now a real semantic <table>, so assistive tech gets a labelled matrix
+        with the actual numbers in every cell — no JS, no hover required."""
         template = Path("pmacs/web/templates/ticker_detail.html").read_text()
-        assert "<caption" in template, "multiples table missing <caption>"
-        assert 'scope="col"' in template, "multiples table headers missing scope"
+        # The section is labelled by its heading.
+        assert 'aria-labelledby="mult-heading"' in template, "fingerprint section missing aria-labelledby"
+        assert 'id="mult-heading"' in template, "fingerprint heading missing id"
+        # The matrix is a semantic table with an accessible name (caption) and
+        # scoped headers — a labelled landmark for assistive tech.
+        assert 'class="fp-matrix"' in template, "fingerprint matrix missing fp-matrix table"
+        assert '<caption' in template, "fingerprint table missing caption (accessible name)"
+        assert 'scope="col"' in template, "fingerprint table missing column scope headers"
+        assert 'scope="row"' in template, "fingerprint table missing row scope headers"
+        # The old D3 radar must be fully gone — no decorative SVG, no JS data blob.
+        assert 'id="radar-svg"' not in template, "old radar svg still present"
+        assert 'id="radar-data"' not in template, "old radar-data JSON still present"

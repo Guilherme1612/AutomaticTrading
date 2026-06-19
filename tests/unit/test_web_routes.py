@@ -147,14 +147,23 @@ class TestUniverseRoute:
             response = client.get("/universe")
             assert response.status_code == 200
 
-    def test_universe_data_link_always_present(self):
+    def test_universe_data_link_only_for_cycled_tickers(self):
+        """Both the data link and the memo link are gated on has_been_cycled.
+
+        A ticker that has not been analyzed in any cycle (no evidence, no
+        holdings, no decisions) has no useful data on /ticker/{symbol} and
+        must not be linked from the universe page — otherwise the link
+        leads to a polite but empty state, which is a dead-end.
+        """
         with TestClient(app) as client:
             response = client.get("/universe")
             text = response.text
             assert response.status_code == 200
+            # AAPL has a holding, TSLA has a decision -> both cycled -> data link shown
             assert '/ticker/AAPL' in text
-            assert '/ticker/MSFT' in text
             assert '/ticker/TSLA' in text
+            # MSFT has no cycle data -> data link hidden
+            assert '/ticker/MSFT' not in text
 
     def test_universe_memo_link_only_for_cycled_tickers(self):
         with TestClient(app) as client:

@@ -371,6 +371,33 @@ def _fetch_fundamentals(ticker: str, gw: DataGateway, key: str, cid: str) -> Evi
     return primary.model_copy(update={"evidence": merged})
 
 
+def _fetch_analyst_recommendations(ticker: str, gw: DataGateway, key: str, cid: str) -> EvidencePacket:
+    """Analyst recommendation mix from yfinance (operator-confirmed primary source).
+
+    Replaces the Finnhub stock/recommendation endpoint, which silently fails for
+    almost every ticker (bare ``except Exception: pass`` swallowed the errors —
+    see `pmacs/data/sources/finnhub.py:391,419`). Falls back to Finnhub only if
+    yfinance returns nothing (defense in depth).
+    """
+    from pmacs.data.sources.yfinance_fundamentals import fetch_analyst_recommendations_yf
+
+    primary = fetch_analyst_recommendations_yf(ticker, gw, api_key="", cycle_id=cid)
+    if primary.evidence:
+        return primary
+
+    # Fall back to Finnhub only on empty result (network/empty dataframe).
+    try:
+        from pmacs.data.sources.finnhub import fetch_analyst_data
+        return fetch_analyst_data(ticker, gw, api_key=key, cycle_id=cid)
+    except Exception as exc:  # pragma: no cover - network dependent
+        log_debug("DATA_UNAVAILABLE", payload={"source": "finnhub_recommendations",
+                  "ticker": ticker, "error": str(exc)[:200]}, level="INFO",
+                  error_code="DATA_UNAVAILABLE", cycle_id=cid,
+                  msg=f"finnhub recommendations fallback failed for {ticker}: {exc}")
+        return EvidencePacket(ticker=ticker, cycle_id=cid, evidence=[],
+                              fetched_at=datetime.now(timezone.utc), source_count=0)
+
+
 def _fetch_finra(ticker: str, gw: DataGateway, key: str, cid: str) -> EvidencePacket:
     from pmacs.data.sources.finra import fetch_short_interest
     return fetch_short_interest(ticker, gw, cycle_id=cid)
@@ -437,6 +464,14 @@ _SOURCE_FETCHERS: list[tuple[DataSource, Any]] = [
     (DataSource.TECHNICAL, _fetch_technical),
     (DataSource.YAHOO, _fetch_yahoo),
     (DataSource.EDGAR_KPI, _fetch_edgar_kpi),
+]
+
+# Secondary yfinance fetcher — separate call because it shares the YAHOO source ID
+# with `_fetch_yahoo` (price targets) but produces a distinct evidence packet under
+# `yfinance_{ticker}_analyst_recommendations`. Registering it as a tuple in the main
+# list would collide on the source name.
+_SECONDARY_FETCHERS: list[Any] = [
+    _fetch_analyst_recommendations,
 ]
 
 
@@ -510,6 +545,31 @@ def fetch_evidence_for_ticker(
                     has_stale = True
                 elif crit == CriticalityLevel.IMPORTANT:
                     important_failures += 1
+
+        # Secondary fetchers (same-source follow-ups; share the YAHOO/gateway
+        # context but produce distinct evidence packets).
+        for fetcher in _SECONDARY_FETCHERS:
+            _src_start = _time.monotonic()
+            try:
+                packet = fetcher(ticker, gw, "", cycle_id)
+                _elapsed = _time.monotonic() - _src_start
+                if packet and packet.evidence:
+                    all_evidence.extend(packet.evidence)
+                log_debug(
+                    "EVIDENCE_SOURCE_OK",
+                    payload={"source": fetcher.__name__, "ticker": ticker, "ms": int(_elapsed * 1000)},
+                    cycle_id=cycle_id,
+                    msg=f"[{ticker}] {fetcher.__name__}: {int(_elapsed*1000)}ms",
+                )
+            except Exception as exc:
+                _elapsed = _time.monotonic() - _src_start
+                log_debug(
+                    "EVIDENCE_SOURCE_FAILED",
+                    payload={"source": fetcher.__name__, "ticker": ticker, "error": str(exc)[:200], "ms": int(_elapsed * 1000)},
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Secondary evidence fetch failed for {fetcher.__name__}/{ticker} ({int(_elapsed*1000)}ms): {exc}",
+                )
 
     _total_elapsed = _time.monotonic() - _fetch_start
     log_debug(
@@ -737,6 +797,120 @@ def fetch_evidence_for_ticker(
     )
 
     return merged
+
+
+# Sources the /ticker/{ticker} page (Source.md §16.8) actually consumes.
+# The cycle-time fetch pulls 16 sources — most of which are persona-only
+# (form4, press, ir_pages, fred, fomc, ecb, openfda, finra, finnhub quote,
+# yahoo price-target, edgar_kpi). For the lazy page-load trigger we only
+# need the four that drive the page's sections: fundamentals, analyst
+# recommendations, technicals, and (if CIK known) EDGAR financial statements.
+_PAGE_FETCHERS: list[tuple[DataSource, Any]] = [
+    (DataSource.FUNDAMENTALS, _fetch_fundamentals),
+    (DataSource.TECHNICAL, _fetch_technical),
+    (DataSource.EDGAR, _fetch_edgar),
+]
+_PAGE_SECONDARY_FETCHERS: list[Any] = [
+    _fetch_analyst_recommendations,
+]
+
+
+def fetch_minimal_evidence_for_ticker(ticker: str, cycle_id: str) -> int:
+    """Fetch only the evidence rows the /ticker/{ticker} page needs.
+
+    Operator directive (clarification 2026-06-19): when an operator opens
+    `/ticker/{ticker}` for a universe ticker with no recent evidence, the
+    page warms the cache from the four page-critical sources so the next
+    reload renders the full page. Subsequent cycles still run the full
+    `_SOURCE_FETCHERS` set and accumulate from cache — the four rows this
+    helper writes satisfy `accumulated_fresh` for those fetcher slots, so
+    the cycle path skips re-fetching them.
+
+    Errors are logged and swallowed — the lazy fetch is best-effort and
+    must never crash the page render.
+
+    Returns the number of evidence rows written.
+    """
+    import time as _time
+
+    evidence: list[Evidence] = []
+    _fetch_start = _time.monotonic()
+
+    try:
+        with DataGateway(timeout=10) as gw:
+            for source, fetcher in _PAGE_FETCHERS:
+                api_key = _read_key(source, cycle_id)
+                _src_start = _time.monotonic()
+                try:
+                    packet = fetcher(ticker, gw, api_key, cycle_id)
+                    _elapsed = _time.monotonic() - _src_start
+                    log_debug(
+                        "EVIDENCE_SOURCE_OK",
+                        payload={"source": source.value, "ticker": ticker,
+                                 "ms": int(_elapsed * 1000), "path": "lazy"},
+                        cycle_id=cycle_id,
+                        msg=f"[{ticker}] {source.value}: {int(_elapsed*1000)}ms (lazy)",
+                    )
+                    if packet and packet.evidence:
+                        evidence.extend(packet.evidence)
+                except Exception as exc:
+                    _elapsed = _time.monotonic() - _src_start
+                    log_debug(
+                        "EVIDENCE_SOURCE_FAILED",
+                        payload={"source": source.value, "ticker": ticker,
+                                 "error": str(exc)[:200], "ms": int(_elapsed * 1000),
+                                 "path": "lazy"},
+                        level="INFO",
+                        cycle_id=cycle_id,
+                        msg=f"Lazy evidence fetch failed for {source.value}/{ticker} ({int(_elapsed*1000)}ms): {exc}",
+                    )
+            for fetcher in _PAGE_SECONDARY_FETCHERS:
+                _src_start = _time.monotonic()
+                try:
+                    packet = fetcher(ticker, gw, "", cycle_id)
+                    _elapsed = _time.monotonic() - _src_start
+                    if packet and packet.evidence:
+                        evidence.extend(packet.evidence)
+                    log_debug(
+                        "EVIDENCE_SOURCE_OK",
+                        payload={"source": fetcher.__name__, "ticker": ticker,
+                                 "ms": int(_elapsed * 1000), "path": "lazy"},
+                        cycle_id=cycle_id,
+                        msg=f"[{ticker}] {fetcher.__name__}: {int(_elapsed*1000)}ms (lazy)",
+                    )
+                except Exception as exc:
+                    _elapsed = _time.monotonic() - _src_start
+                    log_debug(
+                        "EVIDENCE_SOURCE_FAILED",
+                        payload={"source": fetcher.__name__, "ticker": ticker,
+                                 "error": str(exc)[:200], "ms": int(_elapsed * 1000),
+                                 "path": "lazy"},
+                        level="INFO",
+                        cycle_id=cycle_id,
+                        msg=f"Lazy secondary fetch failed for {fetcher.__name__}/{ticker} ({int(_elapsed*1000)}ms): {exc}",
+                    )
+    except Exception as exc:
+        log_debug(
+            "LAZY_EVIDENCE_FETCH_FAILED",
+            payload={"ticker": ticker, "error": str(exc)[:200]},
+            level="WARN",
+            error_code="DATA_UNAVAILABLE",
+            cycle_id=cycle_id,
+            msg=f"Lazy evidence fetch wrapper failed for {ticker}: {exc}",
+        )
+        return 0
+
+    if evidence:
+        _save_evidence_cache(ticker, evidence, cycle_id)
+        _total = _time.monotonic() - _fetch_start
+        log_debug(
+            "LAZY_EVIDENCE_FETCH_COMPLETE",
+            payload={"ticker": ticker, "rows": len(evidence), "total_ms": int(_total * 1000)},
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"[{ticker}] lazy evidence fetch: {len(evidence)} rows in {int(_total*1000)}ms",
+        )
+    return len(evidence)
 
 
 def fetch_price(ticker: str, cycle_id: str) -> float | None:

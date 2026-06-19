@@ -11,10 +11,13 @@ Critical for:
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from pmacs.data.gateway import DataGateway
 from pmacs.schemas.data import DataSource, Evidence, EvidencePacket, EvidenceType
+
+_log = logging.getLogger("pmacs.data.technical")
 
 
 def _compute_sma(closes: list[float], period: int) -> float | None:
@@ -110,7 +113,11 @@ def fetch_period_end_prices(
     try:
         response = gateway.fetch("polygon", url, api_key=api_key)
         bars = response.json().get("results", [])
-    except Exception:
+    except Exception as exc:
+        _log.warning(
+            "polygon period-end price fetch failed for %s: %s",
+            ticker, exc,
+        )
         return {}
 
     # (epoch_ms_date, close) ascending — Polygon `t` is ms since epoch.
@@ -164,10 +171,18 @@ def fetch_technical(
         response = gateway.fetch("polygon", url, api_key=api_key)
         data = response.json()
         bars = data.get("results", [])
-    except Exception:
+    except Exception as exc:
+        _log.warning(
+            "polygon fetch failed for %s: %s (no technical evidence will be written)",
+            ticker, exc,
+        )
         bars = []
 
     if not bars:
+        _log.info(
+            "polygon returned no bars for %s (empty results) — likely delisted / unknown symbol",
+            ticker,
+        )
         return EvidencePacket(
             ticker=ticker, cycle_id=cycle_id, evidence=[],
             fetched_at=now, source_count=0,

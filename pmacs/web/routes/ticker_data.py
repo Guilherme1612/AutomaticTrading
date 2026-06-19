@@ -7,10 +7,18 @@ fundamentals), and computes derived valuation figures in Python via the
 ticker_metrics engine (LLMs never math). Historical period-end prices for the
 multi-year multiples are pulled fresh from Polygon — objective market data that is
 identical regardless of when queried, so it does not break the accuracy contract.
+
+Lazy fetch (operator directive 2026-06-19): when the operator opens
+`/ticker/{ticker}` for a universe ticker with no recent evidence, the route
+warms the cache from yfinance + Polygon + EDGAR in the background and the
+operator reloads to see the populated page. Subsequent cycles accumulate from
+cache (so this fetch satisfies `accumulated_fresh` for those slots).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
@@ -19,6 +27,143 @@ from pmacs.web import data as data_layer
 
 router = APIRouter()
 _log = logging.getLogger("pmacs.web.ticker_data")
+
+# Per-process set of tickers whose lazy fetch is currently in flight. Prevents
+# N concurrent page loads from each spawning their own fetch. Cleared in the
+# task itself when the fetch completes (success or failure).
+_LAZY_FETCH_IN_FLIGHT: set[str] = set()
+
+# TTL below which cached evidence is considered fresh enough that the page
+# view should NOT trigger another lazy fetch. Six hours is intentionally
+# longer than the per-source staleness budgets inside `evidence_router` — we
+# only want to warm the cache on first view or after long idle, not on every
+# page reload (the inner freshness check still flags individual rows stale).
+_LAZY_FETCH_TTL_SECONDS = 6 * 3600
+
+
+def _is_universe_ticker(ticker: str) -> bool:
+    """True iff `ticker` is in the operator's active universe.
+
+    Used to gate the lazy-fetch trigger: only universe tickers get warmed.
+    Random tickers (test fakes, URL guesses) keep the original "No data" state
+    so the existing accessibility test for the empty-state branch stays green.
+    """
+    try:
+        from pmacs.config import data_dir
+        import sqlite3
+        db = data_dir() / "pmacs.db"
+        if not db.exists():
+            return False
+        con = sqlite3.connect(db)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM universe WHERE ticker = ? AND halted = 0 AND delisted = 0 LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            return row is not None
+        finally:
+            con.close()
+    except Exception as exc:
+        _log.info("universe membership check failed for %s: %s", ticker, exc)
+        return False
+
+
+def _evidence_fresh_enough(ticker: str) -> bool:
+    """True iff `ticker` has any cached evidence row fresher than the lazy TTL.
+
+    Used as a cheap freshness gate: a stale fetch is fine to retry on every
+    page view, but a recent fetch should not be redone until at least the
+    TTL elapses.
+    """
+    try:
+        from pmacs.config import data_dir
+        import sqlite3
+        db = data_dir() / "pmacs.db"
+        if not db.exists():
+            return False
+        con = sqlite3.connect(db)
+        try:
+            row = con.execute(
+                "SELECT MAX(fetched_at) FROM evidence_cache WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+        finally:
+            con.close()
+        ts = row[0] if row else None
+        if not ts:
+            return False
+        try:
+            fetched_at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            return age < _LAZY_FETCH_TTL_SECONDS
+        except ValueError:
+            return False
+    except Exception as exc:
+        _log.info("freshness check failed for %s: %s", ticker, exc)
+        return False
+
+
+def _maybe_warm_evidence_cache(ticker: str) -> bool:
+    """Dispatch a background fetch for `ticker` if conditions are met.
+
+    Returns True if a fetch was dispatched (or was already in flight).
+    Returns False if the fetch was skipped (non-universe, fresh evidence,
+    or the inner function errored).
+    """
+    if ticker in _LAZY_FETCH_IN_FLIGHT:
+        _log.info("LAZY_EVIDENCE_FETCH_DEDUPED ticker=%s (already in flight)", ticker)
+        return True
+
+    if _evidence_fresh_enough(ticker):
+        return False
+
+    cycle_id = f"LAZY-{ticker}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+
+    async def _runner():
+        # Mark in-flight so concurrent reloads dedupe, then run the blocking
+        # fetch in a worker thread so the event loop stays responsive.
+        _LAZY_FETCH_IN_FLIGHT.add(ticker)
+        try:
+            _log.info(
+                "LAZY_EVIDENCE_FETCH_DISPATCHED ticker=%s cycle_id=%s",
+                ticker, cycle_id,
+            )
+            loop = asyncio.get_running_loop()
+            from pmacs.data.evidence_router import fetch_minimal_evidence_for_ticker
+            rows = await loop.run_in_executor(
+                None, fetch_minimal_evidence_for_ticker, ticker, cycle_id,
+            )
+            _log.info(
+                "LAZY_EVIDENCE_FETCH_COMPLETE ticker=%s rows=%d cycle_id=%s",
+                ticker, rows, cycle_id,
+            )
+        except Exception as exc:
+            _log.warning(
+                "LAZY_EVIDENCE_FETCH_FAILED ticker=%s error=%s", ticker, exc,
+            )
+        finally:
+            _LAZY_FETCH_IN_FLIGHT.discard(ticker)
+
+    try:
+        asyncio.create_task(_runner())
+        return True
+    except RuntimeError as exc:
+        # No running loop (e.g. unit tests using TestClient without an event
+        # loop) — fall back to a synchronous fetch so behavior is still
+        # best-effort populated.
+        _log.info(
+            "LAZY_EVIDENCE_FETCH_FALLBACK_SYNC ticker=%s reason=%s", ticker, exc,
+        )
+        try:
+            from pmacs.data.evidence_router import fetch_minimal_evidence_for_ticker
+            fetch_minimal_evidence_for_ticker(ticker, cycle_id)
+        except Exception as inner:
+            _log.warning(
+                "LAZY_EVIDENCE_FETCH_SYNC_FAILED ticker=%s error=%s", ticker, inner,
+            )
+        return False
 
 
 def _num(value):
@@ -31,6 +176,34 @@ def _num(value):
         return float(str(value).strip().rstrip("%").replace("+", ""))
     except (TypeError, ValueError):
         return None
+
+
+# Sanity bound for valuation multiples. yfinance returns `forwardPE` as a raw
+# price/EPS ratio — when forward EPS is near zero or negative (NBIS, OUST,
+# TEM, CRWV all hit this), the value explodes to triple digits or deep
+# negatives. 200× is the cap used throughout this codebase as the "no longer
+# meaningful" band (tone_class('multiple') already implicitly assumes this).
+_FWD_PE_SANITY_MAX_ABS = 200.0
+
+
+def _sanitize_multiple(value, *, label: str, max_abs: float = _FWD_PE_SANITY_MAX_ABS):
+    """Coerce to float; return None when |value| exceeds the sane bound.
+
+    Used to suppress valuation multiples that are mathematically computable
+    but operationally meaningless — e.g. Fwd P/E of -1006 because forward
+    EPS rounded to a near-zero negative. Setting the value to None lets the
+    template's existing `is none` branches render an em-dash.
+    """
+    n = _num(value)
+    if n is None:
+        return None
+    if abs(n) > max_abs:
+        _log.info(
+            "suppressing %s=%s (|value|>%s; forward EPS near zero yields unreliable ratio)",
+            label, n, max_abs,
+        )
+        return None
+    return n
 
 
 def _evidence_by_id(ticker: str) -> dict:
@@ -72,10 +245,19 @@ def _build_evidence_text(ticker: str, ev: dict) -> tuple[str, str]:
 
 
 def _extract_analyst(ticker: str, ev: dict) -> dict:
-    """Build a normalized analyst-consensus dict from Yahoo or Finnhub evidence."""
+    """Build a normalized analyst-consensus dict from Yahoo or Finnhub evidence.
+
+    Recommendations are read primarily from the yfinance source (the Finnhub
+    `stock/recommendation` endpoint silently fails for almost every ticker —
+    see `pmacs/data/sources/finnhub.py:391`). Finnhub is kept as a fallback for
+    any ticker where the yfinance packet is absent.
+    """
     ypt = ev.get(f"yahoo_{ticker}_price_target", {})
     fpt = ev.get(f"finnhub_{ticker}_price_target", {})
-    recs = ev.get(f"finnhub_{ticker}_analyst_recommendations", {})
+    recs = (
+        ev.get(f"yfinance_{ticker}_analyst_recommendations", {})
+        or ev.get(f"finnhub_{ticker}_analyst_recommendations", {})
+    )
 
     # Yahoo price target is preferred; Finnhub fallback.
     pt = ypt if ypt else fpt
@@ -158,9 +340,12 @@ def _extract(ticker: str, ev: dict) -> dict:
     price_by_period = _fetch_period_prices(ticker, periods)
 
     # Current point-in-time multiples (passthrough to engine for echo/context).
+    # Fwd P/E is magnitude-sanitized because yfinance can return extreme ratios
+    # when forward EPS is near zero or negative; the engine has its own
+    # per-year-multiple guards but no current-multiples guard.
     current_multiples = {
         "pe": _num(metrics.get("peNormalizedAnnual")),
-        "forward_pe": _num(metrics.get("forwardPE")),
+        "forward_pe": _sanitize_multiple(metrics.get("forwardPE"), label="forwardPE"),
         "ps": _num(metrics.get("psAnnual")),
         "pb": _num(metrics.get("pbAnnual")),
         "ev_ebitda": _num(metrics.get("evToEbitdaTTM")),
@@ -230,19 +415,34 @@ def _fetch_period_prices(ticker: str, periods: list[str]) -> dict:
         return {}
 
 
-def _display_groups(ticker: str, ev: dict, derived: object) -> list[dict]:
-    """Build the read-only display groups straight from stored evidence."""
+def _display_groups(ticker: str, ev: dict, derived: object, sector: str = "") -> list[dict]:
+    """Build the read-only display groups straight from stored evidence.
+
+    ``sector`` (optional) lets us tag fields where a known business N/A applies —
+    e.g. a financials / bank's gross margin is a meaningless number for that
+    business model. We surface those as a discreet ``n/a`` badge so the operator
+    can tell "the data isn't here" apart from "this metric doesn't apply".
+    """
     m = ev.get(f"fundamentals_{ticker}_metrics", {})
-    tech = ev.get(f"technical_{ticker}_moving_averages", {})
-    mom = ev.get(f"technical_{ticker}_momentum", {})
 
-    def row(label, value, unit=""):
-        return {"label": label, "value": value, "unit": unit}
+    # Heuristic: financials / banks / holding companies report fundamentally
+    # different P&L structures (Net Interest Income instead of Gross Margin).
+    # Treating their gross / operating margin as 0% is more misleading than
+    # tagging it as a known business N/A.
+    sector_l = (sector or "").lower()
+    is_financial = any(
+        kw in sector_l for kw in ("financial", "bank", "insurance", "capital")
+    )
 
+    def row(label, value, unit="", state="value"):
+        return {"label": label, "value": value, "unit": unit, "state": state}
+
+    # Technical info is rendered in its own dedicated section (with RSI colour
+    # coding and 52w distance), so we omit it from the raw-fundamentals grid.
     groups = [
         {"title": "Valuation", "rows": [
             row("P/E (normalized)", m.get("peNormalizedAnnual")),
-            row("Forward P/E", m.get("forwardPE")),
+            row("Forward P/E", _sanitize_multiple(m.get("forwardPE"), label="forwardPE")),
             row("P/S", m.get("psAnnual")),
             row("P/B", m.get("pbAnnual")),
             row("EV/EBITDA", m.get("evToEbitdaTTM")),
@@ -256,21 +456,13 @@ def _display_groups(ticker: str, ev: dict, derived: object) -> list[dict]:
             row("FCF margin TTM", m.get("fcfMarginTTM"), "%"),
         ]},
         {"title": "Margins & returns", "rows": [
-            row("Gross margin", m.get("grossMarginTTM"), "%"),
+            row("Gross margin", m.get("grossMarginTTM"), "%",
+                state="na" if is_financial else "value"),
             row("Operating margin", m.get("operatingMarginTTM"), "%"),
             row("Net margin", m.get("netProfitMarginTTM"), "%"),
             row("ROE", m.get("roeTTM"), "%"),
             row("ROA", m.get("roaTTM"), "%"),
             row("ROIC", m.get("roicTTM")),
-        ]},
-        {"title": "Technical", "rows": [
-            row("Current price", tech.get("current_price"), "$"),
-            row("SMA 50", tech.get("sma_50"), "$"),
-            row("SMA 200", tech.get("sma_200"), "$"),
-            row("Trend", (tech.get("trend") or "").replace("_", " ").title()),
-            row("RSI(14)", mom.get("rsi_14")),
-            row("52-week high", m.get("52WeekHigh"), "$"),
-            row("52-week low", m.get("52WeekLow"), "$"),
         ]},
     ]
 
@@ -299,6 +491,11 @@ async def ticker_data_page(request: Request, ticker: str):
     try:
         ev = _evidence_by_id(ticker)
         if not ev:
+            # Lazy fetch (operator directive 2026-06-19): for universe tickers
+            # with no recent evidence, warm the cache in the background so the
+            # operator can reload to see the populated page. Non-universe
+            # tickers (test fakes, URL typos) keep the original empty state.
+            warming = _maybe_warm_evidence_cache(ticker) if _is_universe_ticker(ticker) else False
             return templates.TemplateResponse(
                 request=request,
                 name="ticker_detail.html",
@@ -306,12 +503,48 @@ async def ticker_data_page(request: Request, ticker: str):
                     "page": "ticker",
                     "ticker": ticker,
                     "no_data": True,
+                    "warming": warming,
+                    "company_name": "",
+                    "sector": "",
                 },
             )
 
         primitives = _extract(ticker, ev)
         derived = compute_ticker_metrics(ticker, **primitives)
         profile = ev.get(f"fundamentals_{ticker}_profile", {})
+
+        # Build a dedicated Technical view from the technical evidence packets.
+        # We pass it through as a separate context variable rather than mutating
+        # the derived Pydantic model (which is frozen by spec).
+        tech_ma = ev.get(f"technical_{ticker}_moving_averages", {})
+        tech_mom = ev.get(f"technical_{ticker}_momentum", {})
+        m52 = ev.get(f"fundamentals_{ticker}_metrics", {})
+        # `derived` is a frozen TickerDerivedMetrics Pydantic model — read via
+        # attribute access (Jinja + Python both support this).
+        analyst_obj = getattr(derived, "analyst", None)
+        analyst_dict = analyst_obj.model_dump() if analyst_obj is not None else {}
+        tech_current = (
+            _num(tech_ma.get("current_price"))
+            or _num(m52.get("currentPrice"))
+            or _num(analyst_dict.get("current_price"))
+        )
+        tech_high_52w = _num(tech_ma.get("high_52w")) or _num(m52.get("52WeekHigh"))
+        tech_low_52w = _num(tech_ma.get("low_52w")) or _num(m52.get("52WeekLow"))
+        technical = {
+            "current_price": tech_current,
+            "sma_50": _num(tech_ma.get("sma_50")),
+            "sma_200": _num(tech_ma.get("sma_200")),
+            "trend": tech_ma.get("trend"),
+            "dist_from_sma50_pct": _num(tech_ma.get("dist_from_sma50_pct")),
+            "dist_from_sma200_pct": _num(tech_ma.get("dist_from_sma200_pct")),
+            "high_52w": tech_high_52w,
+            "low_52w": tech_low_52w,
+            "dist_from_high_52w_pct": _num(tech_ma.get("dist_from_high_52w_pct")),
+            "dist_from_low_52w_pct": _num(tech_ma.get("dist_from_low_52w_pct")),
+            "rsi_14": _num(tech_mom.get("rsi_14")),
+            "roc_20d_pct": _num(tech_mom.get("roc_20d_pct")),
+            "roc_50d_pct": _num(tech_mom.get("roc_50d_pct")),
+        }
 
         return templates.TemplateResponse(
             request=request,
@@ -321,8 +554,9 @@ async def ticker_data_page(request: Request, ticker: str):
                 "ticker": ticker,
                 "company_name": profile.get("name"),
                 "sector": profile.get("finnhubIndustry"),
-                "groups": _display_groups(ticker, ev, derived),
+                "groups": _display_groups(ticker, ev, derived, sector=profile.get("finnhubIndustry") or ""),
                 "derived": derived,
+                "technical": technical,
                 "no_data": False,
             },
         )

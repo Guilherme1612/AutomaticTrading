@@ -3,6 +3,37 @@
 {% block title %}{{ ticker }} — Data{% endblock %}
 
 {% block content %}
+{# ── Header (hero card) — always rendered for screen-reader H1 ── #}
+{# Operator directive: present the ticker identity as a single elevated hero
+   card. Symbol + sector chip on the top row, company name as a subtitle,
+   "View memo" aligned right. The "View memo" link is hidden on the empty-
+   state and error branches since memos require a cycle and would 404. #}
+<header class="mb-6 reveal">
+    <div class="card card-elevated p-5">
+        <div class="flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-3 flex-wrap min-w-0">
+                <h1 class="text-4xl font-bold text-text-primary font-mono tracking-tight leading-none">{{ ticker }}</h1>
+                {% if sector %}
+                <span class="text-[10px] text-text-muted bg-surface-sunken/60 px-2 py-0.5 rounded-md uppercase tracking-widest font-medium">{{ sector }}</span>
+                {% endif %}
+            </div>
+            {% if not no_data and not error %}
+            <a href="/memo/{{ ticker }}" class="text-sm text-accent hover:underline whitespace-nowrap">View memo &rarr;</a>
+            {% endif %}
+        </div>
+        {% if company_name %}
+        <p class="mt-2 text-base text-text-secondary truncate">{{ company_name }}</p>
+        {% endif %}
+        {% if derived and derived.has_stale_data %}
+        <div class="mt-3">
+            <span class="px-2 py-0.5 rounded-lg bg-warning-soft text-warning font-medium" role="status">
+                Stale data &mdash; underlying filings are over 15 months old
+            </span>
+        </div>
+        {% endif %}
+    </div>
+</header>
+
 {% if error %}
 {% set error_code = error.code %}
 {% set error_description = error.description %}
@@ -13,10 +44,21 @@
 {% elif no_data %}
 <section class="card card-elevated reveal" aria-labelledby="nd-heading">
     <h2 id="nd-heading" class="text-lg font-semibold text-text-primary mb-2">No data for {{ ticker }} yet</h2>
+    {%- if warming -%}
+    <p class="text-sm text-text-secondary mb-4">
+        <span class="inline-flex items-center gap-2">
+            <span class="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" aria-hidden="true"></span>
+            Fetching evidence for the first time. This page will populate in a few seconds —
+            <button type="button" onclick="window.location.reload()" class="text-accent hover:underline font-medium">reload now</button>
+            or wait for it to finish.
+        </span>
+    </p>
+    {%- else -%}
     <p class="text-sm text-text-secondary mb-4">
         This ticker hasn't been analyzed in a cycle, so no evidence has been collected.
         Once {{ ticker }} runs through a cycle, its fundamentals appear here.
     </p>
+    {%- endif -%}
     <a href="/universe" class="text-sm text-accent hover:underline">Go to Universe &rarr;</a>
 </section>
 {% else %}
@@ -72,6 +114,25 @@
     {%- elif value <= 15 -%}Cheap
     {%- elif value <= 30 -%}Fair
     {%- else -%}Expensive
+    {%- endif -%}
+{%- endmacro %}
+
+{# Heatmap tone class for one valuation-multiple cell. `v` is the cell value
+   (may be None); `lo`/`hi` are that metric's historical min/max (may be None if
+   no series). Lower multiple = cheaper, so a low percentile (cheap end of its
+   own history) is green and a high percentile (pricey end) is red. Returns
+   fp-na (untinted) when the value or its range is unavailable. #}
+{%- macro fp_tone(v, lo, hi) -%}
+    {%- if v is none or lo is none or hi is none -%}fp-na
+    {%- elif hi == lo -%}fp-neutral
+    {%- else -%}
+        {%- set p = (v - lo) / (hi - lo) -%}
+        {%- if p <= 0.20 -%}fp-cheap
+        {%- elif p <= 0.40 -%}fp-fair-lo
+        {%- elif p <= 0.60 -%}fp-neutral
+        {%- elif p <= 0.80 -%}fp-fair-hi
+        {%- else -%}fp-pricey
+        {%- endif -%}
     {%- endif -%}
 {%- endmacro %}
 
@@ -228,78 +289,6 @@
     </div>
 {%- endmacro %}
 
-{# ── Header ── #}
-<header class="mb-6 reveal">
-    <div class="flex items-center gap-3 flex-wrap">
-        <h1 class="text-2xl font-bold text-text-primary font-mono">{{ ticker }}</h1>
-        {% if company_name %}<span class="text-sm text-text-secondary">{{ company_name }}</span>{% endif %}
-        {% if sector %}<span class="text-xs text-text-muted bg-surface-sunken/60 px-2 py-0.5 rounded-lg">{{ sector }}</span>{% endif %}
-        <a href="/memo/{{ ticker }}" class="ml-auto text-sm text-accent hover:underline">View memo &rarr;</a>
-    </div>
-    <div class="mt-2 flex items-center gap-3 text-xs">
-        {% if derived.most_recent_period %}
-        <span class="text-text-muted">Latest filing period: <span class="font-mono">{{ derived.most_recent_period }}</span></span>
-        {% endif %}
-        {% if derived.has_stale_data %}
-        <span class="px-2 py-0.5 rounded-lg bg-warning-soft text-warning font-medium" role="status">
-            Stale data &mdash; underlying filings are over 15 months old
-        </span>
-        {% endif %}
-    </div>
-    <p class="mt-2 text-xs text-text-muted">Rendered from stored evidence (the figures the analysis personas used) &mdash; never re-fetched.</p>
-
-    {# ── Verdict strip ── #}
-    {%- set pe_count = derived.per_year|selectattr('pe')|list|length -%}
-    {%- set pfcf_count = derived.per_year|selectattr('pfcf')|list|length -%}
-    {%- set ps_count = derived.per_year|selectattr('ps')|list|length -%}
-    {%- set pb_count = derived.per_year|selectattr('pb')|list|length -%}
-    {%- set ev_count = derived.per_year|selectattr('ev_ebitda')|list|length -%}
-    {%- set pe_first = (derived.per_year|selectattr('pe')|list|first).pe if (derived.per_year|selectattr('pe')|list) else none -%}
-    {%- set pe_last = (derived.per_year|selectattr('pe')|list|last).pe if (derived.per_year|selectattr('pe')|list) else none -%}
-    {%- if pe_first is not none and pe_last is not none -%}
-        {%- if pe_last < pe_first -%}{% set trend_label = 'P/E ↓ improving' %}
-        {%- elif pe_last > pe_first -%}{% set trend_label = 'P/E ↑ worsening' %}
-        {%- else -%}{% set trend_label = 'P/E → flat' %}
-        {%- endif -%}
-    {%- else -%}{% set trend_label = '&mdash;' %}
-    {%- endif -%}
-    <div class="mt-3 flex items-center gap-2 flex-wrap" role="list" aria-label="At-a-glance verdict">
-        {# Chip 1: Cash (FCF yield) #}
-        {%- if derived.fcf_yield_pct is none -%}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Cash: &mdash;
-        </span>
-        {%- else -%}
-        {%- set c_tone = 'negative' if derived.fcf_yield_pct < 0 else 'positive' -%}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-{{ c_tone }}-soft text-{{ c_tone }} text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-{{ c_tone }}"></span>Cash: {{ fmt(derived.fcf_yield_pct, '%') }}
-        </span>
-        {%- endif %}
-
-        {# Chip 2: Forward P/E #}
-        {%- if derived.current.forward_pe is none -%}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Fwd P/E: &mdash;
-        </span>
-        {%- else -%}
-        {%- set fpe_tone = tone_class(derived.current.forward_pe, 'multiple') -%}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-{{ fpe_tone }}-soft text-{{ fpe_tone }} text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-{{ fpe_tone }}"></span>Fwd P/E: {{ fmt(derived.current.forward_pe) }}
-        </span>
-        {%- endif %}
-
-        {# Chip 3: Trend #}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-secondary text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Trend: {{ trend_label|safe }}
-        </span>
-
-        {# Chip 4: Coverage #}
-        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-sunken text-text-muted text-xs font-medium" role="listitem">
-            <span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span>Coverage: {{ pe_count }}/3 P/E · {{ pfcf_count }}/3 P/FCF · {{ ps_count }}/3 P/S · {{ pb_count }}/3 P/B · {{ ev_count }}/3 EV/EBITDA
-        </span>
-    </div>
-</header>
-
 {# ── Valuation summary: current vs 3Y average ── #}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="val-heading">
     <div class="flex items-baseline justify-between gap-4 mb-4">
@@ -321,7 +310,16 @@
         {{ metric_card("P/S", derived.current.ps, derived.ps_3y_avg) }}
         {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
         {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
-        {{ metric_card("PEG", derived.current.peg, none, note="Point-in-time PEG ratio.") }}
+        {# PEG is a point-in-time ratio (like Forward P/E) — no historical average is meaningful, so render it as a standalone value with no 3Y-avg noise. #}
+        {%- set peg_val = derived.current.peg -%}
+        {%- set peg_tone = tone_class(peg_val, 'multiple') -%}
+        <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">PEG</div>
+            <div>
+                <div class="text-3xl font-bold tabular-nums {{ peg_tone if peg_val is not none else 'text-text-muted' }}">{{ fmt(peg_val) if peg_val is not none else '&mdash;' }}</div>
+                <div class="mt-1 text-xs text-text-muted">Point-in-time (PEG/Y ratio)</div>
+            </div>
+        </div>
     </div>
 </section>
 
@@ -357,26 +355,59 @@
     </div>
 </section>
 
-{# ── SaaS KPIs ── #}
+{# ── SaaS KPIs (render ONLY cards where the metric is actually disclosed) ── #}
 {% set sk = derived.saas_kpis %}
+{# Operator directive: "if the data is not disclosed, don't show anything at all."
+   We only show the SaaS section when AT LEAST ONE of NRR / GRR / RPO / ARR is
+   *explicitly disclosed*. ARR approximated from TTM revenue (the engine's
+   fallback) does NOT count as disclosed — it is silently dropped at the
+   template layer. Rule of 40 is derived from growth + FCF margin (not a SaaS
+   disclosure per se), so it does not trigger the section on its own. #}
+{%- set nrr_disclosed = sk.nrr_pct is not none -%}
+{%- set grr_disclosed = sk.grr_pct is not none -%}
+{%- set rpo_disclosed = sk.rpo_usd is not none -%}
+{%- set arr_disclosed = sk.arr_usd is not none and not sk.arr_is_approximation -%}
+{%- set has_explicit_saas = nrr_disclosed or grr_disclosed or rpo_disclosed or arr_disclosed -%}
+{% if has_explicit_saas %}
+{%- set disclosed = [] -%}
+{%- if nrr_disclosed -%}{%- set _ = disclosed.append('nrr') -%}{%- endif -%}
+{%- if grr_disclosed -%}{%- set _ = disclosed.append('grr') -%}{%- endif -%}
+{%- if arr_disclosed -%}{%- set _ = disclosed.append('arr') -%}{%- endif -%}
+{%- if rpo_disclosed -%}{%- set _ = disclosed.append('rpo') -%}{%- endif -%}
+{%- if sk.rule_of_40 is not none -%}{%- set _ = disclosed.append('rule40') -%}{%- endif -%}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="saas-heading">
     <div class="flex items-center gap-2 mb-4">
         <span class="w-2 h-2 rounded-full bg-violet-500"></span>
         <h2 id="saas-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">SaaS / subscription KPIs</h2>
-        <span class="text-[10px] text-text-muted ml-auto">Extracted from stored evidence text; N/A = not disclosed</span>
+        <span class="text-[10px] text-text-muted ml-auto">Extracted from stored evidence text</span>
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    {# Grid columns adapt to the number of disclosed KPIs so cards stay full-width. #}
+    {%- set grid_cols = {'1': 'grid-cols-1', '2': 'grid-cols-1 sm:grid-cols-2', '3': 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', '4': 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'}[disclosed|length|string] -%}
+    <div class="grid {{ grid_cols }} gap-3">
+        {% if 'nrr' in disclosed %}
         {{ kpi_card("Net Revenue Retention (NRR)", sk.nrr_pct, "nrr",
                     note="NRR >100% means existing customers expand; <100% means contraction.",
                     approx=sk.nrr_from_agent) }}
+        {% endif %}
+        {% if 'grr' in disclosed %}
         {{ kpi_card("Gross Retention (GRR)", sk.grr_pct, "nrr",
                     note="Share of revenue retained from existing customers after churn.",
                     approx=sk.grr_from_agent) }}
+        {% endif %}
+        {% if 'arr' in disclosed %}
         {{ kpi_card("Annual Recurring Revenue (ARR)", sk.arr_usd, "arr",
-                    note="Implied ARR when not explicitly disclosed; TTM-based fallback.",
-                    approx=sk.arr_is_approximation or sk.arr_from_agent) }}
+                    note="From EDGAR filing narrative or disclosed earnings call.",
+                    approx=sk.arr_from_agent) }}
+        {% endif %}
+        {% if 'rpo' in disclosed %}
+        {{ kpi_card("Remaining Performance Obligations (RPO)", sk.rpo_usd, "arr",
+                    note="Contracted revenue backlog from EDGAR filing narrative.",
+                    approx=sk.rpo_from_agent) }}
+        {% endif %}
+        {% if 'rule40' in disclosed %}
         {{ kpi_card("Rule of 40", sk.rule_of_40, "rule40",
                     note="Revenue growth % + FCF margin %. >40% is the classic SaaS health threshold.") }}
+        {% endif %}
     </div>
     {% if sk.notes %}
     <ul class="mt-3 space-y-1 text-xs text-text-secondary list-disc list-inside">
@@ -384,6 +415,7 @@
     </ul>
     {% endif %}
 </section>
+{% endif %}
 
 {# ── Analyst consensus ── #}
 {% set a = derived.analyst %}
@@ -454,150 +486,261 @@
     </div>
 </section>
 
-{# ── 3-year multiples detail ── #}
-{% set pe_values = [] %}{% set pe_periods = [] %}
-{% set pfcf_values = [] %}{% set pfcf_periods = [] %}
-{% set ps_values = [] %}{% set ps_periods = [] %}
-{% set pb_values = [] %}{% set pb_periods = [] %}
-{% set ev_values = [] %}{% set ev_periods = [] %}
-{% for y in (derived.per_year or [])|reverse %}
-    {% if y.pe is not none %}{% set _ = pe_values.append(y.pe) %}{% set _ = pe_periods.append(y.period or '?') %}{% endif %}
-    {% if y.pfcf is not none %}{% set _ = pfcf_values.append(y.pfcf) %}{% set _ = pfcf_periods.append(y.period or '?') %}{% endif %}
-    {% if y.ps is not none %}{% set _ = ps_values.append(y.ps) %}{% set _ = ps_periods.append(y.period or '?') %}{% endif %}
-    {% if y.pb is not none %}{% set _ = pb_values.append(y.pb) %}{% set _ = pb_periods.append(y.period or '?') %}{% endif %}
-    {% if y.ev_ebitda is not none %}{% set _ = ev_values.append(y.ev_ebitda) %}{% set _ = ev_periods.append(y.period or '?') %}{% endif %}
-{% endfor %}
-{% macro mult_trend_card(label, avg, values, periods, lower_better=true) -%}
-    {%- set has_data = (values|length > 0) -%}
-    {%- set has_avg = (avg is not none) -%}
-    {%- set tone = tone_class(avg if has_avg else (values[-1] if values else none), "multiple") -%}
-    <div class="rounded-xl bg-surface-sunken/40 p-4">
-        <div class="flex items-baseline justify-between gap-3 mb-3">
-            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">{{ label }}</span>
-            {%- if has_avg -%}
-            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-{{ tone }}-soft text-{{ tone }} text-[10px] font-semibold uppercase tracking-widest">
-                <span class="w-1 h-1 rounded-full bg-{{ tone }}"></span>{{ mult_label(avg) }}
-            </span>
-            {%- else -%}
-            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted text-[10px] font-semibold uppercase tracking-widest">
-                <span class="w-1 h-1 rounded-full bg-text-muted"></span>No avg
-            </span>
-            {%- endif -%}
-        </div>
-
-        {%- if has_avg -%}
-        <div class="text-3xl font-bold tabular-nums text-{{ tone }}">{{ fmt(avg) }}</div>
-        {%- else -%}
-        <div class="text-3xl font-bold tabular-nums text-text-muted">&mdash;</div>
-        {%- endif -%}
-
-        {%- if values|length >= 2 -%}
-        {%- set pct_change = (((values[-1] - values[0]) / values[0] * 100) if values[0] else 0)|round(1) -%}
-        {%- set is_falling = values[-1] < values[0] -%}
-        {%- set is_rising = values[-1] > values[0] -%}
-        {%- set trend_tone = 'text-positive' if (is_falling and lower_better) or (is_rising and not lower_better) else ('text-negative' if (is_rising and lower_better) or (is_falling and not lower_better) else 'text-text-muted') -%}
-        <div class="mt-1 text-xs font-medium {{ trend_tone }}">
-            {%- if is_rising -%}&uarr;{%- elif is_falling -%}&darr;{%- else -%}&rarr;{%- endif -%}
-            {{ "%+.1f"|format(pct_change) }}% over {{ values|length }} yrs
-        </div>
-        {%- endif -%}
-
-        <div class="mt-3">
-            {{ sparkline_svg(values, periods, lower_better=lower_better, height_px=64) }}
-        </div>
-    </div>
-{%- endmacro %}
-
+{# ── Valuation fingerprint: years × multiples heatmap (Source.md §16.8) ── #}
+{# Replaces the old D3 radar. The radar auto-scaled each axis to its own range,
+   so its "shape" only showed within-metric year-over-year movement and hid
+   absolute valuation levels unless the operator hovered. This matrix shows
+   every actual fiscal-year-end multiple, tinted by where it sits in that
+   metric's own 3-4y history (cheap = green → pricey = red); a trailing "now"
+   row shows the current/TTM multiple and a "3Y avg" footer the historical
+   average. Pure Jinja + CSS — no JS — so it renders with JS disabled and is a
+   real <table> for screen readers. The section's `reveal` class is animated
+   by the global IntersectionObserver in pmacs-anim.js. #}
+{%- set py = derived.per_year or [] -%}
+{%- set pe_vals   = py|map(attribute='pe')|select('ne', none)|list -%}
+{%- set pfcf_vals = py|map(attribute='pfcf')|select('ne', none)|list -%}
+{%- set ps_vals   = py|map(attribute='ps')|select('ne', none)|list -%}
+{%- set pb_vals   = py|map(attribute='pb')|select('ne', none)|list -%}
+{%- set ev_vals   = py|map(attribute='ev_ebitda')|select('ne', none)|list -%}
+{%- set has_pe   = pe_vals|length > 0 -%}
+{%- set has_pfcf = pfcf_vals|length > 0 -%}
+{%- set has_ps   = ps_vals|length > 0 -%}
+{%- set has_pb   = pb_vals|length > 0 -%}
+{%- set has_ev   = ev_vals|length > 0 -%}
+{%- set pe_lo   = pe_vals|min   if has_pe   else none -%}
+{%- set pe_hi   = pe_vals|max   if has_pe   else none -%}
+{%- set pfcf_lo = pfcf_vals|min if has_pfcf else none -%}
+{%- set pfcf_hi = pfcf_vals|max if has_pfcf else none -%}
+{%- set ps_lo   = ps_vals|min   if has_ps   else none -%}
+{%- set ps_hi   = ps_vals|max   if has_ps   else none -%}
+{%- set pb_lo   = pb_vals|min   if has_pb   else none -%}
+{%- set pb_hi   = pb_vals|max   if has_pb   else none -%}
+{%- set ev_lo   = ev_vals|min   if has_ev   else none -%}
+{%- set ev_hi   = ev_vals|max   if has_ev   else none -%}
+{%- set cur = derived.current -%}
+{# Current/TTM P/FCF: market cap ÷ latest annual FCF (deterministic, in-template
+   presentation math — same standing as `upside` and `sbc_delta_pp` elsewhere on
+   this page; the Five Non-Negotiables restrict LLMs, not templates). #}
+{%- set now_pfcf = (derived.market_cap_usd / derived.latest_fcf_usd)|round(2)
+                   if (derived.market_cap_usd and derived.latest_fcf_usd and derived.latest_fcf_usd > 0)
+                   else none -%}
+{# Active columns: (label, per_year attr, 3Y avg, lo, hi, current value). A column
+   is included only when it has ≥1 historical value. Iterating this tuple list
+   keeps the header / row / now / avg markup DRY. #}
+{%- set cols = [] -%}
+{%- if has_pe -%}{%- set _ = cols.append(('P/E', 'pe', derived.pe_3y_avg, pe_lo, pe_hi, cur.pe)) -%}{%- endif -%}
+{%- if has_pfcf -%}{%- set _ = cols.append(('P/FCF', 'pfcf', derived.pfcf_3y_avg, pfcf_lo, pfcf_hi, now_pfcf)) -%}{%- endif -%}
+{%- if has_ps -%}{%- set _ = cols.append(('P/S', 'ps', derived.ps_3y_avg, ps_lo, ps_hi, cur.ps)) -%}{%- endif -%}
+{%- if has_pb -%}{%- set _ = cols.append(('P/B', 'pb', derived.pb_3y_avg, pb_lo, pb_hi, cur.pb)) -%}{%- endif -%}
+{%- if has_ev -%}{%- set _ = cols.append(('EV/EBITDA', 'ev_ebitda', derived.ev_ebitda_3y_avg, ev_lo, ev_hi, cur.ev_ebitda)) -%}{%- endif -%}
+{%- set has_now = (cur.pe is not none) or (now_pfcf is not none) or (cur.ps is not none) or (cur.pb is not none) or (cur.ev_ebitda is not none) -%}
+{%- set show_fp = (py|length >= 2) and (cols|length >= 2) -%}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="mult-heading">
-    <div class="flex items-baseline justify-between gap-4 mb-5">
-        <h2 id="mult-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">3-year multiples</h2>
-        <span class="text-[10px] text-text-muted">Per-period values + trend sparklines · newest at the bottom</span>
+    <div class="flex items-baseline justify-between gap-4 mb-4 flex-wrap">
+        <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+            <h2 id="mult-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Valuation fingerprint</h2>
+        </div>
+        <span class="text-[10px] text-text-muted">Fiscal year-end multiples &middot; tint = percentile in each metric's own history</span>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
-        {{ mult_trend_card("P/E", derived.pe_3y_avg, pe_values, pe_periods, lower_better=true) }}
-        {{ mult_trend_card("P/FCF", derived.pfcf_3y_avg, pfcf_values, pfcf_periods, lower_better=true) }}
-        {{ mult_trend_card("P/S", derived.ps_3y_avg, ps_values, ps_periods, lower_better=true) }}
-        {{ mult_trend_card("P/B", derived.pb_3y_avg, pb_values, pb_periods, lower_better=true) }}
-        {{ mult_trend_card("EV/EBITDA", derived.ev_ebitda_3y_avg, ev_values, ev_periods, lower_better=true) }}
-    </div>
-
-    {# ── Per-year detail table ── #}
-    {% if derived.per_year %}
-    <details class="group">
-        <summary class="cursor-pointer text-[10px] font-semibold text-text-muted uppercase tracking-widest hover:text-text-secondary flex items-center gap-1.5 select-none">
-            <svg class="w-3 h-3 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 2.5l3.5 3.5-3.5 3.5"/></svg>
-            Per-fiscal-year detail ({{ derived.per_year|length }} periods)
-        </summary>
-        <table class="w-full text-sm border-collapse mt-3">
-            <caption class="sr-only">Per-fiscal-year valuation multiples for {{ ticker }}</caption>
+    {% if show_fp %}
+    <div class="overflow-x-auto">
+        <table class="fp-matrix">
+            <caption class="sr-only">Valuation fingerprint: one row per fiscal year, columns are valuation multiples ({{ cols|map(attribute=0)|join(', ') }}). Each cell shows the actual multiple and is tinted green when cheap in that metric's own history, red when pricey. The "now" row is the current/TTM multiple; the "3Y avg" row is the historical average.</caption>
             <thead>
-                <tr class="text-[10px] uppercase tracking-widest text-text-muted text-left border-b border-border-subtle">
-                    <th scope="col" class="py-2 font-semibold pl-3">Period</th>
-                    <th scope="col" class="py-2 font-semibold text-right">Price</th>
-                    <th scope="col" class="py-2 font-semibold text-right">EPS</th>
-                    <th scope="col" class="py-2 font-semibold text-right">P/E</th>
-                    <th scope="col" class="py-2 font-semibold text-right">P/FCF</th>
-                    <th scope="col" class="py-2 font-semibold text-right">P/S</th>
-                    <th scope="col" class="py-2 font-semibold text-right">P/B</th>
-                    <th scope="col" class="py-2 font-semibold text-right">EV/EBITDA</th>
+                <tr>
+                    <th scope="col" class="fp-corner">Fiscal year</th>
+                    {% for c in cols %}<th scope="col">{{ c[0] }}</th>{% endfor %}
                 </tr>
             </thead>
             <tbody>
-                {% for y in derived.per_year %}
-                {%- set pe_title = '' -%}
-                {%- if y.pe is none and y.eps is not none and y.eps <= 0 -%}{% set pe_title = 'Skipped: EPS <= 0' %}
-                {%- elif y.pe is none -%}{% set pe_title = 'Missing data' %}
-                {%- endif -%}
-                {%- set pfcf_title = '' -%}
-                {%- if y.pfcf is none and y.fcf_usd is not none and y.fcf_usd <= 0 -%}{% set pfcf_title = 'Skipped: FCF <= 0' %}
-                {%- elif y.pfcf is none -%}{% set pfcf_title = 'Missing data' %}
-                {%- endif -%}
-                <tr class="border-b border-border-subtle/50 {{ 'bg-warning-soft/40' if y.shares_approximated else '' }}">
-                    <td class="py-2 pl-3 font-mono text-text-secondary">
-                        {{ y.period }}{% if y.shares_approximated %}<span class="text-warning ml-1" title="P/FCF uses current share count (historical unavailable)">*</span>{% endif %}
-                    </td>
-                    <td class="py-2 text-right tabular-nums">{{ fmt(y.price, "$") }}</td>
-                    <td class="py-2 text-right tabular-nums">{{ fmt(y.eps) }}</td>
-                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pe) }} font-medium">
-                        {%- if y.pe is not none -%}{{ "%.1f"|format(y.pe) }}
-                        {%- else -%}<span class="italic text-text-muted" title="{{ pe_title }}">&mdash;{% if pe_title %}&#9888;{% endif %}</span>
-                        {%- endif -%}
-                    </td>
-                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pfcf) }} font-medium">
-                        {%- if y.pfcf is not none -%}{{ "%.1f"|format(y.pfcf) }}
-                        {%- else -%}<span class="italic text-text-muted" title="{{ pfcf_title }}">&mdash;{% if pfcf_title %}&#9888;{% endif %}</span>
-                        {%- endif -%}
-                    </td>
-                    <td class="py-2 text-right tabular-nums {{ tone_class(y.ps) }} font-medium">
-                        {%- if y.ps is not none -%}{{ "%.1f"|format(y.ps) }}
-                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
-                        {%- endif -%}
-                    </td>
-                    <td class="py-2 text-right tabular-nums {{ tone_class(y.pb) }} font-medium">
-                        {%- if y.pb is not none -%}{{ "%.1f"|format(y.pb) }}
-                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
-                        {%- endif -%}
-                    </td>
-                    <td class="py-2 text-right tabular-nums {{ tone_class(y.ev_ebitda) }} font-medium">
-                        {%- if y.ev_ebitda is not none -%}{{ "%.1f"|format(y.ev_ebitda) }}
-                        {%- else -%}<span class="italic text-text-muted" title="{{ 'Missing data' }}">&mdash;</span>
-                        {%- endif -%}
-                    </td>
+                {% for y in py|reverse %}
+                <tr>
+                    <th scope="row">{{ y.period or '?' }}</th>
+                    {% for c in cols %}<td class="{{ fp_tone(y|attr(c[1]), c[3], c[4]) }}">{{ fmt(y|attr(c[1])) }}</td>{% endfor %}
                 </tr>
                 {% endfor %}
+                {% if has_now %}
+                <tr class="fp-now">
+                    <th scope="row">now <span class="fp-star" aria-hidden="true">*</span></th>
+                    {% for c in cols %}<td class="{{ fp_tone(c[5], c[3], c[4]) }}">{{ fmt(c[5]) }}</td>{% endfor %}
+                </tr>
+                {% endif %}
             </tbody>
+            <tfoot>
+                <tr class="fp-avg">
+                    <th scope="row">3Y avg</th>
+                    {% for c in cols %}<td class="{{ fp_tone(c[2], c[3], c[4]) }}">{{ fmt(c[2]) }}</td>{% endfor %}
+                </tr>
+            </tfoot>
         </table>
-    </details>
-    {% if derived.notes %}
-    <ul class="mt-3 space-y-1 text-xs text-text-secondary list-disc list-inside">
-        {% for note in derived.notes %}<li>{{ note }}</li>{% endfor %}
-    </ul>
-    {% endif %}
+    </div>
+
+    <div class="fp-legend mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-muted">
+        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-cheap" aria-hidden="true"></span>cheap in history</span>
+        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-neutral" aria-hidden="true"></span>mid-range</span>
+        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-pricey" aria-hidden="true"></span>pricey in history</span>
+        <span class="inline-flex items-center gap-1.5"><span class="fp-star" aria-hidden="true">*</span>current / TTM</span>
+    </div>
     {% else %}
-    <p class="text-sm text-text-muted">No annual series available to compute multiples.</p>
+    <div class="text-sm text-text-muted p-4">
+        Not enough historical multiples to draw a fingerprint (need at least two fiscal years across two or more multiples).
+    </div>
     {% endif %}
 </section>
+
+{# ── Technical (price, MAs, RSI, 52w distance) ── #}
+{# `technical` is built in the route from Polygon evidence packets and passed as a top-level context variable (kept separate from the frozen `derived` Pydantic model). #}
+{% set tech = technical or {} %}
+{% set has_tech = tech and (tech.current_price is not none or tech.rsi_14 is not none or tech.high_52w is not none or tech.low_52w is not none) %}
+{% if has_tech %}
+{# RSI colour: >70 overbought → red, <30 oversold → green, else neutral. #}
+{%- set rsi = tech.rsi_14 -%}
+{%- if rsi is not none -%}
+    {%- if rsi >= 70 -%}{%- set rsi_tone = 'negative' -%}{%- set rsi_label = 'Overbought' -%}
+    {%- elif rsi <= 30 -%}{%- set rsi_tone = 'positive' -%}{%- set rsi_label = 'Oversold' -%}
+    {%- else -%}{%- set rsi_tone = 'text-secondary' -%}{%- set rsi_label = 'Neutral' -%}
+    {%- endif -%}
+{%- else -%}
+    {%- set rsi_tone = 'muted' -%}{%- set rsi_label = '—' -%}
+{%- endif -%}
+{# Trend tone: up = positive, down = negative, sideways = muted. #}
+{%- set trend_raw = (tech.trend or '') -%}
+{%- if 'up' in trend_raw -%}{%- set trend_tone = 'positive' -%}
+{%- elif 'down' in trend_raw -%}{%- set trend_tone = 'negative' -%}
+{%- else -%}{%- set trend_tone = 'muted' -%}
+{%- endif -%}
+{# 52w distance tones — closer to high = warning/negative (extended), closer to low = positive (value). #}
+{%- set d_high = tech.dist_from_high_52w_pct -%}
+{%- set d_low = tech.dist_from_low_52w_pct -%}
+{%- if d_high is not none -%}
+    {%- if d_high >= -5 -%}{%- set d_high_tone = 'negative' -%}
+    {%- elif d_high >= -20 -%}{%- set d_high_tone = 'warning' -%}
+    {%- else -%}{%- set d_high_tone = 'positive' -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if d_low is not none -%}
+    {%- if d_low <= 5 -%}{%- set d_low_tone = 'positive' -%}
+    {%- elif d_low <= 30 -%}{%- set d_low_tone = 'accent' -%}
+    {%- else -%}{%- set d_low_tone = 'warning' -%}
+    {%- endif -%}
+{%- endif -%}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="tech-heading">
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <h2 id="tech-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Technical</h2>
+        <span class="text-[10px] text-text-muted ml-auto">Price, moving averages, momentum &amp; 52-week positioning</span>
+    </div>
+
+    {# Top row: current price (big), RSI (colour-coded), trend (colour-coded chip) #}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Current price</div>
+            <div class="text-3xl font-bold tabular-nums text-text-primary">{{ fmt(tech.current_price, "$") }}</div>
+            {%- if tech.dist_from_sma50_pct is not none -%}
+                {%- set sma50_tone = 'positive' if tech.dist_from_sma50_pct >= 0 else 'negative' -%}
+                <div class="mt-1 text-xs {{ 'text-' ~ sma50_tone }}">
+                    {{ "%+.1f"|format(tech.dist_from_sma50_pct) }}% vs SMA50
+                </div>
+            {%- endif -%}
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">RSI (14)</div>
+            <div class="flex items-baseline gap-2">
+                <div class="text-3xl font-bold tabular-nums
+                            {%- if rsi_tone == 'negative' %} text-negative
+                            {%- elif rsi_tone == 'positive' %} text-positive
+                            {%- elif rsi_tone == 'muted' %} text-text-muted
+                            {%- else %} text-text-secondary
+                            {%- endif %}">
+                    {%- if rsi is not none -%}{{ "%.1f"|format(rsi) }}{%- else -%}&mdash;{%- endif -%}
+                </div>
+                {%- if rsi is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if rsi_tone == 'negative' %} bg-negative-soft text-negative
+                             {%- elif rsi_tone == 'positive' %} bg-positive-soft text-positive
+                             {%- else %} bg-surface-sunken text-text-muted
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    <span class="w-1 h-1 rounded-full
+                                {%- if rsi_tone == 'negative' %} bg-negative
+                                {%- elif rsi_tone == 'positive' %} bg-positive
+                                {%- else %} bg-text-muted
+                                {%- endif %}"></span>{{ rsi_label }}
+                </span>
+                {%- endif -%}
+            </div>
+            {%- if tech.roc_20d_pct is not none -%}
+            <div class="mt-1 text-xs text-text-muted">20d ROC {{ "%+.1f"|format(tech.roc_20d_pct) }}%</div>
+            {%- endif -%}
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Trend</div>
+            {%- set trend_label = trend_raw.replace('_', ' ').title() if trend_raw else '—' -%}
+            <div class="text-2xl font-bold
+                        {%- if trend_tone == 'positive' %} text-positive
+                        {%- elif trend_tone == 'negative' %} text-negative
+                        {%- else %} text-text-muted
+                        {%- endif %}">{{ trend_label }}</div>
+            {%- if tech.dist_from_sma200_pct is not none -%}
+                {%- set sma200_tone = 'positive' if tech.dist_from_sma200_pct >= 0 else 'negative' -%}
+                <div class="mt-1 text-xs {{ 'text-' ~ sma200_tone }}">
+                    {{ "%+.1f"|format(tech.dist_from_sma200_pct) }}% vs SMA200
+                </div>
+            {%- endif -%}
+        </div>
+    </div>
+
+    {# Bottom row: 52w high / 52w low with current price + % distance #}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">52-week high</span>
+                {%- if d_high is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if d_high_tone == 'negative' %} bg-negative-soft text-negative
+                             {%- elif d_high_tone == 'warning' %} bg-warning-soft text-warning
+                             {%- else %} bg-positive-soft text-positive
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    {{ "%+.1f"|format(d_high) }}%
+                </span>
+                {%- endif -%}
+            </div>
+            <div class="flex items-baseline gap-2">
+                <span class="text-2xl font-bold tabular-nums text-text-primary">{{ fmt(tech.high_52w, "$") }}</span>
+                {%- if tech.current_price is not none and tech.high_52w -%}
+                <span class="text-xs text-text-muted">vs {{ fmt(tech.current_price, "$") }} now</span>
+                {%- endif -%}
+            </div>
+            <div class="mt-1 text-xs text-text-muted">Drawdown to all-time high</div>
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">52-week low</span>
+                {%- if d_low is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if d_low_tone == 'positive' %} bg-positive-soft text-positive
+                             {%- elif d_low_tone == 'accent' %} bg-accent-soft text-accent
+                             {%- else %} bg-warning-soft text-warning
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    +{{ "%.1f"|format(d_low) }}%
+                </span>
+                {%- endif -%}
+            </div>
+            <div class="flex items-baseline gap-2">
+                <span class="text-2xl font-bold tabular-nums text-text-primary">{{ fmt(tech.low_52w, "$") }}</span>
+                {%- if tech.current_price is not none and tech.low_52w -%}
+                <span class="text-xs text-text-muted">vs {{ fmt(tech.current_price, "$") }} now</span>
+                {%- endif -%}
+            </div>
+            <div class="mt-1 text-xs text-text-muted">Distance above 52w low</div>
+        </div>
+    </div>
+</section>
+{% endif %}
 
 {# ── Raw fundamentals groups ── #}
 {% if groups %}
@@ -614,7 +757,13 @@
                 {% for r in group.rows %}
                 <div class="flex items-center justify-between text-sm">
                     <span class="text-text-secondary">{{ r.label }}</span>
+                    {%- if r.state == 'na' -%}
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted text-[10px] font-semibold uppercase tracking-widest" title="Known business N/A for this sector">n/a</span>
+                    {%- elif r.state == 'missing' or r.value is none -%}
+                    <span class="font-mono tabular-nums text-text-muted">&mdash;</span>
+                    {%- else -%}
                     <span class="font-mono tabular-nums text-text-primary">{{ fmt(r.value, r.unit) }}</span>
+                    {%- endif -%}
                 </div>
                 {% endfor %}
             </div>

@@ -310,3 +310,155 @@ def fetch_fundamentals_yf(
         ticker=ticker, cycle_id=cycle_id, evidence=evidence,
         fetched_at=now, source_count=1,
     )
+
+
+def fetch_analyst_recommendations_yf(
+    ticker: str,
+    gateway: DataGateway | None = None,
+    api_key: str = "",
+    cycle_id: str = "",
+) -> EvidencePacket:
+    """Fetch analyst recommendation mix from yfinance (no API key required).
+
+    Replaces Finnhub's stock/recommendation endpoint, which silently fails on
+    almost every free-tier call (root cause: bare `except Exception: pass` in
+    `pmacs/data/sources/finnhub.py:391,419`). yfinance's
+    ``Ticker.get_recommendations()`` returns a DataFrame indexed by month with
+    columns ``strongBuy, buy, hold, sell, strongSell``. We sum the most recent
+    month and emit one evidence packet under id
+    ``yfinance_{ticker}_analyst_recommendations``.
+
+    Output keys (match the existing ``AnalystConsensus`` schema fields so the
+    web route's ``_extract_analyst`` can pick this up directly):
+        strong_buy, buy, hold, sell, strong_sell (ints)
+        total_analysts (int)
+        consensus (str: "Strong Buy"|"Buy"|"Hold"|"Sell"|"Strong Sell")
+        as_of (str: "YYYY-MM-DD")
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        import yfinance as yf
+        recs_df = yf.Ticker(ticker).get_recommendations()
+    except Exception as exc:
+        log_debug(
+            "DATA_UNAVAILABLE",
+            payload={"source": "yfinance_recommendations", "ticker": ticker, "error": str(exc)},
+            level="WARN",
+            cycle_id=cycle_id,
+            error_code="DATA_UNAVAILABLE",
+            msg=f"yfinance recommendations failed for {ticker}: {exc}",
+        )
+        return EvidencePacket(ticker=ticker, cycle_id=cycle_id, evidence=[], fetched_at=now, source_count=0)
+
+    if recs_df is None or getattr(recs_df, "empty", True):
+        log_debug(
+            "DATA_UNAVAILABLE",
+            payload={"source": "yfinance_recommendations", "ticker": ticker, "reason": "empty dataframe"},
+            level="WARN",
+            cycle_id=cycle_id,
+            error_code="DATA_UNAVAILABLE",
+            msg=f"yfinance returned no recommendations for {ticker}",
+        )
+        return EvidencePacket(ticker=ticker, cycle_id=cycle_id, evidence=[], fetched_at=now, source_count=0)
+
+    # yfinance returns a dataframe with columns
+    #   period (string like "0m", "-1m", "-2m", …, where "0m" is the most recent month),
+    #   strongBuy, buy, hold, sell, strongSell.
+    # The "0m" row is the most recent period. We pick that row by matching
+    # the "period" column value rather than relying on the index.
+    try:
+        if "period" in recs_df.columns:
+            latest_row = recs_df[recs_df["period"] == "0m"]
+            if latest_row.empty:
+                latest_row = recs_df.iloc[[0]]  # fall back to first row
+        else:
+            latest_row = recs_df.iloc[[0]]
+        latest = latest_row.iloc[0]
+        # The dataframe does not carry an absolute date — only the relative
+        # "period" string. Record "now" as the as_of date since "0m" means
+        # the most recent month ended at today's snapshot. Operators see this
+        # in the UI as the freshness of the recommendation mix.
+        as_of_str = now.date().isoformat()
+    except Exception as exc:
+        log_debug(
+            "DATA_UNAVAILABLE",
+            payload={"source": "yfinance_recommendations", "ticker": ticker, "error": str(exc)},
+            level="WARN",
+            cycle_id=cycle_id,
+            error_code="DATA_UNAVAILABLE",
+            msg=f"yfinance recommendations unparseable for {ticker}: {exc}",
+        )
+        return EvidencePacket(ticker=ticker, cycle_id=cycle_id, evidence=[], fetched_at=now, source_count=0)
+
+    def _cell(name: str) -> int | None:
+        try:
+            v = int(latest[name])
+            return v if v >= 0 else None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    strong_buy = _cell("strongBuy") or 0
+    buy = _cell("buy") or 0
+    hold = _cell("hold") or 0
+    sell = _cell("sell") or 0
+    strong_sell = _cell("strongSell") or 0
+    total = strong_buy + buy + hold + sell + strong_sell
+
+    if total == 0:
+        return EvidencePacket(ticker=ticker, cycle_id=cycle_id, evidence=[], fetched_at=now, source_count=0)
+
+    # Compute consensus label — weighting convention matches Finnhub's output.
+    weighted = strong_buy * 1.0 + buy * 0.5 + hold * 0.0 + sell * -0.5 + strong_sell * -1.0
+    avg = weighted / total
+    if avg >= 0.5:
+        consensus = "Strong Buy"
+    elif avg >= 0.1:
+        consensus = "Buy"
+    elif avg > -0.1:
+        consensus = "Hold"
+    elif avg > -0.5:
+        consensus = "Sell"
+    else:
+        consensus = "Strong Sell"
+
+    data: dict = {
+        "strong_buy": strong_buy,
+        "buy": buy,
+        "hold": hold,
+        "sell": sell,
+        "strong_sell": strong_sell,
+        "total_analysts": total,
+        "consensus": consensus,
+        "as_of": as_of_str,
+        "_source": "yfinance",
+    }
+
+    log_debug(
+        "EVIDENCE_FETCHED",
+        payload={
+            "source": "yfinance_recommendations",
+            "ticker": ticker,
+            "total_analysts": total,
+            "consensus": consensus,
+            "as_of": as_of_str,
+        },
+        level="INFO",
+        cycle_id=cycle_id,
+        msg=f"yfinance recommendations for {ticker}: {total} analysts, {consensus} ({as_of_str})",
+    )
+
+    return EvidencePacket(
+        ticker=ticker, cycle_id=cycle_id,
+        evidence=[Evidence(
+            id=f"yfinance_{ticker}_analyst_recommendations",
+            source=DataSource.YAHOO,
+            type=EvidenceType.FINANCIAL_STATEMENT,
+            ticker=ticker,
+            fetched_at=now,
+            content_hash=str(hash(str(sorted(data.items(), key=lambda x: x[0])))),
+            title=f"{ticker} analyst consensus: {consensus} ({total} analysts)",
+            data=data,
+        )],
+        fetched_at=now,
+        source_count=1,
+    )

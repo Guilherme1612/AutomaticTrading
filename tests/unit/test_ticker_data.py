@@ -6,7 +6,16 @@ fixtures; this module stays fast and offline.
 """
 from __future__ import annotations
 
-from pmacs.web.routes.ticker_data import _extract_analyst, _build_evidence_text
+from unittest.mock import patch
+
+from pmacs.web.routes.ticker_data import (
+    _build_evidence_text,
+    _evidence_fresh_enough,
+    _extract_analyst,
+    _is_universe_ticker,
+    _LAZY_FETCH_IN_FLIGHT,
+    _maybe_warm_evidence_cache,
+)
 
 
 def test_build_evidence_text_joins_all_evidence():
@@ -86,3 +95,108 @@ def test_extract_analyst_returns_empty_on_no_data():
         "total_analysts": None,
         "consensus": None,
     }
+
+
+# ── Lazy-fetch helpers (operator directive 2026-06-19) ───────────────────
+
+
+def test_is_universe_ticker_handles_missing_db(tmp_path, monkeypatch):
+    """No pmacs.db → not in universe → no fetch attempt."""
+    from pmacs.config import data_dir
+    monkeypatch.setattr(data_dir, "__call__", lambda: tmp_path)
+    # data_dir() returns Path; point it at the empty tmp
+    import pmacs.config as _cfg
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
+    assert _is_universe_ticker("AMZN") is False
+
+
+def test_is_universe_ticker_reads_universe_table(tmp_path):
+    """Tickers present in `universe` table (halted=0, delisted=0) are detected."""
+    import sqlite3
+    from pmacs.config import data_dir
+    import pmacs.config as _cfg
+    _cfg.data_dir = lambda: tmp_path
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE universe (ticker TEXT, halted INT, delisted INT)"
+    )
+    con.execute("INSERT INTO universe VALUES ('AMZN', 0, 0)")
+    con.execute("INSERT INTO universe VALUES ('BADX', 1, 0)")  # halted
+    con.execute("INSERT INTO universe VALUES ('OLDX', 0, 1)")  # delisted
+    con.commit()
+    con.close()
+
+    assert _is_universe_ticker("AMZN") is True
+    assert _is_universe_ticker("BADX") is False
+    assert _is_universe_ticker("OLDX") is False
+    assert _is_universe_ticker("ZZNODATA") is False
+
+
+def test_evidence_fresh_enough_no_db(tmp_path):
+    """No pmacs.db → evidence not fresh → lazy fetch will fire."""
+    import pmacs.config as _cfg
+    _cfg.data_dir = lambda: tmp_path
+    assert _evidence_fresh_enough("AMZN") is False
+
+
+def test_evidence_fresh_enough_respects_ttl(tmp_path):
+    """Evidence fetched within the TTL is fresh; older rows are stale."""
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    import pmacs.config as _cfg
+    _cfg.data_dir = lambda: tmp_path
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE evidence_cache (ticker TEXT, fetched_at TEXT)"
+    )
+    fresh = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stale = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    con.execute("INSERT INTO evidence_cache VALUES ('FRESH', ?)", (fresh,))
+    con.execute("INSERT INTO evidence_cache VALUES ('STALE', ?)", (stale,))
+    con.commit()
+    con.close()
+
+    assert _evidence_fresh_enough("FRESH") is True
+    assert _evidence_fresh_enough("STALE") is False
+    assert _evidence_fresh_enough("MISSING") is False
+
+
+def test_maybe_warm_evidence_cache_dedupes_when_in_flight():
+    """Concurrent reloads while a fetch is running must NOT spawn a second one."""
+    _LAZY_FETCH_IN_FLIGHT.add("AMZN")
+    try:
+        with patch(
+            "pmacs.web.routes.ticker_data.asyncio.create_task"
+        ) as mock_task:
+            result = _maybe_warm_evidence_cache("AMZN")
+            assert result is True
+            mock_task.assert_not_called()
+    finally:
+        _LAZY_FETCH_IN_FLIGHT.discard("AMZN")
+
+
+def test_maybe_warm_evidence_cache_skips_when_fresh(tmp_path):
+    """Fresh evidence → no fetch dispatched."""
+    import sqlite3
+    from datetime import datetime, timezone
+    import pmacs.config as _cfg
+    _cfg.data_dir = lambda: tmp_path
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE evidence_cache (ticker TEXT, fetched_at TEXT)")
+    fresh = datetime.now(timezone.utc).isoformat()
+    con.execute("INSERT INTO evidence_cache VALUES ('AMZN', ?)", (fresh,))
+    con.commit()
+    con.close()
+
+    with patch(
+        "pmacs.web.routes.ticker_data.asyncio.create_task"
+    ) as mock_task:
+        result = _maybe_warm_evidence_cache("AMZN")
+        assert result is False
+        mock_task.assert_not_called()

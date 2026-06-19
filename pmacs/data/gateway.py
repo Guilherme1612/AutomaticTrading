@@ -107,6 +107,7 @@ DEFAULT_RATES: dict[str, float] = {
     "fred": 1.0,
     "ecb": 0.5,
     "fundamentals": 2.0,
+    "edgar_kpi": 0.5,  # SEC EDGAR filing-narrative KPI extraction (same host as edgar)
 }
 
 

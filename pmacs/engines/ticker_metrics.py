@@ -93,6 +93,15 @@ def _pct_from_text(raw: str) -> float | None:
     return val
 
 
+def _fmt_arr(v: float) -> str:
+    """Format a USD amount compactly for provenance notes (e.g. 1.20B, 800.00M)."""
+    if v >= 1e9:
+        return f"{v/1e9:.2f}B"
+    if v >= 1e6:
+        return f"{v/1e6:.2f}M"
+    return f"{v:.0f}"
+
+
 def _usd_from_text(raw: str) -> float | None:
     """Parse a string like '$1.2B' or '1.2B' into USD."""
     s = str(raw).strip().upper().lstrip("$").replace(",", "")
@@ -117,11 +126,19 @@ def _extract_saas_kpis(
     revenue_ttm: float | None = None,
     revenue_growth_yoy: float | None = None,
     fcf_margin_ttm: float | None = None,
+    explicit_kpis: dict | None = None,
 ) -> SaasKpis:
     """Extract NRR/ARR/GRR/RPO from stored evidence text and derive Rule of 40.
 
     Values found in raw evidence text are marked as authoritative; values only
     found in agent narrative are marked as estimates.
+
+    ``explicit_kpis`` carries authoritative values lifted from EDGAR filing narrative
+    (see pmacs.data.sources.edgar_kpi). When present, each provided field OVERRIDES the
+    regex/approximation result, is flagged ``*_from_agent=False`` (it's a primary filing
+    disclosure, not an estimate), and a provenance note is appended. The regex scan still
+    runs and only fills fields the explicit source left None — precedence is
+    EDGAR narrative > regex-over-prose > TTM-revenue ARR approximation.
     """
     evidence_lower = (evidence_text or "").lower()
     all_text = (evidence_text or "") + "\n" + (agent_text or "")
@@ -195,6 +212,44 @@ def _extract_saas_kpis(
     if revenue_growth_yoy is not None and fcf_margin_ttm is not None:
         rule_of_40 = round(revenue_growth_yoy + fcf_margin_ttm, 2)
 
+    # ── Explicit (authoritative) KPIs from EDGAR filing narrative override ──
+    if explicit_kpis:
+        prov = explicit_kpis.get("provenance", {}) or {}
+
+        def _prov_note(key: str, label: str, unit: str) -> str:
+            p = prov.get(key)
+            if not isinstance(p, dict):
+                return f"{label} from EDGAR filing narrative."
+            form = p.get("form", "filing")
+            filed = p.get("filed", "")
+            filed_part = f" filed {filed}" if filed else ""
+            return f"{label} from EDGAR {form}{filed_part}."
+
+        ex_nrr = explicit_kpis.get("nrr_pct")
+        if ex_nrr is not None:
+            nrr = float(ex_nrr)
+            nrr_from_agent = False
+            notes.append(_prov_note("nrr", f"NRR {nrr:.1f}%", "%"))
+        ex_grr = explicit_kpis.get("grr_pct")
+        if ex_grr is not None:
+            grr = float(ex_grr)
+            grr_from_agent = False
+            notes.append(_prov_note("grr", f"GRR {grr:.1f}%", "%"))
+        ex_arr = explicit_kpis.get("arr_usd")
+        if ex_arr is not None:
+            arr = float(ex_arr)
+            arr_from_agent = False
+            arr_is_approximation = False
+            # The regex/approximation pass may have appended an ARR-approximation
+            # note; the explicit filing disclosure supersedes it, so drop those.
+            notes = [n for n in notes if "ARR approximated" not in n]
+            notes.append(_prov_note("arr", f"ARR ${_fmt_arr(arr)}", "$"))
+        ex_rpo = explicit_kpis.get("rpo_usd")
+        if ex_rpo is not None:
+            rpo = float(ex_rpo)
+            rpo_from_agent = False
+            notes.append(_prov_note("rpo", f"RPO ${_fmt_arr(rpo)}", "$"))
+
     return SaasKpis(
         nrr_pct=nrr,
         grr_pct=grr,
@@ -236,6 +291,7 @@ def compute_ticker_metrics(
     quarterly_revenue_series: list[dict] | None = None,
     evidence_text: str = "",
     agent_text: str = "",
+    explicit_kpis: dict | None = None,
     analyst: dict | None = None,
     most_recent_period: str | None = None,
     has_stale_data: bool = False,
@@ -429,6 +485,7 @@ def compute_ticker_metrics(
         revenue_ttm=revenue_ttm,
         revenue_growth_yoy=revenue_growth_yoy,
         fcf_margin_ttm=fcf_margin_ttm,
+        explicit_kpis=explicit_kpis,
     )
     # If no explicit ARR from text, approximate from latest FCF/revenue? No,
     # the engine's _extract_saas_kpis already falls back to quarterly/TTM revenue.

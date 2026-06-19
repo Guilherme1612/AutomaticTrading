@@ -257,6 +257,71 @@ def test_extract_saas_kpis_arr_fallback_to_revenue_ttm():
     assert "TTM revenue" in " ".join(kpis.notes)
 
 
+# ── explicit_kpis (EDGAR narrative override) ─────────────────────────────────
+
+
+def test_explicit_kpis_override_regex_and_mark_not_from_agent():
+    # Regex would find NRR 118% in evidence text; explicit NRR must win and be
+    # flagged as a primary filing disclosure (from_agent=False) with a note.
+    explicit = {
+        "nrr_pct": 124.0,
+        "grr_pct": 91.0,
+        "arr_usd": 1_500_000_000.0,
+        "rpo_usd": 900_000_000.0,
+        "provenance": {
+            "nrr": {"form": "6-K", "filed": "2026-05-12"},
+            "arr": {"form": "6-K", "filed": "2026-05-12"},
+        },
+    }
+    text = "NRR is 118%. ARR grew to $1.2B."
+    kpis = compute_ticker_metrics("EEE", evidence_text=text, explicit_kpis=explicit).saas_kpis
+    assert kpis.nrr_pct == 124.0            # explicit overrides regex (118)
+    assert kpis.grr_pct == 91.0
+    assert kpis.arr_usd == 1_500_000_000.0   # explicit overrides regex (1.2B)
+    assert kpis.rpo_usd == 900_000_000.0
+    assert not kpis.nrr_from_agent
+    assert not kpis.grr_from_agent
+    assert not kpis.arr_from_agent
+    assert not kpis.rpo_from_agent
+    assert not kpis.arr_is_approximation     # explicit ARR is exact, not approx
+    notes = " ".join(kpis.notes)
+    assert "NRR 124.0% from EDGAR 6-K filed 2026-05-12" in notes
+    assert "ARR $1.50B from EDGAR 6-K filed 2026-05-12" in notes
+
+
+def test_explicit_kpis_none_fields_leave_regex_intact():
+    # Explicit provides only NRR; the other fields come from the regex scan.
+    explicit = {"nrr_pct": 130.0, "provenance": {"nrr": {"form": "10-K", "filed": "2025-12-31"}}}
+    text = "NRR is 118%. ARR grew to $1.2B."
+    kpis = compute_ticker_metrics("FFF", evidence_text=text, explicit_kpis=explicit).saas_kpis
+    assert kpis.nrr_pct == 130.0            # explicit
+    assert kpis.arr_usd == 1_200_000_000.0   # regex (not overridden)
+    assert kpis.arr_from_agent is False      # found in evidence text
+    assert kpis.grr_pct is None
+
+
+def test_explicit_arr_overrides_ttm_revenue_approximation():
+    # Without explicit ARR, revenue_ttm would approximate ARR and set the flag.
+    # With explicit ARR, the approximation must NOT be used and the flag cleared.
+    explicit = {"arr_usd": 1_500_000_000.0, "provenance": {"arr": {"form": "20-F", "filed": "2025-03-15"}}}
+    kpis = compute_ticker_metrics("GGG", revenue_ttm=400_000_000.0, explicit_kpis=explicit).saas_kpis
+    assert kpis.arr_usd == 1_500_000_000.0
+    assert not kpis.arr_is_approximation
+    assert not any("TTM revenue" in n for n in kpis.notes)
+
+
+def test_explicit_kpis_empty_or_none_does_nothing():
+    # Passing None or an all-None dict must behave like the regex-only path.
+    text = "NRR is 118%."
+    base = compute_ticker_metrics("HHH", evidence_text=text).saas_kpis
+    none_arg = compute_ticker_metrics("HHH", evidence_text=text, explicit_kpis=None).saas_kpis
+    empty = compute_ticker_metrics(
+        "HHH", evidence_text=text, explicit_kpis={"nrr_pct": None}
+    ).saas_kpis
+    assert none_arg.nrr_pct == base.nrr_pct == empty.nrr_pct == 118.0
+    assert none_arg.nrr_from_agent == base.nrr_from_agent == empty.nrr_from_agent
+
+
 # ── Rule of 40 and passthroughs ───────────────────────────────────────────────
 
 

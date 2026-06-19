@@ -57,6 +57,7 @@ _SOURCE_CRITICALITY: dict[DataSource, CriticalityLevel] = {
     DataSource.FUNDAMENTALS: CriticalityLevel.IMPORTANT,
     DataSource.TECHNICAL: CriticalityLevel.IMPORTANT,
     DataSource.YAHOO: CriticalityLevel.IMPORTANT,
+    DataSource.EDGAR_KPI: CriticalityLevel.NICE_TO_HAVE,  # KPI miss never marks stale
 }
 
 # Staleness budgets in seconds (mirrors config/source_criticality.toml)
@@ -76,6 +77,7 @@ _STALENESS_BUDGETS: dict[str, tuple[CriticalityLevel, int]] = {
     "fundamentals": (CriticalityLevel.IMPORTANT, 86400),
     "technical": (CriticalityLevel.IMPORTANT, 300),
     "yahoo": (CriticalityLevel.IMPORTANT, 3600),
+    "edgar_kpi": (CriticalityLevel.NICE_TO_HAVE, 86400 * 7),  # KPIs change slowly; weekly ok
 }
 
 # ---------------------------------------------------------------------------
@@ -202,7 +204,11 @@ def _get_cik_for_ticker(ticker: str) -> str:
     In production this would look up a ticker-to-CIK mapping table.
     For now returns a placeholder that the EDGAR source can handle.
     """
-    # Common ticker -> CIK mapping (covers default PMACS universe + common additions)
+    # Common ticker -> CIK mapping (covers default PMACS universe + common additions).
+    # CIKs verified against the SEC authoritative ticker map
+    # (https://www.sec.gov/files/company_tickers_exchange.json) on 2026-06-18 — a prior
+    # version of this map held wrong CIKs for ~14 tickers, which caused EDGAR to fetch the
+    # wrong company's filings. Values below are the authoritative ones.
     _TICKER_CIK: dict[str, str] = {
         # Big Tech
         "AAPL": "0000320193",
@@ -215,20 +221,21 @@ def _get_cik_for_ticker(ticker: str) -> str:
         "TSLA": "0001318605",
         # PMACS default universe
         "PLTR": "0001321655",
-        "NET": "0001651308",
+        "NET": "0001477333",
         "MELI": "0001099590",
-        "CELH": "0001370109",
-        "INMD": "0001697805",
+        "CELH": "0001341766",
+        "INMD": "0001742692",
         "CRWD": "0001535527",
-        "OUST": "0001631574",
-        "NU": "0001807864",
-        "HIMS": "0001764925",
-        "NBIS": "0001709011",
-        "ONDS": "0001705843",
-        "TEM": "0001967649",
-        "ZETA": "0001820175",
+        "OUST": "0001816581",
+        "NU": "0001691493",
+        "HIMS": "0001773751",
+        "NBIS": "0001513845",
+        "ONDS": "0001646188",
+        "TEM": "0001717115",
+        "ZETA": "0001851003",
         "PANW": "0001327567",
-        "KOD": "0001799208",
+        "KOD": "0001468748",
+        "DLO": "0001846832",
         # Common additions
         "JNJ": "0000200406",
         "UNH": "0000731766",
@@ -243,10 +250,10 @@ def _get_cik_for_ticker(ticker: str) -> str:
         "CRM": "0001108524",
         "NOW": "0001373715",
         "SNOW": "0001640147",
-        "DDOG": "0001660134",
+        "DDOG": "0001561550",
         "ZS": "0001713683",
         "OKTA": "0001660134",
-        "TWLO": "0001447251",
+        "TWLO": "0001447669",
     }
     return _TICKER_CIK.get(ticker, "0000000000")
 
@@ -299,6 +306,24 @@ def _fetch_edgar(ticker: str, gw: DataGateway, key: str, cid: str) -> EvidencePa
     from pmacs.data.sources.edgar import fetch as fetch_edgar
     cik = _get_cik_for_ticker(ticker)
     return fetch_edgar(cik, ticker, gw, cycle_id=cid)
+
+
+def _fetch_edgar_kpi(ticker: str, gw: DataGateway, key: str, cid: str) -> EvidencePacket:
+    """Best-effort SaaS-KPI extraction from EDGAR filing narrative (no API key).
+
+    NICE_TO_HAVE: a KPI miss or fetch failure must never mark data stale, so this
+    returns an empty packet on any error rather than raising.
+    """
+    from pmacs.data.sources.edgar_kpi import fetch as fetch_kpi
+    cik = _get_cik_for_ticker(ticker)
+    try:
+        return fetch_kpi(cik, ticker, gw, cycle_id=cid)
+    except Exception as exc:  # pragma: no cover - network dependent
+        log_debug("DATA_UNAVAILABLE", payload={"source": "edgar_kpi", "ticker": ticker,
+                  "error": str(exc)[:200]}, level="INFO", error_code="DATA_UNAVAILABLE",
+                  cycle_id=cid, msg=f"edgar_kpi fetch failed for {ticker}: {exc}")
+        return EvidencePacket(ticker=ticker, cycle_id=cid, evidence=[],
+                              fetched_at=datetime.now(timezone.utc), source_count=0)
 
 
 def _fetch_form4(ticker: str, gw: DataGateway, key: str, cid: str) -> EvidencePacket:
@@ -411,6 +436,7 @@ _SOURCE_FETCHERS: list[tuple[DataSource, Any]] = [
     (DataSource.OPENFDA, _fetch_openfda),
     (DataSource.TECHNICAL, _fetch_technical),
     (DataSource.YAHOO, _fetch_yahoo),
+    (DataSource.EDGAR_KPI, _fetch_edgar_kpi),
 ]
 
 

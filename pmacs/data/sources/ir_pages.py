@@ -1,22 +1,9 @@
 """Investor relations pages source (IMPORTANT)."""
 from __future__ import annotations
-import re
 from datetime import datetime, timezone
 from pmacs.data.gateway import DataGateway
+from pmacs.data.sources._html import strip_html as _strip_html
 from pmacs.schemas.data import DataSource, Evidence, EvidencePacket, EvidenceType
-
-
-def _strip_html(html: str) -> str:
-    """Strip HTML tags and collapse whitespace — returns plain text."""
-    text = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
 
 
 def fetch_ir_page(ticker: str, url: str, gateway: DataGateway, cycle_id: str = "") -> EvidencePacket:

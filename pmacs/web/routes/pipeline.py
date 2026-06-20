@@ -2763,6 +2763,47 @@ async def cycle_start(req: CycleStartRequest):
         return JSONResponse({"ok": False, "error": "Failed to start cycle"}, status_code=503)
 
 
+@router.post("/api/cycle/orchestrator")
+async def cycle_orchestrator(req: CycleStartRequest):
+    """Trigger a full cycle through the spec-canonical orchestrator (Source.md §15).
+
+    This is the wave-2 path (Agents.md §11b-§11d, §16.9): runs 7 personas + bull/bear
+    advocates + cross-persona auditor, applies auditor arbitration weight caps, computes
+    reverse-DCF + scenario-weighted expected price, and persists a structured memo (with
+    bull_bear_debate / reverse_dcf / scenario_price / what_would_change_my_mind sections)
+    to the memos table that /memo/{ticker} renders. The orchestrator opens and closes its
+    own cycle row and streams SSE to the same /events dashboard as the demo cycle.
+
+    Runs synchronously in a worker thread (the orchestrator is blocking); returns
+    immediately. req.tickers is ignored on this path — the orchestrator composes its own
+    queue from the universe (Architecture.md §12). Operator-confirmed: consumes LLM/API
+    credits and may place paper trades.
+    """
+    import asyncio
+    from pathlib import Path
+
+    cfg = get_config()
+    try:
+        from pmacs.nervous.api import _publisher
+        from pmacs.nervous.orchestrator import CycleOrchestrator
+
+        lock_path = str(Path(cfg.sqlite_path).parent / "cycle_orchestrator.lock")
+        orch = CycleOrchestrator(
+            db_path=Path(cfg.sqlite_path),
+            audit_path=Path(cfg.audit_path) if getattr(cfg, "audit_path", None) else None,
+            sse_publisher=_publisher,
+            config={"lock_path": lock_path},
+        )
+        trigger = (req.trigger if req.trigger else "OPERATOR")
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, lambda: orch.run_cycle(trigger))
+        return JSONResponse({"ok": True, "message": "Orchestrator cycle started (wave-2 path)"})
+    except Exception as exc:
+        import logging
+        logging.getLogger("pmacs.web").error("Orchestrator cycle start failed: %s", exc, exc_info=True)
+        return JSONResponse({"ok": False, "error": "Failed to start orchestrator cycle"}, status_code=503)
+
+
 class SoloRunRequest(BaseModel):
     ticker: str
 
@@ -2880,31 +2921,3 @@ async def force_exit(req: ForceExitRequest):
         import logging
         logging.getLogger("pmacs.web").error("Force exit failed: %s", exc, exc_info=True)
         return JSONResponse({"ok": False, "error": "Force exit failed"}, status_code=500)
-
-
-@router.get("/api/cycle/compare")
-async def cycle_compare(request: Request):
-    """Compare two cycles side-by-side (Source.md §15.9)."""
-    cycle_a = request.query_params.get("cycle_a", "")
-    cycle_b = request.query_params.get("cycle_b", "")
-    if not cycle_a or not cycle_b:
-        return JSONResponse({"ok": False, "error": "cycle_a and cycle_b required"}, status_code=400)
-
-    cfg = get_config()
-    try:
-        db = data_layer.get_readonly_db(cfg.sqlite_path)
-        try:
-            decisions_a = data_layer.get_decisions_for_cycle(db, cycle_a)
-            decisions_b = data_layer.get_decisions_for_cycle(db, cycle_b)
-        finally:
-            db.close()
-
-        return JSONResponse({
-            "ok": True,
-            "cycle_a": {"id": cycle_a, "decisions": decisions_a},
-            "cycle_b": {"id": cycle_b, "decisions": decisions_b},
-        })
-    except Exception as exc:
-        import logging
-        logging.getLogger("pmacs.web").error("Cycle compare failed: %s", exc, exc_info=True)
-        return JSONResponse({"ok": False, "error": "Failed to compare cycles"}, status_code=500)

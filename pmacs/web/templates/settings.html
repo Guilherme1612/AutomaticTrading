@@ -667,6 +667,42 @@ var localProviders = {{ inference.local_providers | tojson }};
 var cloudProviders = {{ inference.cloud_providers | tojson }};
 var allProviders = localProviders.concat(cloudProviders);
 
+// Sync a single provider row's "Key set"/"No key" badge + model text from allProviders,
+// and refresh the API-key field placeholder for the currently-selected provider.
+// The backend already persists model + api_key per-provider (model_registry.json +
+// OS keychain); this only keeps the UI in sync across provider switches / saves so
+// the operator sees what's already stored instead of an empty/stale field.
+function syncProviderUI(providerId) {
+    var p = allProviders.find(function(x) { return x.id === providerId; });
+    if (!p) return;
+    // Model input(s) — local + cloud inputs may both exist
+    var modelInput = document.getElementById('inference-model-input');
+    var cloudModelInput = document.getElementById('inference-cloud-model-input');
+    if (modelInput) modelInput.value = p.model || '';
+    if (cloudModelInput) cloudModelInput.value = p.model || '';
+    // API key field — never prefill the secret, only signal whether one is saved
+    var keyInput = document.getElementById('inference-api-key-input');
+    if (keyInput) {
+        keyInput.value = '';
+        keyInput.placeholder = p.has_api_key ? '(configured — enter new key to replace)' : 'Enter API key';
+    }
+    // Per-row badge + model text in the provider list
+    var radio = document.querySelector('input[name="inference-provider"][value="' + providerId + '"]');
+    if (radio) {
+        var label = radio.closest('label');
+        if (label) {
+            var badge = label.querySelector(':scope > span');
+            if (badge) {
+                badge.textContent = p.has_api_key ? 'Key set' : 'No key';
+                badge.className = 'text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 ' +
+                    (p.has_api_key ? 'bg-positive-soft text-positive' : 'bg-negative-soft text-negative');
+            }
+            var modelSpan = label.querySelector('span.ml-2');
+            if (modelSpan) modelSpan.textContent = p.model || 'No model';
+        }
+    }
+}
+
 function setInferenceMode(mode) {
     currentMode = mode;
     var localPanel = document.getElementById('inference-local-panel');
@@ -721,14 +757,8 @@ function switchProvider(providerId) {
                     label.className = label.className.replace(/border-accent bg-accent-soft/, 'border-border hover:border-border-strong hover:bg-surface-sunken/30');
                 }
             });
-            // Update model input
-            var prov = allProviders.find(function(p) { return p.id === providerId; });
-            if (prov) {
-                var modelInput = document.getElementById('inference-model-input');
-                var cloudModelInput = document.getElementById('inference-cloud-model-input');
-                if (modelInput) modelInput.value = prov.model || '';
-                if (cloudModelInput) cloudModelInput.value = prov.model || '';
-            }
+            // Reload the selected provider's saved model + key indicator from allProviders
+            syncProviderUI(providerId);
             showToast('Switched to ' + providerId, 'success');
         } else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
     }).catch(function(err) { showToast('Failed', 'error'); });
@@ -744,8 +774,10 @@ function saveApiKey() {
     }).then(function(r) { return r.json(); }).then(function(data) {
         if (data.ok) {
             showToast('API key saved', 'success');
-            document.getElementById('inference-api-key-input').value = '';
-            document.getElementById('inference-api-key-input').placeholder = '(configured)';
+            // Record the saved key in allProviders so it survives subsequent provider switches
+            var p = allProviders.find(function(x) { return x.id === currentProvider; });
+            if (p) p.has_api_key = true;
+            syncProviderUI(currentProvider);
         } else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
     }).catch(function(err) { showToast('Save failed', 'error'); });
 }
@@ -762,8 +794,13 @@ function saveModel() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({provider: currentProvider, model: model})
     }).then(function(r) { return r.json(); }).then(function(data) {
-        if (data.ok) showToast('Model updated', 'success');
-        else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
+        if (data.ok) {
+            // Record the saved model in allProviders so it survives subsequent provider switches
+            var p = allProviders.find(function(x) { return x.id === currentProvider; });
+            if (p) p.model = model;
+            syncProviderUI(currentProvider);
+            showToast('Model updated', 'success');
+        } else showToast('Failed: ' + (data.error || 'Unknown'), 'error');
     }).catch(function(err) { showToast('Save failed', 'error'); });
 }
 

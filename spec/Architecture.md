@@ -56,7 +56,7 @@ When this file references something defined elsewhere, the pointer is explicit.
 | UI page specifications | `Source.md` | §14-§20 |
 | Conviction formula | `Source.md` | §7.2 (operator), §9.2 (impl) |
 | Per-persona prompts and contracts | `Agents.md` | §4-§13 |
-| The 18 Failure Diagnostic Engine taxonomy types | `Agents.md` | §15 |
+| The 18 outcome + 5 reasoning-flaw FDE taxonomy types | `Agents.md` | §15 |
 | Crucible adversarial loop (inner state machine) | `Agents.md` | §16 |
 | Mutation candidate generation rules (deterministic) | `Agents.md` | §17 |
 | Episodic context injection (prompt-level mechanics) | `Agents.md` | §18 |
@@ -175,7 +175,7 @@ This is structural, not procedural. The mutation process has no write access to 
 
 ### 1.14 Configuration is two-tier: code-versioned and runtime-editable
 
-- **Code-versioned** (requires git commit + restart): arbitration formula, conviction formula, audit log format, DB schemas, anti-pattern thresholds, the 18 failure taxonomy types, cycle order sequence.
+- **Code-versioned** (requires git commit + restart): arbitration formula, conviction formula, audit log format, DB schemas, anti-pattern thresholds, the 18+5 failure taxonomy types, cycle order sequence.
 - **Runtime-editable** (Settings page, often operator-confirmed; writes use flock-based file locking to prevent concurrent write corruption): risk thresholds, Crucible time budget, mutation enable/disable, persona enable/disable, queue priorities, broker credentials.
 
 CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
@@ -1747,6 +1747,8 @@ class Arbitrated(BaseModel):
 
 **Combination rule:** weighted average of probability vectors, weights = `1 / (rolling_brier + WEIGHT_EPSILON)` for mature sources. Renormalize to sum 1.0.
 
+**Wave-2 roster extension (debate + audit):** Two advocate personas (BullAdvocate, BearAdvocate — `Agents.md §11b/§11c`) enter the pool as normal `DirectionalProbability` sources. They start **immature** (`historical_n=0`, `rolling_brier=0.667`) and are Brier-inverse-dampened until calibrated — no special multiplier is applied to them. The CrossPersonaAuditor (`Agents.md §11d`) does **not** emit a `DirectionalProbability` and never enters the pool; instead the orchestrator applies each `AuditorFlag` as a per-cycle `weight_multiplier` cap of `(1 - flag.severity)` on the offending persona's `ArbitrationSignal` *before* calling `arbitrate()`. The arbitration engine itself is unchanged — it already consumes `ArbitrationSignal.weight_multiplier` (default 1.0). When no auditor flags are present, arbitration results are identical to the pre-wave-2 baseline (the auditor is strictly additive).
+
 ### 9.2 ConvictionEngine
 
 Implements `Source.md §7.2` operator-facing conviction.
@@ -1797,6 +1799,8 @@ def verdict_tier(conviction: float, is_active_holding: bool, thesis_valid: bool)
     # conviction < 0.3 OR negative
     return "SKIP"
 ```
+
+**Unchanged by the wave-2 debate/audit layer.** The BullAdvocate/BearAdvocate personas and the CrossPersonaAuditor (`Agents.md §11b-§11d`) do **not** add a multiplier to this formula. Debate pressure enters as two extra arbitration voters (dampened until calibrated); auditor pressure enters as arbitration weight caps and Crucible-brief enrichment (`§9.1`, `Agents.md §16.4`). `compute_conviction`'s signature and output for any given `(Arbitrated, crucible_severity, ev_multiple, is_bootstrap)` are identical before and after wave-2 — the new layer only changes the *inputs* (which personas are in `Arbitrated`, what `crucible_severity` the enriched brief produces), never the function. This preserves Five Non-Negotiable #2 (LLMs never math) and #3 (deterministic arbitration).
 
 ### 9.3 SizingEngine
 
@@ -1859,9 +1863,19 @@ Standard implementations in `pmacs/engines/*.py`. Cross-field validation always 
 
 Detailed signatures and invariants are documented in their module docstrings.
 
+### 9.4b ReverseDcfEngine, ScenarioPriceEngine (deterministic valuation)
+
+Two pure-Python, LLM-free valuation engines — peers of `ticker_metrics.py` (`Source.md §16.8`). Neither enters Arbitration (neither is a persona); neither amends the conviction formula. They provide the deterministic valuation anchor for the bull/bear debate and the memo.
+
+**ReverseDcfEngine** (`pmacs/engines/reverse_dcf.py`): solves the growth rate the market is *implying* from the current price, then compares it to the GrowthHunter's estimated growth. Inputs are stored `EvidencePacket` primitives (price, shares, `annual_freeCashFlow` + `fcf_ttm_usd`, growth assumption from `GrowthHunterOutput.revenue_yoy_pct` or yfinance `revenueGrowthTTMYoy`) via the same `_extract` pattern as `pmacs/web/routes/ticker_data.py`. Gordon-style: `price = fcf_ttm * (1 + g) / (discount - g)` → solve for `g` = implied growth. Output `ReverseDcfResult`: `implied_growth_pct`, `assumed_growth_pct`, `growth_gap_pct`, `fair_value_usd`, `current_price_usd`, `valuation_lean` (BULLISH if implied < assumed — market is under-pricing growth; BEARISH if implied > assumed; NEUTRAL otherwise), `sensitivity`. No LLM, no network (Five Non-Negotiable #2/#4). When primitives are missing, returns a `NEUTRAL` result with a notes field — never fabricates.
+
+**ScenarioPriceEngine** (`pmacs/engines/scenario_price.py`): consumes the `Arbitrated` probability vector plus the reverse-DCF fair value / valuation range and produces a probability-weighted expected price: `E[price] = p_up * bull_price + p_flat * base_price + p_down * bear_price`. Output `ScenarioPriceResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd`. Feeds `MemoWriterOutput` only — it does **not** replace `compute_ev`'s `ev_multiple` (which is a trade-expectancy ratio, `§9.4 PricingEngine`, not a valuation multiple). The two are kept distinct and both surface in the memo.
+
+Both engines require `cycle_id` and log to both audit and debug streams (`§1.8`, `§1.11`).
+
 ### 9.5 FailureDiagnosticEngine
 
-The FDE is critical to the flywheel. Runs on every terminal-state Holding. Classifies into 1 of 18 taxonomy types (specified in `Agents.md §15`). Writes `FailedAssumption` node to KuzuDB. The Mutation Engine consumes these to target prompt/threshold mutations.
+The FDE is critical to the flywheel. Runs on every terminal-state Holding. Classifies into 1 of 18 outcome taxonomy types (specified in `Agents.md §15`). The 5 auditor-only reasoning-flaw types (`§15.4`) are emitted by the CrossPersonaAuditor at cycle time, not by `classify()`. Both write `FailedAssumption` nodes to KuzuDB. The Mutation Engine consumes these to target prompt/threshold mutations.
 
 ```python
 # pmacs/engines/failure_diagnostic.py
@@ -1871,7 +1885,8 @@ from pmacs.schemas.contracts import Holding
 def classify_and_record(holding: Holding, cycle_id: str) -> FailureClassification:
     """
     Runs on every terminal-state Holding (called from state_machine.transition).
-    Classifies into 1 of 18 taxonomy types (Agents.md §15).
+    Classifies into 1 of 18 outcome taxonomy types (Agents.md §15). Auditor-only
+    reasoning-flaw types (§15.4) are written by the CrossPersonaAuditor, not here.
     Writes FailedAssumption node to KuzuDB.
     """
     classification = _classify(holding)
@@ -2343,10 +2358,19 @@ d. Each persona output goes through:
    - On any failure: log debug, retry up to 2x, then ABORT_LLM
 e. Wait for all personas to complete or timeout (Phase 1 budget: 270s)
 f. If timeout: state transition to PHASE1_TIMEOUT then ABORTED_LLM
-g. Else: proceed to Arbitration
+g. Wave-2 dispatch (BullAdvocate + BearAdvocate + CrossPersonaAuditor) in parallel,
+   each receiving the FROZEN wave-1 persona outputs as peer context (§14.4):
+   - advocates go through the same 3-layer contract (GBNF → Pydantic → sanity) and emit
+     a DirectionalProbability each
+   - the auditor emits AuditorFlags (no probabilities)
+   - wave-2 budget: `debate_wave_seconds_per_symbol` (default 180s); on timeout the
+     wave-2 agents are skipped and the cycle proceeds with wave-1 only (graceful degrade)
+h. Auditor flags applied: per-cycle `weight_multiplier` cap on flagged personas' signals;
+   flags stashed for Crucible-brief injection (§16.4) and FDE write (§15.4)
+i. Else: proceed to Arbitration (wave-1 7 DPs + 2 advocate DPs, with auditor weight caps)
 ```
 
-The persona dispatch is parallel within slots and concurrent across slots. Total wall-clock ~30s for the longest-running persona path × 3 slots = ~90s typical, ~270s worst-case.
+The persona dispatch is parallel within slots and concurrent across slots. Wave-1 wall-clock ~30s for the longest-running persona path × 3 slots = ~90s typical, ~270s worst-case. Wave-2 adds one sequential stage (~90-180s) because the advocates/auditor depend on wave-1 outputs; it cannot overlap wave-1. Total per-symbol Phase 1 budget is bumped accordingly in `config/resources.toml` (`debate_wave_seconds_per_symbol` + `daily_llm_seconds_total`). Wave-2 is strictly additive: if it times out or all three agents abort, the cycle falls back to the pre-wave-2 path (7 personas → arbitrate → crucible) with no behavior change.
 
 ---
 
@@ -3046,7 +3070,7 @@ This file (`Architecture.md`) implements those concepts.
 
 When you touch any LLM-producing code path:
 - Per-persona prompts and structured-output contracts (§4-§13)
-- The 18 Failure Diagnostic Engine taxonomy types (§15)
+- The 18 outcome + 5 reasoning-flaw FDE taxonomy types (§15)
 - Crucible adversarial loop (§16)
 - Mutation Engine candidate generation rules (§17)
 - Episodic context injection mechanics (§18)

@@ -147,6 +147,9 @@ async def memo_page(request: Request, ticker: str):
         ticker_total = len(memo_tickers)
 
         if not holding and not ticker_decisions and not latest_memo:
+            # Friendly "not yet analyzed" state, not a system error.
+            # This happens when the ticker exists in the universe but no cycle
+            # has produced a decision yet.
             return templates.TemplateResponse(
                 request=request,
                 name="memo.html",
@@ -154,9 +157,7 @@ async def memo_page(request: Request, ticker: str):
                     "page": "memo",
                     "mode": current_mode,
                     "ticker": ticker,
-                    "error": data_layer.build_error_context(
-                        "memo", Exception(f"No data found for {ticker}")
-                    ),
+                    "not_analyzed": True,
                 },
             )
 

@@ -311,6 +311,41 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 ---
 
+### Phase 7b: Adversarial debate + cross-persona audit + valuation triangulation
+
+**Goal:** A second wave of agents runs after the 7 analysis personas and before Arbitration: BullAdvocate + BearAdvocate (enter Arbitration as dampened voters) and CrossPersonaAuditor (emits flags that cap arbitration weights, enrich the Crucible brief, and feed the FDE). Two deterministic valuation engines (reverse-DCF, scenario-weighted expected price) give the memo a valuation-grounded bull/bear debate and pre-registered falsification conditions. **The conviction formula is unchanged** — debate pressure enters as voters + flags, not a conviction multiplier.
+
+**What gets built:**
+- `pmacs/schemas/agents.py` — `PersonaName` enum extended (`BULL_ADVOCATE`, `BEAR_ADVOCATE`, `CROSS_PERSONA_AUDITOR`)
+- `pmacs/schemas/personas.py` — `BullAdvocateOutput`, `BearAdvocateOutput`, `AuditorOutput`, `AuditorFlag` (`Agents.md §11b-§11d`)
+- `pmacs/schemas/failure.py` — `FailureTaxonomy` extended with 5 auditor-only reasoning-flaw types (`Agents.md §15.4`)
+- `pmacs/schemas/reverse_dcf.py` — `ReverseDcfResult`; `pmacs/schemas/scenario_price.py` — `ScenarioPriceResult`
+- `pmacs/engines/reverse_dcf.py` + `pmacs/engines/scenario_price.py` — deterministic, LLM-free (`Architecture.md §9.4b`)
+- `pmacs/agents/{bull_advocate,bear_advocate,cross_persona_auditor}.py` + prompts + grammars + sanity + schemas_json (four-file contract, `CLAUDE.md`)
+- `pmacs/nervous/orchestrator.py` — wave-2 dispatch (step 13d5) between persona dispatch and Arbitration; auditor flags → `ArbitrationSignal.weight_multiplier` caps; `_rebuild_evidence_brief` injects `auditor_flag_summary`; flags → `FailedAssumption` (KuzuDB + SQLite `failure_classifications`); reverse-DCF + scenario-price called post-Arbitration, fed to MemoWriter
+- `pmacs/agents/memo_writer.py` + prompt + grammar + sanity + `schemas_json/memo_writer.json` + `pmacs/web/templates/memo.html` — `bull_bear_debate`, `what_would_change_my_mind`, `reverse_dcf`, `scenario_price` sections (`Source.md §16.9`)
+- `config/resources.toml` — `debate_wave_seconds_per_symbol`, `daily_llm_seconds_total` bump; `pmacs/config.py` typed fields
+- `tests/unit/test_reverse_dcf.py`, `tests/unit/test_scenario_price.py`, `tests/unit/test_auditor_flags.py`, `tests/unit/test_advocate_sanity.py`
+- `tests/integration/test_debate_pipeline.py` — full cycle with 9 personas + auditor
+
+**Dependencies:** Phase 7 (Crucible, conviction, MemoWriter, orchestrator step 13). Extends GSD Phase 3 (PMACS Phases 5-6 personas) + Phase 4 (Phase 7 pipeline).
+
+**Exit test:**
+1. `pytest tests/unit/test_reverse_dcf.py` — implied growth solves correctly from a known price; round-trip; `valuation_lean` correct for implied<assumed (BULLISH) and implied>assumed (BEARISH); missing primitives → NEUTRAL with notes (no fabrication)
+2. `pytest tests/unit/test_scenario_price.py` — `E[price] = p_up*bull + p_flat*base + p_down*bear` exactly; probs sum to 1
+3. `pytest tests/unit/test_auditor_flags.py` — `weight_multiplier = (1 - severity)` cap applied per flag; flags map to `FailedAssumption` with the auditor-allowed taxonomy set; auditor output has no probability fields
+4. `pytest tests/unit/test_advocate_sanity.py` — advocate probs sum to 1.0; `target_persona` is a real wave-1 persona; non-degenerate unless reasoning concedes
+5. **Regression (critical):** `pytest tests/unit/test_conviction.py` unchanged — `compute_conviction` signature and outputs identical for existing fixtures (proves conviction was not amended). Arbitration results identical to baseline when no auditor flags present.
+6. `pytest tests/integration/test_debate_pipeline.py` — one ticker through the full pipeline: 7 personas → wave-2 (advocates + auditor) → Arbitration (9 DPs + weight caps) → Crucible (auditor flags in brief) → Conviction → Memo. Audit trail shows wave-2 step, weight caps, flag injection, and the new memo sections.
+7. Wave-2 graceful degrade: when wave-2 times out, the cycle completes via the pre-wave-2 path (7 personas → arbitrate → crucible) with no behavior change.
+8. Live cycle on a current ticker (e.g. OUST): `/memo/{ticker}` shows the bull/bear debate, `what_would_change_my_mind`, and the reverse-DCF gap; conviction is identical to a baseline run with the new agents in simulation_mode (proves they don't leak into the math).
+
+**Duration estimate:** 6-9 days.
+
+**Backlog (deferred to later phases — documented, not built in 7b):** evidence-sufficiency gate; cross-source agreement matrix; stale-evidence decay weighting; dissent / missing-evidence / catalyst-timing personas; relative-value rank; SBC-adjusted EV/EBITDA & P/E; memo diffing across cycles; shadow bear-case memo.
+
+---
+
 ### Phase 8: Paper trading — Alpaca paper + sim ledger + wizard
 
 **Goal:** The system trades paper money. Alpaca paper API integration. The wizard works end-to-end. SHADOW + PAPER mode concurrent from first boot.
@@ -554,7 +589,6 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - Documentation: `docs/operator_runbook.md`
 - All empty states, loading states, error states per `Source.md §13.4`
 - Notification policy implementation (`Source.md §13.5`)
-- Cycle compare feature (`Source.md §15.9`)
 - "Copy for Claude Code" button on every debug event
 
 **Dependencies:** All previous phases.

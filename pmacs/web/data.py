@@ -1027,7 +1027,6 @@ PAGE_ERROR_CODES = {
     "cortex": "E_CORTEX_001",
     "settings": "E_SETTINGS_001",
     "debug": "E_DEBUG_001",
-    "compare": "E_COMPARE_001",
     "memo": "E_MEMO_001",
 }
 

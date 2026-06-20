@@ -6,6 +6,10 @@ Schemas for all 7 analysis personas + Crucible + MemoWriter:
   - Crucible (adversarial attacker)
   - MemoWriter (operator-facing memo synthesis)
 
+Wave-2 debate + audit personas (Agents.md §11b-§11d):
+  - BullAdvocate, BearAdvocate (emit DirectionalProbability; argue against consensus)
+  - CrossPersonaAuditor (emits AuditorFlags; never probabilities)
+
 Each persona produces a structured output parsed through Pydantic v2.
 All models include probability-sum validators and persona-specific invariants.
 """
@@ -15,6 +19,9 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from pmacs.schemas.agents import PersonaName
+from pmacs.schemas.failure import AUDITOR_ALLOWED_TAXONOMY, FailureTaxonomy
 
 
 def _coerce_optional_float(v: object) -> float | None:
@@ -566,6 +573,17 @@ class MemoWriterOutput(BaseModel):
     dissenting_personas: list[str] = Field(default_factory=list)
     dissent_summary: str | None = None
 
+    # ── Wave-2 enrichment (Agents.md §16.9) ─────────────────────────────────
+    # All optional with defaults so the pipeline's existing construction paths
+    # (memo_dict merge in pipeline.py, simulation) keep working unchanged.
+    # bull_bear_debate: {bull_case, bear_case, advocate_lean, reverse_dcf_gap}
+    # what_would_change_my_mind: pre-registered falsification triggers.
+    # reverse_dcf / scenario_price: serialized engine results for display.
+    bull_bear_debate: dict = Field(default_factory=dict)
+    what_would_change_my_mind: list[str] = Field(default_factory=list)
+    reverse_dcf: dict | None = None
+    scenario_price: dict | None = None
+
     # Human-readable fallback written alongside JSON
     raw_text: str | None = None
 
@@ -580,3 +598,165 @@ class MemoWriterOutput(BaseModel):
                 f"verdict_line must start with one of {valid}, got: '{v[:50]}'"
             )
         return v
+
+
+# ---------------------------------------------------------------------------
+# Wave-2 debate + audit personas (Agents.md §11b-§11d)
+# ---------------------------------------------------------------------------
+
+# Wave-1 personas that advocates/auditor may target/reference. The auditor's
+# flag.target_persona and the advocates' target_persona must be one of these.
+WAVE1_PERSONAS: frozenset[PersonaName] = frozenset({
+    PersonaName.MACRO_REGIME,
+    PersonaName.CATALYST_SUMMARIZER,
+    PersonaName.MOAT_ANALYST,
+    PersonaName.GROWTH_HUNTER,
+    PersonaName.INSIDER_ACTIVITY,
+    PersonaName.SHORT_INTEREST,
+    PersonaName.FORENSICS,
+})
+
+
+class BullAdvocateOutput(BaseModel):
+    """BullAdvocate persona output — argues the bull case against consensus.
+
+    spec_ref: Agents.md §11b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    target_persona: PersonaName  # the wave-1 persona this argument pushes against
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bear_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> BullAdvocateOutput:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
+        return self
+
+
+class BearAdvocateOutput(BaseModel):
+    """BearAdvocate persona output — argues the bear case against consensus.
+
+    spec_ref: Agents.md §11c
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    target_persona: PersonaName
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bull_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> BearAdvocateOutput:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
+        return self
+
+
+class AuditorFlag(BaseModel):
+    """A single reasoning-flaw flag emitted by the CrossPersonaAuditor.
+
+    spec_ref: Agents.md §11d.4 / §15.4
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    flag_type: Literal[
+        "CITATION_GAP",
+        "CONCLUSION_UNSUPPORTED",
+        "CONFLICTING_CONCLUSIONS",
+        "NUMBER_MISUSE",
+        "HALLUCINATED_EVIDENCE",
+    ]
+    target_persona: PersonaName  # the wave-1 persona the flag applies to
+    severity: float = Field(ge=0.0, le=1.0)
+    description: str = Field(max_length=400)
+    evidence_ids: list[str] = Field(default_factory=list)
+    taxonomy_mapping: FailureTaxonomy  # projection into FDE (must be auditor-allowed)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> AuditorFlag:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"flag target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        if self.taxonomy_mapping not in AUDITOR_ALLOWED_TAXONOMY:
+            raise ValueError(
+                f"taxonomy_mapping must be an auditor-allowed type (Agents.md §15.4), "
+                f"got {self.taxonomy_mapping}"
+            )
+        # Flag type and taxonomy should correspond (defense against a mismatched
+        # projection that would mislead the Mutation Engine).
+        expected = {
+            "CITATION_GAP": FailureTaxonomy.CITATION_GAP,
+            "CONCLUSION_UNSUPPORTED": FailureTaxonomy.CONCLUSION_UNSUPPORTED,
+            "CONFLICTING_CONCLUSIONS": FailureTaxonomy.CONFLICTING_CONCLUSIONS,
+            "NUMBER_MISUSE": FailureTaxonomy.NUMBER_MISUSE,
+            "HALLUCINATED_EVIDENCE": FailureTaxonomy.HALLUCINATED_EVIDENCE,
+        }
+        if expected[self.flag_type] != self.taxonomy_mapping:
+            raise ValueError(
+                f"taxonomy_mapping {self.taxonomy_mapping} does not match flag_type {self.flag_type}"
+            )
+        return self
+
+
+class AuditorOutput(BaseModel):
+    """CrossPersonaAuditor output — structured flags, NO probabilities.
+
+    The auditor never touches the math (Five Non-Negotiable #2). The orchestrator
+    consumes flags deterministically: weight caps, Crucible-brief injection, FDE write.
+
+    spec_ref: Agents.md §11d
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    flags: list[AuditorFlag] = Field(max_length=20, default_factory=list)
+    summary: str = Field(max_length=600, default="")

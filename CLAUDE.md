@@ -14,7 +14,7 @@ The canonical specification lives in `spec/`. **These files are the source of tr
 
 2. **`spec/Architecture.md`** — Read second. Tells you HOW it's built. 7-layer architecture, process topology, IPC, storage schemas (5 stores), deterministic engines, cycle orchestration sequence, kill switch, Mutation Engine process, anti-patterns. **If you're writing code, the answer is here.**
 
-3. **`spec/Agents.md`** — Read when touching LLM code. Per-persona prompts, GBNF grammars, Pydantic output schemas, sanity validators, the Crucible adversarial loop, Failure Diagnostic Engine (18 taxonomy types), Mutation Engine candidate generation rules, episodic context injection, prompt-injection defense, hallucination defense. **If you're working with LLM outputs, the answer is here.**
+3. **`spec/Agents.md`** — Read when touching LLM code. Per-persona prompts, GBNF grammars, Pydantic output schemas, sanity validators, the Crucible adversarial loop, Failure Diagnostic Engine (18 outcome + 5 auditor reasoning-flaw taxonomy types), Mutation Engine candidate generation rules, episodic context injection, prompt-injection defense, hallucination defense. **If you're working with LLM outputs, the answer is here.**
 
 4. **`spec/Phases.md`** — Read to decide what to build next. 15 numbered build phases with explicit exit tests, file-by-file dependency graph, mode promotion/demotion gates with numerical thresholds, risk checkpoints. **If you're unsure whether to start a task, check here first.**
 
@@ -84,7 +84,7 @@ PMACS has 15 build phases defined in `spec/Phases.md §2`. Map them to GSD phase
 | Phase 3 | Phase 5-6 (Personas) | All 7 analysis personas operational |
 | Phase 4 | Phase 7-8 (Pipeline + Paper) | Full pipeline, paper trading, wizard — **PAPER-READY** |
 | Phase 5 | Phase 9-10 (Monitoring + Dashboard) | Stop-loss, re-eval, all 7 UI pages |
-| Phase 6 | Phase 11-12 (Calibration + FDE) | Flywheel passive components, 18 taxonomy types |
+| Phase 6 | Phase 11-12 (Calibration + FDE) | Flywheel passive components, 18 outcome + 5 reasoning-flaw taxonomy types |
 | Phase 7 | Phase 13-14 (Episodic + Mutation) | Active flywheel — **FLYWHEEL-READY** |
 | Phase 8 | Phase 15 (Polish) | Production-quality — **LIVE-READY** |
 

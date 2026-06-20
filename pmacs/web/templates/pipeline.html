@@ -65,8 +65,8 @@
             {% endif %}
             <input type="text" placeholder="Filter..."
                    data-page-search
-                   class="px-3 py-1.5 text-xs bg-surface-elevated/70 border border-border rounded-lg text-text-primary placeholder:text-text-muted/80 focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors"
-                   class="px-3 py-1.5 text-xs border border-border rounded-xl focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none w-28 transition-colors bg-surface-elevated/50">
+                   aria-label="Filter tickers"
+                   class="px-3 py-1.5 text-xs w-28 bg-surface-elevated/70 border border-border rounded-lg text-text-primary placeholder:text-text-muted/80 focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
             <select id="verdict-filter-select" aria-label="Filter by verdict" class="px-3 py-1.5 text-xs border border-border rounded-xl bg-surface-elevated/50 focus:border-accent focus:ring-2 focus:ring-accent-ring outline-none transition-colors">
                 <option>All Verdicts</option>
                 <option>STRONG_BUY</option>
@@ -96,13 +96,13 @@
         </div>
         <div class="card card-elevated rounded-xl p-3 text-center">
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Avg Conviction</p>
-            <p class="text-xl font-bold font-mono {{ 'text-positive' if ns_stats.avg_conv >= 0.3 else 'text-warning' if ns_stats.avg_conv >= 0.1 else 'text-text-muted' }}">{{ "%.0f"|format(ns_stats.avg_conv * 100) }}%</p>
+            <p class="text-xl font-bold font-mono {{ 'text-positive' if ns_stats.avg_conv >= 0.3 else 'text-warning' if ns_stats.avg_conv >= 0.1 else 'text-text-muted' }}">{% if ns_stats.avg_conv > 0 and ns_stats.avg_conv < 0.005 %}<1%{% else %}{{ "%.1f"|format(ns_stats.avg_conv * 100) }}%{% endif %}</p>
             <p class="text-[10px] text-text-muted">across all</p>
         </div>
         <div class="card card-elevated rounded-xl p-3 text-center">
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Top Pick</p>
             <p class="text-xl font-bold text-accent font-mono">{{ ns_stats.best_ticker or '—' }}</p>
-            <p class="text-[10px] text-text-muted">{{ "%.0f"|format(ns_stats.best_conv * 100) }}% conv</p>
+            <p class="text-[10px] text-text-muted">{% if ns_stats.best_conv > 0 and ns_stats.best_conv < 0.005 %}<1%{% else %}{{ "%.1f"|format(ns_stats.best_conv * 100) }}%{% endif %} conv</p>
         </div>
         <div class="card card-elevated rounded-xl p-3 text-center">
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Best Upside</p>

@@ -63,11 +63,16 @@ class ArbitrationSignal:
         historical_n: int = 0,
         rolling_brier: float = UNINFORMED_3STATE_BRIER,
         quality_tag: str | None = None,
+        weight_multiplier: float = 1.0,
     ):
         self.dp = dp
         self.historical_n = historical_n
         self.rolling_brier = rolling_brier
         self.quality_tag = (quality_tag or "").upper()
+        # External weight cap applied on top of Brier-inverse weighting.
+        # Set by the orchestrator from CrossPersonaAuditor flags (Agents.md §11d.6):
+        # for each flag, weight_multiplier *= (1 - severity). Default 1.0 = uncapped.
+        self.weight_multiplier = float(weight_multiplier)
 
     @property
     def persona(self) -> PersonaName:
@@ -391,6 +396,16 @@ def arbitrate(
         ):
             w *= FORENSICS_MATERIAL_CONCERNS_MULTIPLIER
             applied_multipliers[s.persona.value] = FORENSICS_MATERIAL_CONCERNS_MULTIPLIER
+
+        # CrossPersonaAuditor flag cap (Agents.md §11d.6): the orchestrator sets
+        # weight_multiplier = product of (1 - severity) across auditor flags for
+        # this persona. A severity-0.8 flag cuts the weight by 80%. Applied last
+        # so it caps the final weight regardless of other multipliers.
+        if s.weight_multiplier != 1.0:
+            w *= s.weight_multiplier
+            applied_multipliers[s.persona.value] = applied_multipliers.get(
+                s.persona.value, 1.0
+            ) * s.weight_multiplier
 
         raw_weights.append(w)
 

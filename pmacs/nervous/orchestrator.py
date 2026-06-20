@@ -154,6 +154,11 @@ class CycleOrchestrator:
         self._fx_rate: Any | None = None
         self._macro_regime_result: Any | None = None
         self._last_crucible_attacks: list[Any] = []
+        # Wave-2 debate + audit state (Agents.md §11b-§11d)
+        self._last_auditor_flags: list[Any] = []
+        self._last_advocate_outputs: dict[str, Any] = {}
+        self._last_reverse_dcf: Any | None = None
+        self._last_scenario_price: Any | None = None
         self._gatekeeper_results: dict[str, Any] = {}
         self._queue: list[Any] = []
         self._universe_tickers: list[str] = []
@@ -1175,11 +1180,35 @@ class CycleOrchestrator:
         holding, persona_results, evidence_packets, op = result
         self._last_persona_results = persona_results  # IMP-3: forensics quality extraction
 
+        # -- Step 13d5: Wave-2 debate + cross-persona audit (Agents.md §11b-§11d) ---
+        # Runs AFTER wave-1 personas committed (frozen) and BEFORE Arbitration.
+        # Advocates enter the arbitration pool as normal voters; auditor flags cap
+        # offending weights and enrich the Crucible brief (§11d.6).
+        advocate_results, auditor_flags = self._step_13d5_debate(
+            holding, ticker, cycle_id, op, evidence_packets, brief, persona_results,
+        )
+        persona_results.update(advocate_results)
+        self._last_auditor_flags = auditor_flags
+        self._last_advocate_outputs = {k: v for k, v in advocate_results.items()
+                                        if k in ("bull_advocate", "bear_advocate")}
+
         # -- Step 13e: Arbitration ---
         result = self._step_13e_arbitration(holding, ticker, cycle_id, op, persona_results)
         if isinstance(result, int):
             return result  # abort path
         holding, arbitrated, op = result
+
+        # -- Step 13e5: Valuation triangulation (Architecture.md §9.4b) ---
+        # Deterministic, LLM-free. Feeds MemoWriter only — does NOT amend conviction.
+        self._last_reverse_dcf, self._last_scenario_price = self._compute_valuation(
+            ticker, cycle_id, evidence_packets, persona_results, arbitrated,
+        )
+
+        # -- Auditor flags → FDE feed (Agents.md §11d.6.3) ---
+        # Best effort: each flag becomes a FailedAssumption (KuzuDB + SQLite) so the
+        # Mutation Engine's cluster detection picks them up. Never blocks the cycle.
+        if auditor_flags:
+            self._write_auditor_flags_to_fde(holding.id, cycle_id, ticker, auditor_flags)
 
         # -- Steps 13f-13g: Crucible ---
         result = self._step_13fg_crucible(holding, ticker, cycle_id, op, evidence_packets, arbitrated, brief)
@@ -1486,6 +1515,369 @@ class CycleOrchestrator:
 
         return holding, persona_results, evidence_packets, op + 1
 
+    def _step_13d5_debate(
+        self,
+        holding: Any,
+        ticker: str,
+        cycle_id: str,
+        op: int,
+        evidence_packets: list[Any],
+        brief: str,
+        persona_results: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[Any]]:
+        """Step 13d5: Wave-2 debate + cross-persona audit (Agents.md §11b-§11d).
+
+        Runs BullAdvocate, BearAdvocate, CrossPersonaAuditor in parallel AFTER the
+        7 wave-1 personas have committed (frozen outputs, §14.4). Each receives the
+        wave-1 PersonaOutputs as peer context via set_peer_outputs().
+
+        Advocates' PersonaOutputs are returned so they enter Arbitration as normal
+        voters (parsed by _extract_directional_probability via the extended
+        PersonaName enum). The auditor's flags are parsed and returned for weight
+        caps, Crucible-brief injection, and FDE writes (§11d.6).
+
+        Failures are best-effort: a wave-2 agent that returns None or times out is
+        skipped — it never aborts the cycle (the wave-1 pipeline is already valid).
+        """
+        from pmacs.agents.bull_advocate import BullAdvocateRunner
+        from pmacs.agents.bear_advocate import BearAdvocateRunner
+        from pmacs.agents.cross_persona_auditor import CrossPersonaAuditorRunner
+        from pmacs.schemas.personas import AuditorOutput
+
+        peer_outputs = list(persona_results.values())
+        runners = [
+            BullAdvocateRunner(cycle_id=cycle_id),
+            BearAdvocateRunner(cycle_id=cycle_id),
+            CrossPersonaAuditorRunner(cycle_id=cycle_id),
+        ]
+
+        # Wave-2 reuses the slot budget after wave-1 completes; the wall-clock cost
+        # is one parallel batch (~the slowest of the three). Per-agent timeout
+        # mirrors the wave-1 per-symbol budget.
+        timeout_seconds = 180
+        advocate_results: dict[str, Any] = {}
+        auditor_raw_output: Any = None
+
+        def _run_wave2(runner: Any) -> tuple[str, Any | None]:
+            try:
+                runner.set_peer_outputs(peer_outputs)
+                self._publish_sse("agent", "agent.running", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "persona": runner.persona_name,
+                })
+                output = runner.run(evidence_packets, episodic_context=brief)
+                if output is not None:
+                    self._log_call_billing(runner, cycle_id)
+                    self._publish_sse("agent", "agent.complete", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name,
+                    })
+                else:
+                    self._publish_sse("agent", "agent.failed", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name, "reason": "returned_none",
+                    })
+                return (runner.persona_name, output)
+            except Exception as exc:
+                log_debug(
+                    "WAVE2_PERSONA_EXCEPTION",
+                    payload={"persona": runner.persona_name, "ticker": ticker,
+                             "error": str(exc)[:200]},
+                    level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                    msg=f"Wave-2 {runner.persona_name} raised {type(exc).__name__} for {ticker}",
+                )
+                self._publish_sse("agent", "agent.failed", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "persona": runner.persona_name,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:80]}",
+                })
+                return (runner.persona_name, None)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(_run_wave2, r): r.persona_name for r in runners}
+            try:
+                for future in as_completed(futures, timeout=timeout_seconds):
+                    name = futures[future]
+                    try:
+                        pname, output = future.result()
+                    except Exception as exc:
+                        log_debug(
+                            "WAVE2_FUTURE_EXCEPTION",
+                            payload={"persona": name, "ticker": ticker, "error": str(exc)[:200]},
+                            level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                            msg=f"Wave-2 {name} future raised {type(exc).__name__}",
+                        )
+                        continue
+                    if output is None:
+                        continue
+                    if pname == "cross_persona_auditor":
+                        auditor_raw_output = output
+                    else:
+                        advocate_results[pname] = output
+            except FuturesTimeoutError:
+                log_debug(
+                    "WAVE2_BATCH_TIMEOUT",
+                    payload={"ticker": ticker, "timeout_s": timeout_seconds,
+                             "completed": list(advocate_results.keys())},
+                    level="WARN", error_code="PERSONA_TIMEOUT", cycle_id=cycle_id,
+                    msg=f"Wave-2 batch timed out for {ticker} after {timeout_seconds}s",
+                )
+
+        # Parse auditor flags from the raw output (defense-in-depth: never trust
+        # the LLM to produce valid flags; on any parse failure, no flags).
+        auditor_flags: list[Any] = []
+        if auditor_raw_output is not None:
+            auditor_flags = self._parse_auditor_flags(auditor_raw_output, cycle_id, ticker)
+
+        log_debug(
+            "WAVE2_DEBATE_COMPLETE",
+            payload={
+                "cycle_id": cycle_id, "ticker": ticker,
+                "advocates": list(advocate_results.keys()),
+                "auditor_flag_count": len(auditor_flags),
+            },
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Wave-2 {ticker}: advocates={list(advocate_results.keys())} flags={len(auditor_flags)}",
+        )
+        return advocate_results, auditor_flags
+
+    def _parse_auditor_flags(
+        self, auditor_output: Any, cycle_id: str, ticker: str
+    ) -> list[Any]:
+        """Parse AuditorOutput.flags from a PersonaOutput. Defense-in-depth."""
+        import json as _json
+        from pmacs.schemas.personas import AuditorOutput
+        raw = getattr(auditor_output, "raw_output", "")
+        if not raw:
+            return []
+        try:
+            data = _json.loads(raw)
+            model = AuditorOutput.model_validate(data)
+            return list(model.flags)
+        except Exception as exc:
+            log_debug(
+                "AUDITOR_FLAG_PARSE_FAILED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="GBNF_PARSE_FAIL", cycle_id=cycle_id,
+                msg=f"Auditor output unparseable for {ticker}: no flags applied",
+            )
+            return []
+
+    def _compute_valuation(
+        self,
+        ticker: str,
+        cycle_id: str,
+        evidence_packets: list[Any],
+        persona_results: dict[str, Any],
+        arbitrated: Any,
+    ) -> tuple[Any, Any]:
+        """Step 13e5: deterministic valuation triangulation (Architecture.md §9.4b).
+
+        reverse_dcf (market-implied vs estimated growth) + scenario_price
+        (probability-weighted expected price). Pure math, no LLM. Feeds MemoWriter
+        only — does NOT enter Arbitration and does NOT amend conviction.
+        """
+        from pmacs.engines.reverse_dcf import compute_reverse_dcf
+        from pmacs.engines.scenario_price import compute_scenario_price
+
+        market_cap, fcf_ttm, assumed_growth = self._extract_valuation_inputs(
+            evidence_packets, persona_results,
+        )
+        current_price = getattr(self, "_current_price", None)
+
+        rdcf = compute_reverse_dcf(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            market_cap_usd=market_cap,
+            fcf_ttm_usd=fcf_ttm,
+            assumed_growth_pct=assumed_growth,
+        )
+
+        # Derive bull/base/bear fair-value prices from the reverse-DCF sensitivity
+        # grid (high-growth = bull, low-growth = bear). When the reverse-DCF is
+        # unavailable (FCF-negative names — common in the current universe), the
+        # scenario price degrades gracefully to is_available=False.
+        base_price = rdcf.fair_value_usd
+        sens_values = [v for v in rdcf.sensitivity.values() if isinstance(v, (int, float)) and v > 0]
+        bull_price = max(sens_values) if sens_values else None
+        bear_price = min(sens_values) if sens_values else None
+        if base_price is None and sens_values:
+            # fair_value undefined (assumed>=discount) but sensitivity exists — use the
+            # assumed-growth grid point as base if present, else the median.
+            base_price = rdcf.sensitivity.get(
+                f"{rdcf.assumed_growth_pct * 100:.1f}%"
+            ) if rdcf.assumed_growth_pct is not None else None
+
+        p_up = getattr(arbitrated, "p_up", None)
+        p_flat = getattr(arbitrated, "p_flat", None)
+        p_down = getattr(arbitrated, "p_down", None)
+        scenario = compute_scenario_price(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            p_up=float(p_up) if p_up is not None else 0.0,
+            p_flat=float(p_flat) if p_flat is not None else 0.0,
+            p_down=float(p_down) if p_down is not None else 0.0,
+            bull_price=bull_price,
+            base_price=base_price,
+            bear_price=bear_price,
+            current_price_usd=current_price if isinstance(current_price, (int, float)) else None,
+        )
+        return rdcf, scenario
+
+    def _extract_valuation_inputs(
+        self,
+        evidence_packets: list[Any],
+        persona_results: dict[str, Any],
+    ) -> tuple[float | None, float | None, float | None]:
+        """Pull market cap, TTM FCF, and an assumed growth rate from evidence.
+
+        Defensive: returns None for any missing primitive so the engines degrade
+        to NEUTRAL rather than fabricating. Mirrors the key semantics used by
+        ticker_data.py (Source.md §16.8 — the ticker page is the source of truth).
+        """
+        market_cap: float | None = None
+        fcf_ttm: float | None = None
+        assumed_growth_pct: float | None = None
+
+        # Index evidence by id → data for the valuation primitives.
+        edata: dict[str, dict] = {}
+        for packet in evidence_packets:
+            for ev in getattr(packet, "evidence", []) or []:
+                ev_id = getattr(ev, "id", "") or ""
+                data = getattr(ev, "data", {}) or {}
+                if isinstance(data, dict):
+                    edata[ev_id] = data
+
+        for ev_id, data in edata.items():
+            # Market cap: fundamentals profile stores it in millions USD.
+            if ev_id.endswith("_profile") and market_cap is None:
+                mcap = data.get("marketCapitalization")
+                if isinstance(mcap, (int, float)) and mcap > 0:
+                    market_cap = float(mcap) * 1_000_000
+
+            # FCF TTM: prefer the annual series' most recent value, then ttm_fcf.
+            if ev_id.endswith("_metrics") and fcf_ttm is None:
+                fcf_series = data.get("annual_freeCashFlow") or []
+                if isinstance(fcf_series, list) and fcf_series:
+                    first = fcf_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            fcf_ttm = float(v)
+                if fcf_ttm is None:
+                    ttm = data.get("ttm_fcf")
+                    if isinstance(ttm, (int, float)):
+                        fcf_ttm = float(ttm)
+                # Assumed growth from yfinance/Finnhub revenueGrowthTTMYoy (percent).
+                if assumed_growth_pct is None:
+                    rg = data.get("revenueGrowthTTMYoy")
+                    if isinstance(rg, (int, float)):
+                        assumed_growth_pct = _growth_to_fraction(float(rg))
+
+            # EDGAR fallback for FCF.
+            if ev_id.endswith("_financials") and "edgar" in ev_id and fcf_ttm is None:
+                fcf_obj = data.get("free_cash_flow_most_recent")
+                if isinstance(fcf_obj, dict):
+                    v = fcf_obj.get("value_usd")
+                    if isinstance(v, (int, float)):
+                        fcf_ttm = float(v)
+            # Yahoo fallback for FCF.
+            if ev_id.endswith("_financials") and "yahoo" in ev_id and fcf_ttm is None:
+                ttm = data.get("ttm_fcf")
+                if isinstance(ttm, (int, float)):
+                    fcf_ttm = float(ttm)
+
+        # Assumed growth: prefer the GrowthHunter persona's revenue_yoy_pct.
+        gh = persona_results.get("growth_hunter")
+        if gh is not None:
+            import json as _json
+            raw = getattr(gh, "raw_output", "")
+            if raw:
+                try:
+                    gdata = _json.loads(raw)
+                    rg = gdata.get("revenue_yoy_pct")
+                    if isinstance(rg, (int, float)):
+                        assumed_growth_pct = _growth_to_fraction(float(rg))
+                except (ValueError, TypeError):
+                    pass
+
+        return market_cap, fcf_ttm, assumed_growth_pct
+
+    def _write_auditor_flags_to_fde(
+        self, holding_id: str, cycle_id: str, ticker: str, flags: list[Any]
+    ) -> None:
+        """Project auditor flags into the FDE stores (Agents.md §11d.6.3).
+
+        Each flag → a FailedAssumption node (KuzuDB) + failure_classifications row
+        (SQLite) using flag.taxonomy_mapping, so the Mutation Engine's cluster
+        detection (§15.3, §17.2) picks them up unchanged. Best effort: never
+        raises into the cycle.
+        """
+        from uuid import uuid4 as _uuid4
+
+        kuzu = self._get_kuzu_adapter()
+        conn = None
+        try:
+            conn = _sql_connect(self._db_path)
+        except Exception:
+            conn = None
+
+        for flag in flags:
+            tax = getattr(flag, "taxonomy_mapping", None)
+            tax_val = getattr(tax, "value", tax)
+            sev = getattr(flag, "severity", 0.0)
+            desc = getattr(flag, "description", "") or ""
+            target = getattr(flag, "target_persona", None)
+            target_val = getattr(target, "value", target)
+            summary = f"[auditor:{target_val}] {desc}"[:400]
+            fa_id = str(_uuid4())
+
+            if kuzu is not None and isinstance(tax_val, str):
+                try:
+                    kuzu.write_failed_assumption(
+                        fa_id=fa_id,
+                        taxonomy=tax_val,
+                        severity=float(sev) if isinstance(sev, (int, float)) else 0.0,
+                        holding_id=holding_id,
+                        cycle_id=cycle_id,
+                        summary=summary,
+                    )
+                except Exception:
+                    pass
+
+            if conn is not None and isinstance(tax_val, str):
+                try:
+                    conn.execute(
+                        "INSERT INTO failure_classifications "
+                        "(holding_id, taxonomy, severity, summary, cycle_id, classified_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            holding_id,
+                            tax_val,
+                            float(sev) if isinstance(sev, (int, float)) else 0.0,
+                            summary,
+                            cycle_id,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception:
+                    pass
+
+        if conn is not None:
+            try:
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        log_debug(
+            "AUDITOR_FLAGS_WRITTEN_TO_FDE",
+            payload={"cycle_id": cycle_id, "ticker": ticker,
+                     "holding_id": holding_id, "flag_count": len(flags)},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Auditor flags → FDE: {len(flags)} for {ticker}",
+        )
+
     def _step_13e_arbitration(
         self, holding: Any, ticker: str, cycle_id: str, op: int, persona_results: dict
     ) -> int | tuple[Any, Any, int]:
@@ -1538,6 +1930,34 @@ class CycleOrchestrator:
                 msg=f"Symbol {ticker} aborted: no valid directional probabilities",
             )
             return op + 1
+
+        # CrossPersonaAuditor flag caps (Agents.md §11d.6.1): for each flag targeting
+        # a persona, multiply that signal's weight_multiplier by (1 - severity). A
+        # severity-0.8 flag cuts the persona's arbitration weight by 80%. This is
+        # applied BEFORE arbitrate() — the auditor never calls arbitrate().
+        auditor_flags = getattr(self, "_last_auditor_flags", []) or []
+        if auditor_flags:
+            cap_by_persona: dict[str, float] = {}
+            for flag in auditor_flags:
+                target = getattr(flag, "target_persona", None)
+                target_val = getattr(target, "value", target)
+                sev = getattr(flag, "severity", 0.0)
+                if not isinstance(target_val, str) or not isinstance(sev, (int, float)):
+                    continue
+                cap_by_persona[target_val] = cap_by_persona.get(target_val, 1.0) * (1.0 - float(sev))
+            capped: list[str] = []
+            for sig in signals:
+                cap = cap_by_persona.get(sig.persona.value)
+                if cap is not None and cap < 1.0:
+                    sig.weight_multiplier = min(getattr(sig, "weight_multiplier", 1.0), cap)
+                    capped.append(f"{sig.persona.value}:{cap:.2f}")
+            if capped:
+                log_debug(
+                    "AUDITOR_FLAG_WEIGHT_CAP",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "capped": capped},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Auditor flags capped weights: {', '.join(capped)}",
+                )
 
         arbitrated = arbitrate(signals, cycle_id=cycle_id)
         log_debug(
@@ -1661,7 +2081,10 @@ class CycleOrchestrator:
                 elif crucible_severity >= 0.3 and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1:
                     crucible_state = "REWRITE"
                     attacks = crucible_attacks
-                    revised_evidence = _rebuild_evidence_brief(evidence_packets, attacks, arbitrated, ticker)
+                    revised_evidence = _rebuild_evidence_brief(
+                        evidence_packets, attacks, arbitrated, ticker,
+                        auditor_flags=getattr(self, "_last_auditor_flags", []),
+                    )
                     log_debug("CRUCIBLE_REWRITE_TRIGGERED",
                         payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
                                  "severity": crucible_severity, "num_attacks": len(attacks)},
@@ -1887,6 +2310,10 @@ class CycleOrchestrator:
                 crucible_attacks=self._last_crucible_attacks,
                 forensics_quality=forensics_quality,
                 persona_outputs=getattr(arbitrated, "persona_outputs", None),
+                advocate_outputs=getattr(self, "_last_advocate_outputs", {}),
+                auditor_flags=getattr(self, "_last_auditor_flags", []),
+                reverse_dcf=getattr(self, "_last_reverse_dcf", None),
+                scenario_price=getattr(self, "_last_scenario_price", None),
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
             if memo_output is not None:
@@ -1902,6 +2329,94 @@ class CycleOrchestrator:
                 payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
                 level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), continuing (best effort)")
+
+        # 13m+: Persist structured memo to the memos table (Architecture.md §16.9).
+        # The live /memo/{ticker} page reads memos.memo_json; without this write the
+        # orchestrator's MemoWriter output (incl. wave-2 debate/valuation fields) was
+        # computed and discarded. Mirror pipeline.py's dual-write (memos + decisions).
+        verdict_str = verdict.value if hasattr(verdict, "value") else str(verdict)
+        decided_at = datetime.now(timezone.utc).isoformat()
+        try:
+            import json as _persist_j
+            memo_dict: dict = {}
+            if memo_output is not None and getattr(memo_output, "raw_output", ""):
+                try:
+                    parsed = _persist_j.loads(memo_output.raw_output)
+                    if isinstance(parsed, dict):
+                        memo_dict = parsed
+                except (ValueError, TypeError):
+                    memo_dict = {}
+            if not memo_dict:
+                # Fallback when the LLM returned nothing — still persist the decision
+                # so the operator sees the verdict/conviction on the memo page.
+                memo_dict = {
+                    "verdict_line": f"{verdict_str} — conviction {conviction_score:.2f}",
+                    "thesis": f"Memo generation unavailable for {ticker}; see agent signals.",
+                }
+            # Authoritative arbitration numbers override any LLM-stated values.
+            memo_dict["p_up"] = float(getattr(arbitrated, "p_up", 0.0))
+            memo_dict["p_flat"] = float(getattr(arbitrated, "p_flat", 0.0))
+            memo_dict["p_down"] = float(getattr(arbitrated, "p_down", 0.0))
+            memo_dict["conviction"] = float(conviction_score)
+            memo_dict.setdefault("verdict_line", f"{verdict_str} — conviction {conviction_score:.2f}")
+            # Inject the deterministic valuation results (not LLM-produced) so the
+            # template's Reverse-DCF + Scenario-Weighted Expected Price cards render.
+            rdcf = getattr(self, "_last_reverse_dcf", None)
+            if rdcf is not None:
+                memo_dict["reverse_dcf"] = (
+                    rdcf.model_dump() if hasattr(rdcf, "model_dump") else dict(rdcf)
+                )
+            sp = getattr(self, "_last_scenario_price", None)
+            if sp is not None:
+                memo_dict["scenario_price"] = (
+                    sp.model_dump() if hasattr(sp, "model_dump") else dict(sp)
+                )
+            memo_json_str = _persist_j.dumps(memo_dict)
+            raw_text = memo_dict.get("raw_text") or memo_json_str
+            conn = _sql_connect(self._db_path)
+            try:
+                conn.execute(
+                    "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+                    "memo_json, raw_text, memo_score, memo_grade, decided_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (cycle_id, ticker, verdict_str, float(conviction_score),
+                     memo_json_str, raw_text, memo_dict.get("memo_score"),
+                     memo_dict.get("memo_grade"), decided_at),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            # Mirror to decisions.thesis_summary for legacy readers (memo.py fallback).
+            try:
+                conn = _sql_connect(self._db_path)
+                try:
+                    conn.execute(
+                        "INSERT INTO decisions (cycle_id, ticker, verdict, "
+                        "conviction_score, thesis_summary, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, verdict_str, float(conviction_score),
+                         memo_json_str, decided_at),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as exc2:
+                log_debug("MEMO_DECISIONS_WRITE_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc2)},
+                    level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                    msg=f"Memo mirror to decisions failed for {ticker}: {exc2}")
+            log_debug("SYMBOL_MEMO_PERSISTED",
+                payload={"cycle_id": cycle_id, "ticker": ticker,
+                         "has_reverse_dcf": "reverse_dcf" in memo_dict,
+                         "has_scenario_price": "scenario_price" in memo_dict,
+                         "has_debate": bool(memo_dict.get("bull_bear_debate"))},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} memo persisted to memos table")
+        except Exception as exc:
+            log_debug("MEMO_PERSIST_FAILED",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                msg=f"Memo persistence failed for {ticker}: ({type(exc).__name__}) {exc}")
 
         # 13n: Scan record (IMP-6: persist price at decision time)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -4059,11 +4574,34 @@ def close_cycle(cycle_id: str, db_path: Path, audit_path: Path | None = None) ->
     )
 
 
+def _growth_to_fraction(v: float) -> float:
+    """Normalize a growth-rate reading to a fraction (0.18 = 18%).
+
+    Evidence sources disagree on units: Finnhub returns percentages (18.0),
+    yfinance returns fractions (0.18), and the GrowthHunter persona emits
+    revenue_yoy_pct in percent. Guard: if the magnitude exceeds 1.0 treat it as a
+    percentage and divide by 100; otherwise pass through. Clamps to a sane
+    perpetual-growth range for the reverse-DCF.
+    """
+    if not isinstance(v, (int, float)):
+        return 0.0
+    f = float(v)
+    if abs(f) > 1.0:
+        f = f / 100.0
+    # Bound to (-0.5, 0.5) — a perpetual-growth rate outside this is not credible.
+    if f > 0.5:
+        f = 0.5
+    elif f < -0.5:
+        f = -0.5
+    return f
+
+
 def _rebuild_evidence_brief(
     evidence: list[Any],
     attacks: list[dict[str, Any]],
     arbitrated: Any,
     ticker: str,
+    auditor_flags: list[Any] | None = None,
 ) -> list[Any]:
     """Rebuild evidence brief addressing Crucible cycle-1 attacks.
 
@@ -4075,6 +4613,10 @@ def _rebuild_evidence_brief(
     structured summary of its own cycle-1 attacks. This ensures the rewrite
     test is about whether the thesis *inherently* addresses the attacks, not
     whether new evidence was cherry-picked to dodge them.
+
+    When CrossPersonaAuditor flags are present (Agents.md §16.4), an
+    ``auditor_flag_summary`` annotation is appended so the Crucible attacks the
+    specific reasoning flaws the auditor found, not just its own cycle-1 attacks.
     """
     attack_summary: dict[str, Any] = {
         "source": "crucible_rewrite_context",
@@ -4087,8 +4629,35 @@ def _rebuild_evidence_brief(
         "revised": True,
     }
 
-    # Return a new list: original evidence + attack context annotation
-    return list(evidence) + [attack_summary]
+    out = list(evidence) + [attack_summary]
+
+    # Auditor flag enrichment (Agents.md §16.4): a separate annotation so the
+    # Crucible can attack the named reasoning flaws. Flags are serialized to
+    # plain dicts (they may be Pydantic AuditorFlag models or dicts).
+    if auditor_flags:
+        flag_summaries: list[dict[str, Any]] = []
+        for flag in auditor_flags:
+            target = getattr(flag, "target_persona", None)
+            flag_summaries.append({
+                "flag_type": getattr(flag, "flag_type", None),
+                "target_persona": getattr(target, "value", target),
+                "severity": getattr(flag, "severity", None),
+                "description": getattr(flag, "description", None),
+                "evidence_ids": getattr(flag, "evidence_ids", []) or [],
+                "taxonomy_mapping": getattr(
+                    getattr(flag, "taxonomy_mapping", None), "value",
+                    getattr(flag, "taxonomy_mapping", None),
+                ),
+            })
+        out.append({
+            "source": "auditor_flag_context",
+            "ticker": ticker,
+            "flags": flag_summaries,
+            "flag_count": len(flag_summaries),
+            "revised": True,
+        })
+
+    return out
 
 
 def _current_mode(db_path: Path) -> str:

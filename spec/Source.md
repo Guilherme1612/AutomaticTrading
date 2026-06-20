@@ -971,6 +971,14 @@ over an unreliable number).
 
 - **Valuation:** P/E (`peNormalizedAnnual`), forward P/E (Yahoo), P/B (`pbAnnual`),
   P/S (`psAnnual`), EV/EBITDA (`evToEbitdaTTM`), PEG.
+- **Multiples tone is self-relative, not absolute.** The cheap/fair/pricey color on
+  each multiple is computed against the ticker's OWN 3-year average, never against
+  absolute cross-ticker bands. Absolute P/E bands (≤15 "cheap", >30 "expensive")
+  mislabel structurally premium names (e.g. AMZN) as "expensive" forever; a
+  high-multiple name is cheap when it trades below its own recent average. So:
+  current below the 3Y avg → cheap (green), within ±5% → near (neutral), above →
+  pricey (red). Point-in-time ratios with no 3Y average (forward P/E, PEG) carry no
+  cheap/expensive claim at all — no claim is better than a wrong one.
 - **Cash flow:** TTM FCF margin (`fcfMarginTTM`), annual FCF series
   (`annual_freeCashFlow`, last ~4 fiscal years), operating CF, CapEx.
 - **Stock-based compensation:** `annual_sbc` (yfinance, 4 fiscal years); EDGAR
@@ -1003,17 +1011,17 @@ unavailable for a fiscal period, the P/FCF multiple for that year falls back to 
 current diluted share count to derive market cap; the page labels such years so the
 operator knows the figure is an approximation.
 
-**Valuation fingerprint:** a years × multiples heatmap that renders the multi-year
-multiples above as a single at-a-glance signature. Rows are fiscal years (oldest →
-newest) plus a trailing `now` row (current/TTM multiples — P/FCF computed as market
-cap ÷ latest annual FCF, the rest from stored current multiples) and a `3Y avg`
-footer. Columns are P/E, P/FCF, P/S, P/B, EV/EBITDA — a column is shown only when it
-has at least one historical value. Every cell shows the actual multiple (never a
-hover-gated value) and is tinted by where it sits in that metric's own 3-4y range
-(cheap end = green, pricey end = red); color is supplementary, the number is the
-encoding, so the matrix is readable without color. Pure template + CSS, no JS —
-deterministic and local-only. Falls back to a "not enough historical multiples"
-note when fewer than two fiscal years or two multiples are available.
+**Analyst consensus:** a three-card block showing the mean price target (with range
+and median), the analyst ratings mix (strong-buy → strong-sell bars + consensus
+label), and the **current price** with its upside to the mean target. The current
+price is the authoritative fallback-chain price (technical moving-average packet →
+yfinance metrics → analyst price-target packet), NOT the price-target packet's own
+`current_price` — that field is blank whenever the analyst source returned no live
+quote, which left the card showing `—` even though the page had a real price. The
+price *target* still comes from the analyst packet; when no target exists, the target
+card shows an honest "no analyst price target in stored evidence" empty state and
+the upside line is suppressed. The section renders whenever the ticker has been
+analyzed in a cycle (the underlying evidence is the same packets the agents consume).
 
 **Freshness:** a badge driven by the evidence's `_most_recent_period` / stale-data
 flag warns when the underlying annual filings are >15 months old, so the operator

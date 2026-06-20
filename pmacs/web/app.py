@@ -281,7 +281,6 @@ from pmacs.web.templating import templates  # noqa: E402  # shared instance used
 # Import and include routes
 from pmacs.web.routes import (  # noqa: E402
     agents,
-    compare,
     cortex,
     dashboard,
     debug,
@@ -295,7 +294,6 @@ from pmacs.web.routes import (  # noqa: E402
 
 app.include_router(dashboard.router)
 app.include_router(agents.router)
-app.include_router(compare.router)
 app.include_router(pipeline.router)
 app.include_router(universe.router)
 app.include_router(cortex.router)

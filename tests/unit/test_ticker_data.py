@@ -110,12 +110,11 @@ def test_is_universe_ticker_handles_missing_db(tmp_path, monkeypatch):
     assert _is_universe_ticker("AMZN") is False
 
 
-def test_is_universe_ticker_reads_universe_table(tmp_path):
+def test_is_universe_ticker_reads_universe_table(tmp_path, monkeypatch):
     """Tickers present in `universe` table (halted=0, delisted=0) are detected."""
     import sqlite3
-    from pmacs.config import data_dir
     import pmacs.config as _cfg
-    _cfg.data_dir = lambda: tmp_path
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
 
     db = tmp_path / "pmacs.db"
     con = sqlite3.connect(db)
@@ -134,19 +133,19 @@ def test_is_universe_ticker_reads_universe_table(tmp_path):
     assert _is_universe_ticker("ZZNODATA") is False
 
 
-def test_evidence_fresh_enough_no_db(tmp_path):
+def test_evidence_fresh_enough_no_db(tmp_path, monkeypatch):
     """No pmacs.db → evidence not fresh → lazy fetch will fire."""
     import pmacs.config as _cfg
-    _cfg.data_dir = lambda: tmp_path
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
     assert _evidence_fresh_enough("AMZN") is False
 
 
-def test_evidence_fresh_enough_respects_ttl(tmp_path):
+def test_evidence_fresh_enough_respects_ttl(tmp_path, monkeypatch):
     """Evidence fetched within the TTL is fresh; older rows are stale."""
     import sqlite3
     from datetime import datetime, timedelta, timezone
     import pmacs.config as _cfg
-    _cfg.data_dir = lambda: tmp_path
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
 
     db = tmp_path / "pmacs.db"
     con = sqlite3.connect(db)
@@ -179,12 +178,12 @@ def test_maybe_warm_evidence_cache_dedupes_when_in_flight():
         _LAZY_FETCH_IN_FLIGHT.discard("AMZN")
 
 
-def test_maybe_warm_evidence_cache_skips_when_fresh(tmp_path):
+def test_maybe_warm_evidence_cache_skips_when_fresh(tmp_path, monkeypatch):
     """Fresh evidence → no fetch dispatched."""
     import sqlite3
     from datetime import datetime, timezone
     import pmacs.config as _cfg
-    _cfg.data_dir = lambda: tmp_path
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
 
     db = tmp_path / "pmacs.db"
     con = sqlite3.connect(db)

@@ -468,23 +468,34 @@ class TestTickerDataPageAccessibility:
             h1_text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
             assert h1_text, f"page {path} <h1> has no text content"
 
-    def test_valuation_fingerprint_is_accessible_when_rendered(self):
-        """The valuation-fingerprint heatmap must expose an accessible name and
-        labelled landmarks. The multiples section was redesigned from an animated
-        D3 radar (which auto-scaled each axis and hid absolute values behind a
-        hover) to a years × multiples heatmap (Source.md §16.8); the markup is
-        now a real semantic <table>, so assistive tech gets a labelled matrix
-        with the actual numbers in every cell — no JS, no hover required."""
+    def test_valuation_fingerprint_is_removed(self):
+        """The Valuation fingerprint section (radar, then heatmap) was removed at
+        the operator's request — the per-year multiples are already covered by the
+        Valuation summary cards and the Raw fundamentals groups, so the section was
+        redundant. Assert it is fully gone: no section heading, no matrix markup,
+        no leftover radar SVG/JS, and no dead heatmap CSS class references."""
         template = Path("pmacs/web/templates/ticker_detail.html").read_text()
-        # The section is labelled by its heading.
-        assert 'aria-labelledby="mult-heading"' in template, "fingerprint section missing aria-labelledby"
-        assert 'id="mult-heading"' in template, "fingerprint heading missing id"
-        # The matrix is a semantic table with an accessible name (caption) and
-        # scoped headers — a labelled landmark for assistive tech.
-        assert 'class="fp-matrix"' in template, "fingerprint matrix missing fp-matrix table"
-        assert '<caption' in template, "fingerprint table missing caption (accessible name)"
-        assert 'scope="col"' in template, "fingerprint table missing column scope headers"
-        assert 'scope="row"' in template, "fingerprint table missing row scope headers"
-        # The old D3 radar must be fully gone — no decorative SVG, no JS data blob.
+        assert 'id="mult-heading"' not in template, "fingerprint heading still present"
+        assert 'Valuation fingerprint' not in template, "fingerprint heading text still present"
+        assert 'class="fp-matrix"' not in template, "fingerprint matrix markup still present"
+        assert 'fp_tone' not in template, "dead fp_tone macro still defined"
+        # The old D3 radar must also stay gone.
         assert 'id="radar-svg"' not in template, "old radar svg still present"
         assert 'id="radar-data"' not in template, "old radar-data JSON still present"
+
+    def test_analyst_current_price_uses_authoritative_source(self):
+        """The Analyst consensus 'Current price' card must use the authoritative
+        fallback-chain current price (technical MA → yfinance metrics → analyst
+        packet) passed as the `current_price` context var — NOT the price-target
+        packet's own `current_price`, which is blank whenever the analyst source
+        returned no live quote. Without this, the card showed `—` even though the
+        page had a real price in the Technical section above."""
+        template = Path("pmacs/web/templates/ticker_detail.html").read_text()
+        assert 'current_price' in template, "current_price context var not referenced in template"
+        # The current-price card must fall back to the authoritative price and
+        # compute upside against it (not against a.current_price alone). It must
+        # also guard with `is defined` so a stale process missing the var doesn't
+        # 500 every ticker page.
+        assert 'current_price is defined' in template, \
+            "current-price card not guarding against undefined current_price"
+        assert 'a.target_mean - px' in template, "upside not computed against authoritative price"

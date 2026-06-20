@@ -117,25 +117,6 @@
     {%- endif -%}
 {%- endmacro %}
 
-{# Heatmap tone class for one valuation-multiple cell. `v` is the cell value
-   (may be None); `lo`/`hi` are that metric's historical min/max (may be None if
-   no series). Lower multiple = cheaper, so a low percentile (cheap end of its
-   own history) is green and a high percentile (pricey end) is red. Returns
-   fp-na (untinted) when the value or its range is unavailable. #}
-{%- macro fp_tone(v, lo, hi) -%}
-    {%- if v is none or lo is none or hi is none -%}fp-na
-    {%- elif hi == lo -%}fp-neutral
-    {%- else -%}
-        {%- set p = (v - lo) / (hi - lo) -%}
-        {%- if p <= 0.20 -%}fp-cheap
-        {%- elif p <= 0.40 -%}fp-fair-lo
-        {%- elif p <= 0.60 -%}fp-neutral
-        {%- elif p <= 0.80 -%}fp-fair-hi
-        {%- else -%}fp-pricey
-        {%- endif -%}
-    {%- endif -%}
-{%- endmacro %}
-
 {# Context label for SaaS KPIs. #}
 {%- macro kpi_label(value, kind) -%}
     {%- if value is none -%}Not disclosed
@@ -231,19 +212,37 @@
 {%- endmacro %}
 
 {# ── Compact metric card: current value + optional 3Y average. ── #}
+{# The tone is relative to the ticker's OWN 3-year average — NOT to absolute
+   cross-ticker bands. Absolute P/E bands (≤15 "cheap" / >30 "expensive") flag
+   structurally premium names (e.g. AMZN) as "expensive" forever, which is
+   wrong: a high-multiple name is cheap when it trades below its own recent
+   average. So: current < avg → below 3Y (positive/cheap), current within ±5%
+   of avg → near 3Y (neutral), current > avg → above 3Y (negative/pricey). No
+   average → neutral with no cheap/expensive claim (better no claim than a
+   wrong one). #}
 {% macro metric_card(label, current, average, unit="", note="") -%}
     {%- set has_current = current is not none -%}
     {%- set has_avg = average is not none -%}
-    {%- set tone = tone_class(average if has_avg else current, "multiple") -%}
+    {%- set rel = namespace(color='neutral', label='No 3Y avg') -%}
+    {%- if has_current and has_avg -%}
+        {%- set d = (current - average) / average -%}
+        {%- if d <= -0.05 -%}{%- set rel.color = 'positive' -%}{%- set rel.label = 'Below 3Y' -%}
+        {%- elif d <= 0.05 -%}{%- set rel.color = 'neutral' -%}{%- set rel.label = 'Near 3Y' -%}
+        {%- else -%}{%- set rel.color = 'negative' -%}{%- set rel.label = 'Above 3Y' -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- set txt = {'positive':'text-positive','negative':'text-negative','neutral':'text-text-secondary'}[rel.color] -%}
+    {%- set bg  = {'positive':'bg-positive-soft','negative':'bg-negative-soft','neutral':'bg-surface-sunken'}[rel.color] -%}
+    {%- set dot = {'positive':'bg-positive','negative':'bg-negative','neutral':'bg-text-muted'}[rel.color] -%}
     <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
         <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">{{ label }}</div>
         <div>
-            <div class="text-3xl font-bold tabular-nums {{ tone if has_current else 'text-text-muted' }}">{{ fmt(current, unit) if has_current else '&mdash;' }}</div>
+            <div class="text-3xl font-bold tabular-nums {{ txt if has_current else 'text-text-muted' }}">{{ fmt(current, unit) if has_current else '&mdash;' }}</div>
             <div class="mt-1 flex items-center gap-2 text-xs">
                 {%- if has_avg -%}
                 <span class="text-text-muted">3Y avg {{ fmt(average, unit) }}</span>
-                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-{{ tone }}-soft text-{{ tone }} text-[10px] font-semibold uppercase tracking-widest">
-                    <span class="w-1 h-1 rounded-full bg-{{ tone }}"></span>{{ mult_label(average) }}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md {{ bg }} {{ txt }} text-[10px] font-semibold uppercase tracking-widest">
+                    <span class="w-1 h-1 rounded-full {{ dot }}"></span>{{ rel.label }}
                 </span>
                 {%- else -%}
                 <span class="text-text-muted">3Y average unavailable</span>
@@ -310,13 +309,15 @@
         {{ metric_card("P/S", derived.current.ps, derived.ps_3y_avg) }}
         {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
         {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
-        {# PEG is a point-in-time ratio (like Forward P/E) — no historical average is meaningful, so render it as a standalone value with no 3Y-avg noise. #}
+        {# PEG is a point-in-time ratio (like Forward P/E) with no 3Y average, so it
+           renders as a plain value with no cheap/expensive tone. Absolute P/E-style
+           bands are meaningless here — and previously always rendered "cheap"
+           because PEG ~1 sits well under the P/E ≤15 band. No 3Y avg → no claim. #}
         {%- set peg_val = derived.current.peg -%}
-        {%- set peg_tone = tone_class(peg_val, 'multiple') -%}
         <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
             <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">PEG</div>
             <div>
-                <div class="text-3xl font-bold tabular-nums {{ peg_tone if peg_val is not none else 'text-text-muted' }}">{{ fmt(peg_val) if peg_val is not none else '&mdash;' }}</div>
+                <div class="text-3xl font-bold tabular-nums text-text-primary">{{ fmt(peg_val) if peg_val is not none else '&mdash;' }}</div>
                 <div class="mt-1 text-xs text-text-muted">Point-in-time (PEG/Y ratio)</div>
             </div>
         </div>
@@ -432,11 +433,9 @@
             <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Price target</div>
             {%- if a.target_mean is not none -%}
             <div class="text-2xl font-bold text-text-primary">{{ fmt(a.target_mean, "$") }}</div>
-            <div class="mt-1 text-xs text-text-muted">Range {{ fmt(a.target_low, "$") }} &ndash; {{ fmt(a.target_high, "$") }} · Median {{ fmt(a.target_median, "$") }}</div>
-            {%- if a.upside_to_mean_pct is not none -%}
-            {%- set upside_tone = 'text-positive' if a.upside_to_mean_pct > 0 else ('text-negative' if a.upside_to_mean_pct < 0 else 'text-text-muted') -%}
-            <div class="mt-2 text-sm font-semibold {{ upside_tone }}">{{ "%+.1f"|format(a.upside_to_mean_pct) }}% to mean</div>
-            {%- endif -%}
+            <div class="mt-1 text-xs text-text-muted">Range {{ fmt(a.target_low, "$") }} &ndash; {{ fmt(a.target_high, "$") }} &middot; Median {{ fmt(a.target_median, "$") }}</div>
+            {# Upside is shown once, in the Current price card, computed against
+               the authoritative live price — not duplicated here. #}
             {%- else -%}
             <div class="text-2xl font-bold text-text-muted">&mdash;</div>
             <div class="mt-1 text-xs text-text-muted">No analyst price target in stored evidence.</div>
@@ -473,121 +472,31 @@
             {%- endif -%}
         </div>
 
-        {# Current vs target quick card #}
+        {# Current price + upside to mean target.
+           The current price is the authoritative fallback-chain price
+           (technical MA → yfinance metrics → analyst packet), NOT the
+           price-target packet's own `current_price` — that field is blank
+           whenever the analyst source returned no live quote, which left
+           this card showing `—` even though the page had a real price in
+           the Technical section above. The price *target* still comes from
+           the analyst packet; when no target exists the upside line is
+           suppressed and the target card shows its honest empty state. #}
+        {# `current_price` is passed by the route (authoritative fallback chain).
+           Guard with `is defined` so a stale process that imported the route
+           before this var was added doesn't 500 every ticker page — it just
+           falls back to the analyst packet's price. #}
+        {%- set cp = current_price if current_price is defined else none -%}
+        {%- set px = cp if cp is not none else a.current_price -%}
         <div class="rounded-xl bg-surface-sunken/40 p-4">
             <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Current price</div>
-            <div class="text-2xl font-bold text-text-primary">{{ fmt(a.current_price, "$") }}</div>
-            {%- if a.current_price is not none and a.target_mean is not none and a.target_mean > 0 -%}
-            {%- set upside = ((a.target_mean - a.current_price) / a.current_price * 100)|round(1) -%}
+            <div class="text-2xl font-bold text-text-primary">{{ fmt(px, "$") }}</div>
+            {%- if px is not none and a.target_mean is not none and a.target_mean > 0 -%}
+            {%- set upside = ((a.target_mean - px) / px * 100)|round(1) -%}
             {%- set upside_tone = 'text-positive' if upside > 0 else ('text-negative' if upside < 0 else 'text-text-muted') -%}
             <div class="mt-2 text-sm font-semibold {{ upside_tone }}">{{ "%+.1f"|format(upside) }}% to mean target</div>
             {%- endif -%}
         </div>
     </div>
-</section>
-
-{# ── Valuation fingerprint: years × multiples heatmap (Source.md §16.8) ── #}
-{# Replaces the old D3 radar. The radar auto-scaled each axis to its own range,
-   so its "shape" only showed within-metric year-over-year movement and hid
-   absolute valuation levels unless the operator hovered. This matrix shows
-   every actual fiscal-year-end multiple, tinted by where it sits in that
-   metric's own 3-4y history (cheap = green → pricey = red); a trailing "now"
-   row shows the current/TTM multiple and a "3Y avg" footer the historical
-   average. Pure Jinja + CSS — no JS — so it renders with JS disabled and is a
-   real <table> for screen readers. The section's `reveal` class is animated
-   by the global IntersectionObserver in pmacs-anim.js. #}
-{%- set py = derived.per_year or [] -%}
-{%- set pe_vals   = py|map(attribute='pe')|select('ne', none)|list -%}
-{%- set pfcf_vals = py|map(attribute='pfcf')|select('ne', none)|list -%}
-{%- set ps_vals   = py|map(attribute='ps')|select('ne', none)|list -%}
-{%- set pb_vals   = py|map(attribute='pb')|select('ne', none)|list -%}
-{%- set ev_vals   = py|map(attribute='ev_ebitda')|select('ne', none)|list -%}
-{%- set has_pe   = pe_vals|length > 0 -%}
-{%- set has_pfcf = pfcf_vals|length > 0 -%}
-{%- set has_ps   = ps_vals|length > 0 -%}
-{%- set has_pb   = pb_vals|length > 0 -%}
-{%- set has_ev   = ev_vals|length > 0 -%}
-{%- set pe_lo   = pe_vals|min   if has_pe   else none -%}
-{%- set pe_hi   = pe_vals|max   if has_pe   else none -%}
-{%- set pfcf_lo = pfcf_vals|min if has_pfcf else none -%}
-{%- set pfcf_hi = pfcf_vals|max if has_pfcf else none -%}
-{%- set ps_lo   = ps_vals|min   if has_ps   else none -%}
-{%- set ps_hi   = ps_vals|max   if has_ps   else none -%}
-{%- set pb_lo   = pb_vals|min   if has_pb   else none -%}
-{%- set pb_hi   = pb_vals|max   if has_pb   else none -%}
-{%- set ev_lo   = ev_vals|min   if has_ev   else none -%}
-{%- set ev_hi   = ev_vals|max   if has_ev   else none -%}
-{%- set cur = derived.current -%}
-{# Current/TTM P/FCF: market cap ÷ latest annual FCF (deterministic, in-template
-   presentation math — same standing as `upside` and `sbc_delta_pp` elsewhere on
-   this page; the Five Non-Negotiables restrict LLMs, not templates). #}
-{%- set now_pfcf = (derived.market_cap_usd / derived.latest_fcf_usd)|round(2)
-                   if (derived.market_cap_usd and derived.latest_fcf_usd and derived.latest_fcf_usd > 0)
-                   else none -%}
-{# Active columns: (label, per_year attr, 3Y avg, lo, hi, current value). A column
-   is included only when it has ≥1 historical value. Iterating this tuple list
-   keeps the header / row / now / avg markup DRY. #}
-{%- set cols = [] -%}
-{%- if has_pe -%}{%- set _ = cols.append(('P/E', 'pe', derived.pe_3y_avg, pe_lo, pe_hi, cur.pe)) -%}{%- endif -%}
-{%- if has_pfcf -%}{%- set _ = cols.append(('P/FCF', 'pfcf', derived.pfcf_3y_avg, pfcf_lo, pfcf_hi, now_pfcf)) -%}{%- endif -%}
-{%- if has_ps -%}{%- set _ = cols.append(('P/S', 'ps', derived.ps_3y_avg, ps_lo, ps_hi, cur.ps)) -%}{%- endif -%}
-{%- if has_pb -%}{%- set _ = cols.append(('P/B', 'pb', derived.pb_3y_avg, pb_lo, pb_hi, cur.pb)) -%}{%- endif -%}
-{%- if has_ev -%}{%- set _ = cols.append(('EV/EBITDA', 'ev_ebitda', derived.ev_ebitda_3y_avg, ev_lo, ev_hi, cur.ev_ebitda)) -%}{%- endif -%}
-{%- set has_now = (cur.pe is not none) or (now_pfcf is not none) or (cur.ps is not none) or (cur.pb is not none) or (cur.ev_ebitda is not none) -%}
-{%- set show_fp = (py|length >= 2) and (cols|length >= 2) -%}
-<section class="card card-elevated mb-6 reveal" aria-labelledby="mult-heading">
-    <div class="flex items-baseline justify-between gap-4 mb-4 flex-wrap">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-violet-500"></span>
-            <h2 id="mult-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Valuation fingerprint</h2>
-        </div>
-        <span class="text-[10px] text-text-muted">Fiscal year-end multiples &middot; tint = percentile in each metric's own history</span>
-    </div>
-
-    {% if show_fp %}
-    <div class="overflow-x-auto">
-        <table class="fp-matrix">
-            <caption class="sr-only">Valuation fingerprint: one row per fiscal year, columns are valuation multiples ({{ cols|map(attribute=0)|join(', ') }}). Each cell shows the actual multiple and is tinted green when cheap in that metric's own history, red when pricey. The "now" row is the current/TTM multiple; the "3Y avg" row is the historical average.</caption>
-            <thead>
-                <tr>
-                    <th scope="col" class="fp-corner">Fiscal year</th>
-                    {% for c in cols %}<th scope="col">{{ c[0] }}</th>{% endfor %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for y in py|reverse %}
-                <tr>
-                    <th scope="row">{{ y.period or '?' }}</th>
-                    {% for c in cols %}<td class="{{ fp_tone(y|attr(c[1]), c[3], c[4]) }}">{{ fmt(y|attr(c[1])) }}</td>{% endfor %}
-                </tr>
-                {% endfor %}
-                {% if has_now %}
-                <tr class="fp-now">
-                    <th scope="row">now <span class="fp-star" aria-hidden="true">*</span></th>
-                    {% for c in cols %}<td class="{{ fp_tone(c[5], c[3], c[4]) }}">{{ fmt(c[5]) }}</td>{% endfor %}
-                </tr>
-                {% endif %}
-            </tbody>
-            <tfoot>
-                <tr class="fp-avg">
-                    <th scope="row">3Y avg</th>
-                    {% for c in cols %}<td class="{{ fp_tone(c[2], c[3], c[4]) }}">{{ fmt(c[2]) }}</td>{% endfor %}
-                </tr>
-            </tfoot>
-        </table>
-    </div>
-
-    <div class="fp-legend mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-muted">
-        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-cheap" aria-hidden="true"></span>cheap in history</span>
-        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-neutral" aria-hidden="true"></span>mid-range</span>
-        <span class="inline-flex items-center gap-1.5"><span class="fp-sw fp-pricey" aria-hidden="true"></span>pricey in history</span>
-        <span class="inline-flex items-center gap-1.5"><span class="fp-star" aria-hidden="true">*</span>current / TTM</span>
-    </div>
-    {% else %}
-    <div class="text-sm text-text-muted p-4">
-        Not enough historical multiples to draw a fingerprint (need at least two fiscal years across two or more multiples).
-    </div>
-    {% endif %}
 </section>
 
 {# ── Technical (price, MAs, RSI, 52w distance) ── #}

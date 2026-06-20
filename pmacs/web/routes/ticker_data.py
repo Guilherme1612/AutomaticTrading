@@ -557,6 +557,13 @@ async def ticker_data_page(request: Request, ticker: str):
                 "groups": _display_groups(ticker, ev, derived, sector=profile.get("finnhubIndustry") or ""),
                 "derived": derived,
                 "technical": technical,
+                # Authoritative current price: the same 3-source fallback chain
+                # the Technical section uses (tech MA → yfinance metrics → analyst
+                # price-target packet). Surfaced as a top-level var so the Analyst
+                # consensus "Current price" card doesn't go blank just because the
+                # price-target evidence packet lacks a current_price — the live price
+                # lives in the technical packet, not the analyst one.
+                "current_price": tech_current,
                 "no_data": False,
             },
         )

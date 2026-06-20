@@ -2,11 +2,10 @@
 
 Seeds synthetic evidence for a ticker, renders /ticker/{ticker} via FastAPI
 TestClient, and asserts every new section is present:
-  - Valuation summary (current + 3Y average)
+  - Valuation summary (current + 3Y average per metric)
   - FCF yields (unadjusted + SBC-adjusted)
   - SaaS KPIs (NRR, ARR, GRR, Rule of 40)
   - Analyst consensus
-  - 3-year multiples table
   - Raw fundamentals groups
 
 This test is deterministic, offline, and does not call any data source.
@@ -221,12 +220,22 @@ class TestTickerPageRenders:
         assert "PMS" in resp.text
         assert "Playwright Mock SaaS Inc." in resp.text
 
-    def test_verdict_strip_coverage(self, seeded_client):
+    def test_header_strips_dropped_by_design(self, seeded_client):
+        """Operator directive (audit P2-#10): the at-a-glance verdict chip strip
+        (Cash / Fwd P/E / Trend / Coverage) was removed from the header. The
+        header now presents the ticker identity as a single elevated hero card
+        (symbol + sector chip on the top row, company name as subtitle).
+        Verify the chip strip is gone and the new minimal header renders."""
         resp = seeded_client.get("/ticker/PMS")
-        assert "Cash:" in resp.text
-        assert "Fwd P/E:" in resp.text
-        assert "Trend:" in resp.text
-        assert "Coverage:" in resp.text
+        # None of the old chip labels are present anywhere on the page.
+        for label in ("Cash:", "Fwd P/E:", "Trend:", "Coverage:"):
+            assert label not in resp.text, (
+                f"header chip strip should have been removed but '{label}' "
+                f"still appears in the page"
+            )
+        # The header's identity elements are present.
+        assert ">PMS<" in resp.text  # the H1 ticker
+        assert "Playwright Mock SaaS Inc." in resp.text  # company subtitle
 
 
 class TestValuationSummary:
@@ -331,20 +340,25 @@ class TestAnalystConsensus:
 
 
 class TestThreeYearMultiples:
-    """Expanded per-year detail table and trend cards."""
+    """The 3-year multiples are exposed via the Valuation summary cards
+    (current value + 3Y average per metric) — the redesign dropped the
+    separate per-year multiples table in favor of inline chips in each
+    metric card. This class locks that contract."""
 
-    def test_three_year_multiples_section(self, seeded_client):
+    def test_valuation_summary_has_3y_average(self, seeded_client):
+        """Every metric card in the Valuation summary shows the 3Y average
+        next to the current value. Verify the 3Y average language renders."""
         resp = seeded_client.get("/ticker/PMS")
-        assert "3-year multiples" in resp.text
+        assert "3Y avg" in resp.text or "3Y average" in resp.text
 
-    def test_per_year_table_has_all_multiples(self, seeded_client):
+    def test_per_metric_cards_render_all_multiples(self, seeded_client):
+        """The Valuation summary card grid renders one card per multiple
+        (P/E, P/S, P/B, EV/EBITDA). The per-card multiple label is
+        verified instead of the old table-column header."""
         resp = seeded_client.get("/ticker/PMS")
         html = resp.text
-        # Headers
-        assert "P/FCF" in html
-        assert "P/S" in html
-        assert "P/B" in html
-        assert "EV/EBITDA" in html
+        for label in ("P/S", "P/B", "EV/EBITDA"):
+            assert label in html, f"multiple label '{label}' missing from valuation summary"
 
     def test_sparklines_present(self, seeded_client):
         resp = seeded_client.get("/ticker/PMS")

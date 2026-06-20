@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bull_advocate",
+  "description": "JSON Schema for bull_advocate persona output (Agents.md §11b)",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "target_persona": {
+      "type": "string",
+      "enum": [
+        "macro_regime",
+        "catalyst_summarizer",
+        "moat_analyst",
+        "growth_hunter",
+        "insider_activity",
+        "short_interest",
+        "forensics"
+      ]
+    },
+    "p_up": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_flat": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "p_down": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reasoning": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "strongest_bear_counterpoint": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "ticker",
+    "target_persona",
+    "p_up",
+    "p_flat",
+    "p_down",
+    "reasoning",
+    "strongest_bear_counterpoint",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

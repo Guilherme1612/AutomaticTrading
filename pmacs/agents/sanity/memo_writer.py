@@ -151,4 +151,53 @@ class MemoWriterSanity(BaseSanityValidator):
                 except (TypeError, ValueError):
                     pass
 
+        # ── Wave-2 enrichment checks (Agents.md §16.9) ───────────────────────
+        # These fields are optional-with-defaults so simulation and pipeline
+        # paths without debate context still pass. When the LLM DOES populate
+        # them, enforce structural sanity: no empty items, no malformed dicts.
+
+        bull_bear_debate = output.get("bull_bear_debate") or {}
+        if isinstance(bull_bear_debate, dict) and bull_bear_debate:
+            for key in ("bull_case", "bear_case"):
+                val = bull_bear_debate.get(key)
+                if val is not None and not str(val).strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=f"bull_bear_debate.{key} is present but empty",
+                    )
+            advocate_lean = bull_bear_debate.get("advocate_lean")
+            if advocate_lean is not None:
+                lean = str(advocate_lean).strip().upper()
+                if lean and lean not in ("BULL", "BEAR", "BALANCED", "NEUTRAL"):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"bull_bear_debate.advocate_lean='{advocate_lean}' "
+                               "must be one of BULL/BEAR/BALANCED/NEUTRAL",
+                    )
+
+        wwm = output.get("what_would_change_my_mind") or []
+        if isinstance(wwm, list) and wwm:
+            for i, item in enumerate(wwm):
+                if not item or not str(item).strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=f"what_would_change_my_mind[{i}] is empty",
+                    )
+
+        reverse_dcf = output.get("reverse_dcf")
+        if reverse_dcf is not None:
+            if not isinstance(reverse_dcf, dict):
+                return SanityResult(
+                    passed=False,
+                    reason=f"reverse_dcf must be a dict, got {type(reverse_dcf).__name__}",
+                )
+
+        scenario_price = output.get("scenario_price")
+        if scenario_price is not None:
+            if not isinstance(scenario_price, dict):
+                return SanityResult(
+                    passed=False,
+                    reason=f"scenario_price must be a dict, got {type(scenario_price).__name__}",
+                )
+
         return SanityResult(passed=True)

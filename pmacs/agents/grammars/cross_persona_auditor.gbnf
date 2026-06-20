@@ -1,0 +1,22 @@
+// grammar: cross_persona_auditor
+// version: 1.0
+// spec: Agents.md §11d
+// Emits AuditorOutput: flags (array of AuditorFlag) + summary. NO probabilities.
+
+root ::= "{" ws "\"ticker\"" ws ":" ws string "," ws "\"flags\"" ws ":" ws flag-array "," ws "\"summary\"" ws ":" ws string ws "}"
+
+flag-array ::= "[" ws (flag-entry (ws "," ws flag-entry)*)? ws "]"
+
+flag-entry ::= "{" ws "\"flag_type\"" ws ":" ws flag-type "," ws "\"target_persona\"" ws ":" ws target-persona "," ws "\"severity\"" ws ":" ws number "," ws "\"description\"" ws ":" ws string "," ws "\"evidence_ids\"" ws ":" ws evidence-array "," ws "\"taxonomy_mapping\"" ws ":" ws flag-type ws "}"
+
+flag-type ::= "\"CITATION_GAP\"" | "\"CONCLUSION_UNSUPPORTED\"" | "\"CONFLICTING_CONCLUSIONS\"" | "\"NUMBER_MISUSE\"" | "\"HALLUCINATED_EVIDENCE\""
+
+target-persona ::= "\"macro_regime\"" | "\"catalyst_summarizer\"" | "\"moat_analyst\"" | "\"growth_hunter\"" | "\"insider_activity\"" | "\"short_interest\"" | "\"forensics\""
+
+evidence-array ::= "[" ws (string (ws "," ws string)*)? ws "]"
+
+ws ::= [ \t\n\r]?
+
+string ::= "\"" [^"\\]* "\""
+
+number ::= "-"? ([0-9]+ ("." [0-9]+)?) | ("." [0-9]+)

@@ -43,6 +43,19 @@ STRUCTURE:
    MATERIAL_CONCERNS or SEVERE_RISK, you MUST use bear-case-only valuation.
    Do NOT cite bull-case or base-case fair values when earnings quality is flagged.
 8. DISSENT: any persona that significantly disagreed with the consensus. What did they see?
+9. BULL / BEAR DEBATE: when the analytical context includes a "Bull / Bear Advocate
+   Debate" section, summarize the strongest bull and bear cases the advocates made
+   (one sentence each), name which side the advocates leaned toward overall
+   (BULL / BEAR / BALANCED), and state the reverse-DCF growth gap (market-implied vs
+   estimated growth). Keep this to 3-4 sentences. If no debate context was provided,
+   omit this section and leave `bull_bear_debate` empty.
+10. WHAT WOULD CHANGE MY MIND: 2-4 pre-registered, falsifiable triggers that would
+    invalidate or reverse the thesis. These are NOT generic risks — they are specific,
+    observable, future events/metrics. Examples: "Q3 revenue growth decelerates below
+    20% YoY for two consecutive quarters", "NRR drops below 110%", "Gross margin
+    contracts >300bps without a stated mix shift". Each trigger must reference a
+    concrete metric or event, not a feeling. Populate `what_would_change_my_mind` as
+    an array of these strings. If the thesis is a SKIP, list what would make it a BUY.
 
 INDUSTRY-SPECIFIC METRICS (include in KEY EVIDENCE when available):
 - SaaS/Cloud: NRR, ARR, GRR, RPO, customer count, logo churn, expansion rate, Rule of 40
@@ -203,6 +216,17 @@ Additional optional fields (include when you have enough data):
 - `competitive_position` (object): `{moat_type, market_share, advantages: [], threats: []}` — moat type from Moat Analyst output
 - `bear_case_response` (string): 2-3 sentences directly addressing the strongest Crucible attack — why the thesis survives (or doesn't)
 - `catalyst_calendar` (array): top 2-3 upcoming catalysts, each object with `event` (string), `expected_date` (string, "YYYY-MM-DD" or "TBD"), `potential_impact` (string)
+
+Wave-2 debate + valuation fields (include when the analytical context provides them):
+- `bull_bear_debate` (object): summary of the advocate debate. Fields:
+  - `bull_case` (string): the strongest bull argument the bull_advocate made (one sentence)
+  - `bear_case` (string): the strongest bear argument the bear_advocate made (one sentence)
+  - `advocate_lean` (string): which side the advocates leaned toward overall — one of "BULL", "BEAR", "BALANCED", "NEUTRAL"
+  - `reverse_dcf_gap` (string): the market-implied vs estimated growth gap from the Reverse-DCF Valuation Anchor (e.g., "market implies 8.2% growth vs estimated 18.0% — +9.8pp gap, BULLISH")
+  Leave this object empty `{}` when no debate context was provided.
+- `what_would_change_my_mind` (array of strings): 2-4 pre-registered, falsifiable triggers
+  that would invalidate or reverse the thesis (see STRUCTURE section 10). Each string is one
+  specific, observable trigger referencing a concrete metric or event.
 
 Do not add fields not listed above. Do not output anything outside the JSON object.
 

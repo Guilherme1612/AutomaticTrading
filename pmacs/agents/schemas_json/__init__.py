@@ -21,6 +21,10 @@ PERSONAS = frozenset({
     "forensics",
     "crucible",
     "memo_writer",
+    # Wave-2 debate + audit personas (Agents.md §11b-§11d)
+    "bull_advocate",
+    "bear_advocate",
+    "cross_persona_auditor",
 })
 
 

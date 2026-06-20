@@ -40,6 +40,10 @@ def make_simulation_output(
         "insider_activity": _simulate_insider_activity,
         "short_interest": _simulate_short_interest,
         "forensics": _simulate_forensics,
+        # Wave-2 debate + audit personas (Agents.md §11b-§11d)
+        "bull_advocate": _simulate_bull_advocate,
+        "bear_advocate": _simulate_bear_advocate,
+        "cross_persona_auditor": _simulate_cross_persona_auditor,
     }
 
     gen = generators.get(persona_name)
@@ -193,4 +197,59 @@ def _simulate_forensics(ticker: str, ev_ids: list[str]) -> dict:
         "p_flat": 0.4,
         "p_down": 0.3,
         "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_bull_advocate(ticker: str, ev_ids: list[str]) -> dict:
+    """Conservative simulation: near-uniform, no fabricated bull conviction.
+
+    Targets growth_hunter by default (a wave-1 persona always exists). Advocacy
+    is not fabrication — simulation emits a near-flat distribution and concedes
+    the bear case so sanity accepts the degenerate-leaning distribution.
+    """
+    return {
+        "ticker": ticker,
+        "target_persona": "growth_hunter",
+        "p_up": 0.34,
+        "p_flat": 0.36,
+        "p_down": 0.30,
+        "reasoning": (
+            "SIMULATION — llama-server unavailable; no bull conviction can be "
+            "supported without the wave-1 reads. Conceding the bear case is "
+            "not warranted either; emitting a near-uniform distribution against "
+            "growth_hunter."
+        ),
+        "strongest_bear_counterpoint": "SIMULATION — no evidence available to evaluate",
+        "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_bear_advocate(ticker: str, ev_ids: list[str]) -> dict:
+    return {
+        "ticker": ticker,
+        "target_persona": "growth_hunter",
+        "p_up": 0.30,
+        "p_flat": 0.36,
+        "p_down": 0.34,
+        "reasoning": (
+            "SIMULATION — llama-server unavailable; no bear conviction can be "
+            "supported without the wave-1 reads. Emitting a near-uniform, "
+            "slightly bear-leaning distribution against growth_hunter."
+        ),
+        "strongest_bull_counterpoint": "SIMULATION — no evidence available to evaluate",
+        "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_cross_persona_auditor(ticker: str, ev_ids: list[str]) -> dict:
+    """Conservative simulation: empty flags (clean output).
+
+    An auditor that fabricates flags would cap real personas' arbitration
+    weights on invented flaws — a math-leak. Simulation returns an empty flag
+    list so it contributes no weight caps and no FDE writes.
+    """
+    return {
+        "ticker": ticker,
+        "flags": [],
+        "summary": "SIMULATION — llama-server unavailable; no audit performed (clean by default)",
     }

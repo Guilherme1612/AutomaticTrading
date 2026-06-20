@@ -42,11 +42,18 @@ class MemoWriterRunner(PersonaRunner):
         crucible_attacks: list | None = None,
         forensics_quality: str | None = None,
         persona_outputs: list | None = None,
+        advocate_outputs: dict | None = None,
+        auditor_flags: list | None = None,
+        reverse_dcf: object | None = None,
+        scenario_price: object | None = None,
     ) -> None:
         """Inject the full analytical synthesis so the memo has real numbers.
 
         Called by the orchestrator before run() so build_prompt can include
-        per-persona signals, arbitration probabilities, and verdict.
+        per-persona signals, arbitration probabilities, and verdict. Wave-2
+        debate/audit/valuation context (Agents.md §11b-§11d, §16.9) is injected
+        here so the memo surfaces the bull/bear debate, auditor findings, the
+        reverse-DCF growth gap, and the scenario-weighted expected price.
         """
         lines: list[str] = []
 
@@ -107,6 +114,71 @@ class MemoWriterRunner(PersonaRunner):
                 lines.append(
                     f"  {name:22s}: p_up={pu:.3f} p_flat={pf:.3f} p_down={pd:.3f}  → {direction}"
                 )
+
+        # ── Wave-2 debate + audit + valuation (Agents.md §16.9) ───────────────
+        if advocate_outputs:
+            lines.append("\n## Bull / Bear Advocate Debate")
+            for pname, po in advocate_outputs.items():
+                import json as _aj
+                reasoning = ""
+                raw = getattr(po, "raw_output", "")
+                if raw:
+                    try:
+                        d = _aj.loads(raw)
+                        reasoning = d.get("reasoning", "")
+                        pu = d.get("p_up"); pf = d.get("p_flat"); pd = d.get("p_down")
+                        tgt = d.get("target_persona", "")
+                    except (ValueError, TypeError):
+                        pu = pf = pd = None
+                        tgt = ""
+                else:
+                    pu = pf = pd = None
+                    tgt = ""
+                prob = (
+                    f"p_up={pu:.3f} p_flat={pf:.3f} p_down={pd:.3f}"
+                    if all(isinstance(v, (int, float)) for v in (pu, pf, pd))
+                    else "(probs unavailable)"
+                )
+                lines.append(f"  {pname} (vs {tgt}): {prob}")
+                if reasoning:
+                    lines.append(f"    {str(reasoning)[:280]}")
+
+        if auditor_flags:
+            lines.append("\n## Cross-Persona Auditor Flags")
+            lines.append(
+                "IMPORTANT: Address each flag in key_risks. A flag means a wave-1 "
+                "persona's reasoning did not follow from its cited evidence."
+            )
+            for flag in auditor_flags[:8]:
+                ftype = getattr(flag, "flag_type", "?")
+                target = getattr(flag, "target_persona", None)
+                target_val = getattr(target, "value", target)
+                sev = getattr(flag, "severity", 0.0)
+                desc = getattr(flag, "description", "")
+                lines.append(f"  [{ftype} | {target_val} | sev={sev:.2f}] {desc}")
+
+        if reverse_dcf is not None and getattr(reverse_dcf, "is_available", False):
+            lines.append("\n## Reverse-DCF Valuation Anchor")
+            lines.append(
+                f"  Market-implied growth: {reverse_dcf.implied_growth_pct*100:.2f}%  "
+                f"vs estimated: {reverse_dcf.assumed_growth_pct*100:.2f}%  "
+                f"(gap {reverse_dcf.growth_gap_pct*100:+.2f}pp, lean={reverse_dcf.valuation_lean})"
+            )
+            if reverse_dcf.fair_value_usd is not None:
+                lines.append(f"  Fair value at estimated growth: ${reverse_dcf.fair_value_usd:,.0f}")
+        elif reverse_dcf is not None:
+            notes = getattr(reverse_dcf, "notes", "") or "unavailable"
+            lines.append(f"\n## Reverse-DCF Valuation Anchor\n  Unavailable ({notes}).")
+
+        if scenario_price is not None and getattr(scenario_price, "is_available", False):
+            lines.append("\n## Scenario-Weighted Expected Price")
+            lines.append(
+                f"  E[price] = ${scenario_price.expected_price_usd:,.2f}  "
+                f"(bull=${scenario_price.bull_price:,.2f}, base=${scenario_price.base_price:,.2f}, "
+                f"bear=${scenario_price.bear_price:,.2f})"
+            )
+            if scenario_price.expected_return_pct is not None:
+                lines.append(f"  Expected return vs current: {scenario_price.expected_return_pct:+.1f}%")
 
         self._analytical_context = "\n".join(lines)
 

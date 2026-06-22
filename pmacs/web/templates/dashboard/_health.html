@@ -1,0 +1,67 @@
+{# System Health region — SSE-driven partial (Source.md §14.6; Architecture.md §4.4). #}
+<div class="card card-elevated" data-stagger
+     id="dash-health"
+     hx-get="/api/dashboard/partials/health"
+     hx-trigger="pmacs:refresh from:body"
+     hx-swap="outerHTML">
+    <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full bg-positive anim-breathe"></span>
+        System Health
+    </h3>
+    {% if system_health is defined %}
+    <div class="space-y-4">
+        <!-- Audit Chain -->
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+                <svg class="w-8 h-8" viewBox="0 0 36 36">
+                    <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                    <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.audit_chain == 'OK' else 'gauge-fill-negative' }}"
+                            cx="18" cy="18" r="14" stroke-dasharray="88"
+                            stroke-dashoffset="{{ '0' if system_health.audit_chain == 'OK' else '44' }}"
+                            transform="rotate(-90 18 18)"/>
+                </svg>
+                <span class="text-sm text-text-secondary">Audit Chain</span>
+            </div>
+            <span class="font-mono text-sm font-medium {{ 'text-positive' if system_health.audit_chain == 'OK' else 'text-negative' }}">
+                {{ system_health.audit_chain }}
+            </span>
+        </div>
+        <!-- Disk Free -->
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+                <svg class="w-8 h-8" viewBox="0 0 36 36">
+                    <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                    <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.disk_free_gb > 20 else 'gauge-fill-warning' if system_health.disk_free_gb > 5 else 'gauge-fill-negative' }}"
+                            cx="18" cy="18" r="14" stroke-dasharray="88"
+                            stroke-dashoffset="{{ "%.0f"|format(88 - (88 * [system_health.disk_free_gb / 100, 1]|min)) }}"
+                            transform="rotate(-90 18 18)"/>
+                </svg>
+                <span class="text-sm text-text-secondary">Disk Free</span>
+            </div>
+            <span class="font-mono text-sm font-medium text-text-primary">{{ system_health.disk_free_gb }} GB</span>
+        </div>
+        <!-- Inference -->
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3 min-w-0">
+                <svg class="w-8 h-8" viewBox="0 0 36 36">
+                    <circle class="gauge-bg" cx="18" cy="18" r="14" stroke-dasharray="88" stroke-dashoffset="0"/>
+                    <circle class="gauge-ring {{ 'gauge-fill-positive' if system_health.inference_ok or system_health.inference_backend == 'cloud' else 'gauge-fill-warning' }}"
+                            cx="18" cy="18" r="14" stroke-dasharray="88"
+                            stroke-dashoffset="{{ '0' if system_health.inference_ok or system_health.inference_backend == 'cloud' else '44' }}"
+                            transform="rotate(-90 18 18)"/>
+                </svg>
+                <span class="text-sm text-text-secondary">Inference</span>
+            </div>
+            {% if system_health.inference_backend == 'cloud' %}
+            <span class="font-mono text-sm font-medium text-positive whitespace-nowrap">Cloud API</span>
+            {% elif system_health.inference_ok %}
+            <span class="font-mono text-sm font-medium text-positive">OK</span>
+            {% else %}
+            <span class="font-mono text-sm font-medium text-warning">Offline</span>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <p class="text-sm text-text-muted text-center py-6">Health unavailable</p>
+    {% endif %}
+</div>

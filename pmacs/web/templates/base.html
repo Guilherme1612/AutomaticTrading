@@ -6,7 +6,7 @@
     <title>PMACS - {% block title %}Dashboard{% endblock %}</title>
     <link rel="stylesheet" href="/static/dist/tailwind.css?v=2">
     <script src="/static/vendor/htmx.min.js"></script>
-    <script src="/static/vendor/d3.min.js"></script>
+    <script src="/static/vendor/d3.min.js" defer></script>
     <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
     <link rel="stylesheet" href="/static/style.css?v=4">
     <style>
@@ -307,6 +307,24 @@
             <h3 id="blocking-modal-title" class="text-lg font-semibold text-negative mb-3"></h3>
             <p id="blocking-modal-message" class="text-sm text-text-secondary mb-6 leading-relaxed"></p>
             <div id="blocking-modal-actions" class="flex gap-3 justify-end"></div>
+        </div>
+    </div>
+
+    <!-- Typed-confirm modal (Source.md §13.2 — destructive operator-confirmed actions) -->
+    <div id="confirm-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-md border border-border-subtle p-8">
+            <h3 id="confirm-modal-title" class="text-lg font-semibold text-text-primary mb-2"></h3>
+            <p id="confirm-modal-description" class="text-sm text-text-secondary mb-3 leading-relaxed"></p>
+            <p id="confirm-modal-consequences" class="text-xs text-text-muted mb-4 leading-relaxed"></p>
+            <label for="confirm-modal-input" class="block text-xs text-text-muted uppercase tracking-widest mb-1.5">
+                Type <span id="confirm-modal-symbol" class="font-mono font-semibold text-negative"></span> to confirm
+            </label>
+            <input id="confirm-modal-input" type="text" autocomplete="off" spellcheck="false"
+                   class="w-full px-3 py-2 mb-4 bg-surface-sunken rounded-xl border border-border-subtle text-text-primary font-mono text-sm focus:border-accent focus:outline-none" />
+            <div class="flex gap-3 justify-end">
+                <button type="button" id="confirm-modal-cancel" class="px-4 py-2 text-sm rounded-xl bg-surface-sunken text-text-secondary hover:bg-border transition-colors">Cancel</button>
+                <button type="button" id="confirm-modal-confirm" class="px-4 py-2 text-sm rounded-xl bg-negative text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed" disabled>Confirm</button>
+            </div>
         </div>
     </div>
 

@@ -45,14 +45,13 @@
 <section class="card card-elevated reveal" aria-labelledby="nd-heading">
     <h2 id="nd-heading" class="text-lg font-semibold text-text-primary mb-2">No data for {{ ticker }} yet</h2>
     {%- if warming -%}
-    <p class="text-sm text-text-secondary mb-4">
-        <span class="inline-flex items-center gap-2">
-            <span class="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" aria-hidden="true"></span>
-            Fetching evidence for the first time. This page will populate in a few seconds —
-            <button type="button" onclick="window.location.reload()" class="text-accent hover:underline font-medium">reload now</button>
-            or wait for it to finish.
-        </span>
-    </p>
+    {# §13.4: no bare spinner — shared loading_state with WHAT + ETA + cancel.
+       First evidence fetch for a ticker takes ~8-15s (yfinance + EDGAR). #}
+    {% set loading_what = "Fetching evidence for " ~ ticker %}
+    {% set loading_eta_seconds = 12 %}
+    {% set loading_cancel = true %}
+    {% include "components/loading_state.html" %}
+    <p class="text-xs text-text-muted text-center -mt-4 mb-4">This page will populate once the first fetch completes. The skeleton matches the workspace shape.</p>
     {%- else -%}
     <p class="text-sm text-text-secondary mb-4">
         This ticker hasn't been analyzed in a cycle, so no evidence has been collected.
@@ -62,6 +61,68 @@
     <a href="/universe" class="text-sm text-accent hover:underline">Go to Universe &rarr;</a>
 </section>
 {% else %}
+{# ── Unified ticker workspace (Source.md §16.6 single-ticker drawer) ── #}
+{% set _ws_has = (ws_memo is not none) or (ws_holding is not none) %}
+{% if _ws_has %}
+<div class="card card-elevated p-4 mb-5 reveal" role="region" aria-label="{{ ticker }} workspace summary">
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        {% set _ws_verdict = (ws_memo._verdict if ws_memo else none) or (ws_holding.verdict if ws_holding else none) %}
+        {% if _ws_verdict %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Verdict</span>
+            <span class="font-mono font-semibold
+                         {{ 'text-positive' if _ws_verdict in ('STRONG_BUY','BUY') else '' }}
+                         {{ 'text-negative' if _ws_verdict == 'SKIP' else '' }}
+                         {{ 'text-text-secondary' if _ws_verdict == 'HOLD' else '' }}">{{ _ws_verdict }}</span>
+        </span>
+        {% endif %}
+        {% set _ws_conv = (ws_memo._conviction_score if ws_memo else none) if ws_memo else (ws_holding.conviction_score if ws_holding else none) %}
+        {% if _ws_conv is not none %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Conviction</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ "%.2f"|format(_ws_conv|float) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_holding and ws_holding.entry_price_usd %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Entry</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.entry_price_usd) }}</span>
+        </span>
+        {% endif %}
+        {% if current_price %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Current</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(current_price) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_holding and ws_holding.price_target_usd %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Target</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.price_target_usd) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_days_held is not none %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Held</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ ws_days_held }}d</span>
+        </span>
+        {% endif %}
+        {% if ws_memo and ws_memo._decided_at %}
+        <span class="inline-flex items-center gap-1.5 ml-auto">
+            <span class="text-[10px] text-text-muted">Last analyzed {{ ws_memo._decided_at[:10] }}</span>
+        </span>
+        {% endif %}
+    </div>
+</div>
+<nav class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
+    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
+    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo" aria-selected="false">Memo</button>
+    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas" aria-selected="false">Personas</button>
+    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage" aria-selected="false">Lineage</button>
+    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures" aria-selected="false">Failures</button>
+</nav>
+{% endif %}
+<div id="ws-fundamentals" class="ws-panel">
 {% macro fmt(value, unit="") -%}
     {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
     {%- elif unit == "$" -%}${{ "%.2f"|format(value) }}
@@ -681,6 +742,243 @@
     </div>
 </section>
 {% endif %}
+</div>{# /ws-fundamentals #}
+
+{# ── Memo tab (Source.md §16.6 + §16.9) — rendered from the persisted memo_json ── #}
+<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+    {% if ws_memo %}
+    <div class="space-y-5">
+        {% if ws_memo.verdict_line %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Verdict line</p>
+            <p class="text-base font-semibold text-text-primary">{{ ws_memo.verdict_line }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.thesis %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Thesis</p>
+            <p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line">{{ ws_memo.thesis }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.business_model %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Business model</p>
+            <p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line">{{ ws_memo.business_model }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.growth_drivers and ws_memo.growth_drivers|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">Growth drivers</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for g in ws_memo.growth_drivers %}<li>{{ g.driver if g is mapping else g }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if ws_memo.risk_factors and ws_memo.risk_factors|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">Risk factors</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for r in ws_memo.risk_factors %}<li>{{ r.risk if r is mapping else r }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% set bbd = ws_memo.bull_bear_debate if ws_memo.bull_bear_debate is mapping else {} %}
+        {% if bbd.bull_case or bbd.bear_case or bbd.advocate_lean %}
+        <div class="card card-elevated p-5 reveal">
+            <div class="flex items-center justify-between mb-3">
+                <p class="text-[10px] text-text-muted uppercase tracking-widest">Bull / Bear debate</p>
+                {% if bbd.advocate_lean %}<span class="text-[10px] font-semibold {{ 'text-positive' if bbd.advocate_lean|upper == 'BULL' else '' }}{{ 'text-negative' if bbd.advocate_lean|upper == 'BEAR' else '' }}{{ 'text-text-muted' if bbd.advocate_lean|upper in ('NEUTRAL','BALANCED') else '' }}">{{ bbd.advocate_lean|upper }}</span>{% endif %}
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {% if bbd.bull_case %}<div class="p-3 bg-positive-soft/40 rounded-xl"><p class="text-[10px] text-positive uppercase tracking-widest mb-1">Bull</p><p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bull_case }}</p></div>{% endif %}
+                {% if bbd.bear_case %}<div class="p-3 bg-negative-soft/40 rounded-xl"><p class="text-[10px] text-negative uppercase tracking-widest mb-1">Bear</p><p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bear_case }}</p></div>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_memo.what_would_change_my_mind and ws_memo.what_would_change_my_mind|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">What would change my mind</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for t in ws_memo.what_would_change_my_mind %}<li>{{ t }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        <div class="reveal">
+            <a href="/memo/{{ ticker }}" class="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-white transition-colors font-medium">Open full memo &rarr;</a>
+        </div>
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">{{ ticker }} has not been analyzed yet.</p>
+        <p class="text-xs text-text-muted">Run a cycle to generate the investment memo.</p>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Personas tab (Source.md §15.4 / §16.6 per-persona accordion) ── #}
+<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+    {% if ws_agent_results|length > 0 %}
+    {% set _aff_by = {} %}
+    {% for a in ws_persona_affinity %}{% set _ = _aff_by.update({a.persona: a}) %}{% endfor %}
+    <div class="space-y-3">
+        {% for r in ws_agent_results %}
+        {% set _brier = (_aff_by[r.persona].avg_brier) if (_aff_by.get(r.persona)) else none %}
+        <details class="card card-elevated reveal">
+            <summary class="cursor-pointer p-4 flex items-center justify-between gap-3 list-none">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-text-primary">{{ r.persona|replace('_',' ')|title }}</p>
+                    <p class="text-xs text-text-muted truncate">{{ r.key_signal or (r.error if r.error else '—') }}</p>
+                </div>
+                <div class="flex items-center gap-3 flex-shrink-0">
+                    {% if _brier is not none %}<span class="text-[10px] text-text-muted font-mono" title="Rolling Brier (lower is better)">Brier {{ "%.2f"|format(_brier|float) }}</span>{% endif %}
+                    <span class="inline-flex items-center gap-1 text-[10px] font-mono">
+                        <span class="text-positive">{{ "%.0f"|format((r.p_up*100)|float) }}↑</span>
+                        <span class="text-text-muted">{{ "%.0f"|format((r.p_flat*100)|float) }}→</span>
+                        <span class="text-negative">{{ "%.0f"|format((r.p_down*100)|float) }}↓</span>
+                    </span>
+                </div>
+            </summary>
+            <div class="px-4 pb-4 pt-1 border-t border-border-subtle">
+                {% if r.analysis %}<p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line mt-3">{{ r.analysis }}</p>{% endif %}
+                {% if r.error %}<p class="mt-3 text-xs text-negative">Error: {{ r.error }}</p>{% endif %}
+            </div>
+        </details>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">No per-persona results in memory for {{ ticker }}.</p>
+        <p class="text-xs text-text-muted">Persona outputs from the most recent cycle appear here while that cycle is in session or until the next one starts.</p>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Lineage tab (Source.md §16.6 position lineage + historical decisions) ── #}
+<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+    <div class="space-y-5">
+        {% if ws_holding %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Position</p>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <div><p class="text-[10px] text-text-muted">State</p><p class="font-mono text-text-primary">{{ ws_holding.state }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Entry date</p><p class="font-mono text-text-primary">{{ ws_holding.entry_date[:10] if ws_holding.entry_date else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Entry price</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.entry_price_usd) if ws_holding.entry_price_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Size</p><p class="font-mono text-text-primary">${{ "%.0f"|format(ws_holding.position_size_usd) if ws_holding.position_size_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Verdict at entry</p><p class="font-mono text-text-primary">{{ ws_holding.verdict or '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Conviction at entry</p><p class="font-mono text-text-primary">{{ "%.2f"|format(ws_holding.conviction_score) if ws_holding.conviction_score is not none else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Current price</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.current_price_usd) if ws_holding.current_price_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Price target</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.price_target_usd) if ws_holding.price_target_usd else '—' }}</p></div>
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_stop_events|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Stop events</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr class="text-[10px] text-text-muted uppercase tracking-widest text-left">
+                        <th class="py-1 pr-4">Type</th><th class="py-1 pr-4">Detected</th><th class="py-1 pr-4">Trigger</th><th class="py-1 pr-4">Stop</th><th class="py-1">Status</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        {% for s in ws_stop_events %}
+                        <tr class="text-text-secondary">
+                            <td class="py-2 pr-4 font-mono">{{ s.stop_type }}</td>
+                            <td class="py-2 pr-4 font-mono">{{ s.detected_at[:16] if s.detected_at else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono">${{ "%.2f"|format(s.trigger_price_usd) if s.trigger_price_usd else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono">${{ "%.2f"|format(s.stop_price_usd) if s.stop_price_usd else '—' }}</td>
+                            <td class="py-2 font-mono">{{ s.status }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_ticker_decisions|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Decisions across cycles</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr class="text-[10px] text-text-muted uppercase tracking-widest text-left">
+                        <th class="py-1 pr-4">Date</th><th class="py-1 pr-4">Verdict</th><th class="py-1 pr-4">Conviction</th><th class="py-1">Cycle</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        {% for d in ws_ticker_decisions %}
+                        <tr class="text-text-secondary">
+                            <td class="py-2 pr-4 font-mono">{{ d.opened_at[:10] if d.opened_at else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono {{ 'text-positive' if d.verdict in ('STRONG_BUY','BUY') else '' }}{{ 'text-negative' if d.verdict == 'SKIP' else '' }}">{{ d.verdict }}</td>
+                            <td class="py-2 pr-4 font-mono">{{ "%.2f"|format(d.conviction) if d.conviction is not none else '—' }}</td>
+                            <td class="py-2 font-mono text-[10px] text-text-muted truncate max-w-[12rem]">{{ d.cycle_id }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        {% if not ws_holding and ws_ticker_decisions|length == 0 %}
+        <div class="card card-elevated p-8 reveal text-center">
+            <p class="text-sm text-text-secondary mb-1">No position or decision history for {{ ticker }}.</p>
+            <p class="text-xs text-text-muted">Lineage appears once this ticker is held or has run through a cycle.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+{# ── Failures tab (Source.md §16.6 failure history; Agents.md FDE taxonomy) ── #}
+<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+    {% if ws_failures|length > 0 %}
+    <div class="space-y-3">
+        {% for f in ws_failures %}
+        <div class="card card-elevated p-5 reveal">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-mono font-semibold text-negative">{{ f.get("fa.taxonomy") or f.get("taxonomy") or "—" }}</span>
+                <span class="text-[10px] text-text-muted font-mono">{{ (f.get("fa.ts") or f.get("ts") or "")[:16] }}</span>
+            </div>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ f.get("fa.summary") or f.get("summary") or "" }}</p>
+            {% set _sev = f.get("fa.severity") if f.get("fa.severity") is not none else f.get("severity") %}
+            {% if _sev is not none %}<p class="mt-2 text-[10px] text-text-muted">Severity {{ "%.2f"|format(_sev|float) }}</p>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">No recorded failed assumptions for {{ ticker }}.</p>
+        <p class="text-xs text-text-muted">FailedAssumption nodes (Architecture.md §8 graph) appear here when a position is stopped out and the FDE classifies the failure.</p>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+// Ticker workspace tab switching (Source.md §16.6). No framework — plain DOM,
+// degrades to all-panels-visible if JS fails (panels default to .hidden except
+// fundamentals, so without JS only fundamentals shows; with JS, tabs reveal).
+(function () {
+    var tabs = document.querySelectorAll('[data-ws-tab]');
+    var panels = document.querySelectorAll('.ws-panel');
+    if (!tabs.length) return;
+    function activate(name) {
+        panels.forEach(function (p) {
+            p.classList.toggle('hidden', p.id !== 'ws-' + name);
+        });
+        tabs.forEach(function (b) {
+            var on = b.getAttribute('data-ws-tab') === name;
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.classList.toggle('bg-accent-soft', on);
+            b.classList.toggle('text-accent', on);
+            b.classList.toggle('text-text-secondary', !on);
+        });
+        try { history.replaceState(null, '', '#' + name); } catch (e) {}
+    }
+    tabs.forEach(function (b) {
+        b.addEventListener('click', function () { activate(b.getAttribute('data-ws-tab')); });
+    });
+    // Deep link: /ticker/{ticker}#memo  → open that tab.
+    var initial = (location.hash || '').replace('#', '');
+    if (initial && document.getElementById('ws-' + initial)) { activate(initial); }
+    else { activate('fundamentals'); }
+})();
+</script>
 
 {% endif %}
 {% endblock %}

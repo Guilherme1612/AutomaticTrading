@@ -146,6 +146,7 @@ async def pipeline_page(request: Request):
                 "financial_snapshot": extra.get("financial_snapshot", {}),
                 "verdict_line": extra.get("verdict_line", ""),
                 "price_usd": extra.get("price_usd"),
+                "is_active": True,  # sourced from get_active_holdings → force-exit eligible
             }
             # Skip no-data cards (0% conviction + no thesis = infrastructure failure)
             if card["conviction"] == 0.0 and not card["thesis"]:
@@ -172,6 +173,7 @@ async def pipeline_page(request: Request):
                 "financial_snapshot": info.get("financial_snapshot", {}),
                 "verdict_line": info.get("verdict_line", ""),
                 "price_usd": info.get("price_usd"),
+                "is_active": False,  # recent decision, not a held position
             }
             # Skip no-data cards (0% conviction + no thesis = infrastructure failure)
             if card["conviction"] == 0.0 and not card["thesis"]:
@@ -444,13 +446,14 @@ _evidence_cache: dict[str, tuple[float, float, list, str]] = {}  # ticker → (t
 def _clear_cycle_caches() -> None:
     """Reset in-memory cycle caches to prevent stale data leaking between cycles."""
     global _last_cycle_agent_results, _last_cycle_crucible_results, _last_cycle_arbitration, _last_cycle_id
-    global _current_cycle_tickers, _current_ticker_processing
+    global _current_cycle_tickers, _current_ticker_processing, _evidence_cache
     _last_cycle_agent_results = {}
     _last_cycle_crucible_results = {}
     _last_cycle_arbitration = {}
     _last_cycle_id = ""
     _current_cycle_tickers = []
     _current_ticker_processing = ""
+    _evidence_cache = {}
 
 
 def _emit_event(stream: str, event_type: str, data: dict) -> None:

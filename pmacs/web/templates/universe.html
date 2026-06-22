@@ -111,7 +111,7 @@
                         {% if t.has_been_cycled %}
                         <a href="/ticker/{{ t.symbol }}"
                            class="text-xs text-accent hover:underline font-medium">View data &rarr;</a>
-                        <a href="/memo/{{ t.symbol }}"
+                        <a href="/ticker/{{ t.symbol }}#memo"
                            class="text-xs text-accent hover:underline font-medium">View memo &rarr;</a>
                         {% endif %}
                         <button type="button" onclick="removeTicker('{{ t.symbol }}')"

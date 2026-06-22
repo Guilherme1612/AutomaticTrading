@@ -831,7 +831,16 @@ Each persona card displays:
 
 Below the persona row. The most distinctive UX element in PMACS.
 
-**Toggle** (chip group at top of viz region): **Process** / **Network** / **Math**
+**Toggle** (chip group at top of viz region): **Process** / **Signals** / **Conviction**
+
+> **Label reconciliation (Jun 2026).** Earlier drafts named the toggle
+> Process / Network / Math. The shipped implementation uses Process / Signals /
+> Conviction, which carries the same substance under operator-plainer labels:
+> **Signals** = the Sankey "Network" view; **Conviction** = the step-by-step
+> formula breakdown "Math" view (each factor with its formula caption and the
+> bootstrap thresholds). The spec was retitled to match the implementation
+> rather than the reverse, to avoid the label/implementation drift documented in
+> `spec_drift_jun16`. The three views below are unchanged in substance.
 
 **Process view** (default). A horizontal timeline showing the cycle stages:
 ```
@@ -839,13 +848,20 @@ Evidence → Personas → Arbitration → Crucible → Sizing → Risk Gate → 
 ```
 Each stage is a node. Lines connect them. As the cycle progresses, completed stages fill with their result (e.g., Arbitration node shows `p_up=0.62, p_flat=0.20, p_down=0.18`). Pending stages are gray.
 
-**Network view.** A Sankey diagram. On the left: evidence sources (SEC filings, Polygon EOD, Form 4, news, IR pages). In the middle: personas. On the right: the Arbitrated output. Flow widths correspond to evidence relevance weights (per persona's evidence consumption). Hover over a flow reveals which specific evidence pieces flowed.
+**Signals view** (the Sankey "Network" view). A Sankey diagram. On the left: evidence sources (SEC filings, Polygon EOD, Form 4, news, IR pages). In the middle: personas. On the right: the Arbitrated output. Flow widths correspond to evidence relevance weights (per persona's evidence consumption). Hover over a flow reveals which specific evidence pieces flowed. A companion per-agent vote table shows `p_up` / `p_flat` / `p_down` per persona alongside the Sankey.
 
 After Arbitration completes, a second smaller Sankey appears below: Arbitrated → Crucible (single flow, colored by severity). Crucible's critique node shows severity score. If the Crucible attack succeeds in flipping the decision, an arrow shows the override.
 
-**Math view.** The actual numbers. Per persona: `p_up`, `p_flat`, `p_down`, weight (after Brier-derived adjustment). Below: the arbitration formula computed step-by-step. Below: the conviction formula computed step-by-step. Operator-readable but full transparency. Useful for auditing why a verdict came out the way it did.
+**Conviction view** (the step-by-step "Math" view). The actual numbers, computed line-by-line from the real cycle values, so the operator can audit *why* a verdict came out the way it did without reading code. Five factor cards, each with its formula caption:
+- **Direction** — `p_up − p_down`
+- **Maturity** — bootstrap factor (1.0 until a persona crosses `n ≥ 30`)
+- **Crucible** — `1 − severity^0.7`
+- **EV factor** — `ev / 1.5`, capped at 1.0
+- **Conviction** — the combined scalar, with the bootstrap tier thresholds printed inline: `HOLD ≥ 0.05 · BUY ≥ 0.15 · STRONG_BUY ≥ 0.40`
 
-**Animation.** Process view animates left-to-right as stages complete. Network view re-renders smoothly when new persona completes (D3 enter/update/exit transitions, 200ms). Math view fills in numbers progressively. None of this is critical-path; the dashboard's responsiveness is unaffected by animation rendering.
+Per-persona `p_up`, `p_flat`, `p_down` and the Brier-adjusted weight are surfaced in the Signals vote table; the Conviction view focuses on the arbitration→conviction derivation. Operator-readable, full transparency.
+
+**Animation.** Process view animates left-to-right as stages complete. Signals (Sankey) view re-renders smoothly when new persona completes (D3 enter/update/exit transitions, 200ms). Conviction view fills in numbers progressively. None of this is critical-path; the dashboard's responsiveness is unaffected by animation rendering.
 
 ### 15.6 Decision summary right rail
 

@@ -1,0 +1,36 @@
+{# Recent Decisions region — SSE-driven partial (Source.md §14.7). #}
+<div class="card card-elevated" data-stagger
+     id="dash-decisions"
+     hx-get="/api/dashboard/partials/decisions"
+     hx-trigger="pmacs:refresh from:body"
+     hx-swap="outerHTML">
+    <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full bg-viz-violet"></span>
+        Recent Decisions
+    </h3>
+    {% if recent_decisions is defined and recent_decisions %}
+    <ul class="space-y-2" id="decisions-feed">
+        {% for d in recent_decisions %}
+        <li class="anim-slide-in-right" style="animation-delay: {{ loop.index * 50 }}ms">
+            <a href="/ticker/{{ d.ticker }}"
+               class="flex items-center gap-2 text-sm p-2.5 rounded-xl hover:bg-surface-sunken transition-all duration-200 group">
+                <span class="font-mono font-semibold text-text-primary">{{ d.ticker }}</span>
+                <span class="px-1.5 py-0.5 text-xs rounded-lg font-medium
+                             {{ 'bg-positive-soft text-positive' if d.verdict == 'STRONG_BUY' else '' }}
+                             {{ 'bg-accent-soft text-accent' if d.verdict == 'BUY' else '' }}
+                             {{ 'bg-crucible-soft text-crucible' if d.verdict == 'HOLD' else '' }}
+                             {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
+                    {{ d.verdict }}
+                </span>
+                {% if d.verdict != 'SKIP' %}
+                <span class="text-xs text-text-muted font-mono">{{ "%.0f"|format([(d.conviction or 0) * 100, 0]|max) }}%</span>
+                {% endif %}
+                <span class="ml-auto text-[11px] text-accent opacity-0 group-hover:opacity-100 transition-opacity">memo →</span>
+            </a>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-text-muted text-center py-6">No recent decisions</p>
+    {% endif %}
+</div>

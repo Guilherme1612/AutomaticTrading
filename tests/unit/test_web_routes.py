@@ -170,11 +170,12 @@ class TestUniverseRoute:
             response = client.get("/universe")
             text = response.text
             assert response.status_code == 200
-            # AAPL has a holding, TSLA has a decision -> both cycled -> memo link shown
-            assert '/memo/AAPL' in text
-            assert '/memo/TSLA' in text
+            # AAPL has a holding, TSLA has a decision -> both cycled -> memo link
+            # shown (now deep-links into the unified ticker workspace §16.6 #memo).
+            assert '/ticker/AAPL#memo' in text
+            assert '/ticker/TSLA#memo' in text
             # MSFT has no cycle data -> memo link hidden
-            assert '/memo/MSFT' not in text
+            assert '/ticker/MSFT#memo' not in text
 
 
 class TestSettingsRoute:
@@ -216,3 +217,138 @@ class TestSparklineAPI:
             api_resp = client.get("/api/dashboard/sparkline?metric=sharpe&window=1W")
             assert api_resp.status_code == 200
             assert isinstance(api_resp.json(), list)
+
+
+class TestDashboardPartials:
+    """SSE-driven dashboard region partials (Source.md §14, Architecture.md §4.4).
+
+    Each partial returns one region's HTML and is self-rewiring — the root
+    container carries its own hx-get/hx-trigger/hx-swap so an outerHTML swap
+    leaves it live for the next `pmacs:refresh` event.
+    """
+
+    REGIONS = ("positions", "decisions", "health", "mutation")
+
+    def test_each_partial_returns_200(self):
+        with TestClient(app) as client:
+            for region in self.REGIONS:
+                resp = client.get(f"/api/dashboard/partials/{region}")
+                assert resp.status_code == 200, f"{region}: {resp.status_code}"
+
+    def test_each_partial_is_self_rewiring(self):
+        with TestClient(app) as client:
+            for region in self.REGIONS:
+                resp = client.get(f"/api/dashboard/partials/{region}")
+                # Root container must carry its own hx-get so the swapped-in
+                # fragment stays subscribed to pmacs:refresh.
+                assert f'hx-get="/api/dashboard/partials/{region}"' in resp.text
+                assert "hx-trigger=\"pmacs:refresh from:body\"" in resp.text
+                assert 'hx-swap="outerHTML"' in resp.text
+
+    def test_unknown_region_404s(self):
+        with TestClient(app) as client:
+            resp = client.get("/api/dashboard/partials/nonexistent")
+            assert resp.status_code == 404
+
+    def test_positions_partial_renders_force_exit_for_active_holding(self):
+        """§16.4: the active-positions table exposes a Force-exit button per row."""
+        with TestClient(app) as client:
+            resp = client.get("/api/dashboard/partials/positions")
+            assert resp.status_code == 200
+            # The autouse fixture inserts an ACTIVE AAPL holding → button renders.
+            assert "forceExit('AAPL')" in resp.text
+
+
+class TestSettingsSection20:
+    """§20 Settings expansion (Source.md §20.2–§20.12): section anchors + the
+    operator-confirmed TOML-writing routes (risk/crucible/brokers/operator).
+
+    Each operator-confirmed change must persist to the relevant TOML atomically
+    and be typed-confirm gated client-side (see test_operator_confirm_gates.py).
+    """
+
+    ANCHORS = (
+        "general", "brokers", "inference", "budget", "universe", "risk",
+        "crucible", "mutations", "personas", "queue", "audit", "operator",
+        "notifications", "reset",
+    )
+
+    def test_settings_renders_all_section20_anchors(self):
+        with TestClient(app) as client:
+            resp = client.get("/settings")
+            assert resp.status_code == 200
+            for anchor in self.ANCHORS:
+                assert f'id="{anchor}"' in resp.text, f"settings.html missing §20 anchor #{anchor}"
+
+    def test_settings_subnav_links_to_section20_index(self):
+        with TestClient(app) as client:
+            resp = client.get("/settings")
+            # The §20.1 sub-nav must link every subsection.
+            assert 'href="#risk"' in resp.text
+            assert 'href="#brokers"' in resp.text
+            assert 'href="#operator"' in resp.text
+
+    def test_risk_route_writes_toml(self, tmp_path, monkeypatch):
+        """§20.6 — POST /api/settings/risk writes risk.toml [position]."""
+        import os
+        from pmacs.web.config import get_config, configure
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/risk", json={"max_single_position_pct": 0.25})
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["ok"] is True
+            # On disk
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["position"]["max_single_position_pct"] == 0.25
+            # Read-back via GET
+            get = client.get("/api/settings/risk")
+            assert get.json()["risk"]["max_single_position_pct"] == 0.25
+
+    def test_risk_route_validates_range(self):
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/risk", json={"max_single_position_pct": 2.0})
+            assert resp.status_code == 400
+
+    def test_crucible_route_writes_toml(self):
+        """§20.7 — POST /api/settings/crucible writes crucible.toml [time_budget]."""
+        cfg = get_config()
+        crucible_path = cfg.config_dir / "crucible.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/crucible", json={"seconds_per_attack": 120, "max_cycles": 3})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(crucible_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["time_budget"]["seconds_per_attack"] == 120
+            assert data["time_budget"]["max_cycles"] == 3
+
+    def test_brokers_route_writes_catastrophe_net(self):
+        """§20.3 — POST /api/settings/brokers writes risk.toml [pricing]."""
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/brokers", json={"catastrophe_net_stop_pct": 0.20})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["pricing"]["default_stop_loss_pct"] == 0.20
+
+    def test_operator_route_writes_per_trade_approval(self):
+        """§20.12 — POST /api/settings/operator writes risk.toml [operator]."""
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/operator", json={"per_trade_approval": True})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["operator"]["per_trade_approval"] is True
+
+    def test_cost_settings_template_removed(self):
+        """Finding I: the dead cost_settings.html template is folded into Settings."""
+        assert not (Path(__file__).resolve().parents[2] / "pmacs" / "web" / "templates" / "cost_settings.html").exists()

@@ -381,6 +381,7 @@ def _extract(ticker: str, ev: dict) -> dict:
         "market_cap_usd": market_cap_usd,
         "sbc_usd": sbc_usd,
         "current_multiples": current_multiples,
+        "fcf_ttm_usd": _num(metrics.get("fcf_ttm_usd")),
         "fcf_margin_ttm": _num(metrics.get("fcfMarginTTM")),
         "roic_ttm": _num(metrics.get("roicTTM")),
         "revenue_growth_yoy": _num(metrics.get("revenueGrowthTTMYoy")),
@@ -482,9 +483,115 @@ def _display_groups(ticker: str, ev: dict, derived: object, sector: str = "") ->
     return groups
 
 
+def _workspace_context(ticker: str) -> dict:
+    """Gather cross-store context for the unified ticker workspace tabs
+    (Source.md §16.6 single-ticker drawer): Memo, Personas, Lineage, Failures.
+
+    Best-effort — every source is independently wrapped so a missing or
+    not-yet-initialized store never breaks the fundamentals page. Returns a
+    dict of `ws_*` keys consumed by ticker_detail.html.
+    """
+    ctx: dict = {
+        "ws_holding": None,
+        "ws_memo": None,
+        "ws_agent_results": [],
+        "ws_crucible": None,
+        "ws_persona_affinity": [],
+        "ws_ticker_decisions": [],
+        "ws_stop_events": [],
+        "ws_failures": [],
+        "ws_days_held": None,
+    }
+
+    from pmacs.web.config import get_config as _get_config
+    try:
+        cfg = _get_config()
+    except Exception:
+        return ctx
+
+    # SQLite: holding, latest memo, per-ticker decisions, stop-event lineage.
+    try:
+        from pmacs.web.routes import memo as _memo
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            ctx["ws_holding"] = _memo._get_holding_for_ticker(db, ticker)
+            ctx["ws_memo"] = _memo._get_latest_memo_from_table(db, ticker)
+            decisions = data_layer.get_recent_decisions(db, limit=50)
+            ctx["ws_ticker_decisions"] = [d for d in decisions if d["ticker"] == ticker][:10]
+            # Days held (lineage summary) from the holding entry date.
+            ctx["ws_days_held"] = None
+            if ctx["ws_holding"] and ctx["ws_holding"].get("entry_date"):
+                try:
+                    ed = datetime.fromisoformat(
+                        ctx["ws_holding"]["entry_date"].replace("Z", "+00:00")
+                    )
+                    ctx["ws_days_held"] = (datetime.now(timezone.utc) - ed).days
+                except Exception:
+                    ctx["ws_days_held"] = None
+            hid = ctx["ws_holding"].get("id") if ctx["ws_holding"] else None
+            if hid:
+                try:
+                    rows = db.execute(
+                        "SELECT stop_type, trigger_price_usd, stop_price_usd, "
+                        "detected_at, status FROM stop_events "
+                        "WHERE holding_id = ? ORDER BY detected_at DESC LIMIT 20",
+                        (hid,),
+                    ).fetchall()
+                    ctx["ws_stop_events"] = [
+                        {"stop_type": r[0], "trigger_price_usd": r[1],
+                         "stop_price_usd": r[2], "detected_at": r[3], "status": r[4]}
+                        for r in rows
+                    ]
+                except Exception:
+                    ctx["ws_stop_events"] = []
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    # In-memory per-persona results from the most recent cycle (pipeline.py).
+    try:
+        from pmacs.web.routes import pipeline as _pipeline
+        ctx["ws_agent_results"] = list(_pipeline._last_cycle_agent_results.get(ticker, []))
+        ctx["ws_crucible"] = _pipeline._last_cycle_crucible_results.get(ticker)
+    except Exception:
+        pass
+
+    # DuckDB: persona-ticker affinity (rolling Brier per persona).
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+        duck = DuckDBAdapter(db_path=cfg.duckdb_path)
+        try:
+            rows = duck.execute(
+                "SELECT persona, avg_brier, cycle_count "
+                "FROM persona_ticker_affinity WHERE ticker = ? "
+                "ORDER BY avg_brier ASC",
+                [ticker],
+            )
+            ctx["ws_persona_affinity"] = rows or []
+        finally:
+            try:
+                duck.close()
+            except Exception:
+                pass
+    except Exception:
+        ctx["ws_persona_affinity"] = []
+
+    # KuzuDB: FailedAssumption nodes (failure-history tab, Agents.md FDE).
+    try:
+        from pmacs.storage.kuzu import KuzuDBAdapter
+        from pmacs.config import data_dir as _data_dir
+        kuzu = KuzuDBAdapter(db_path=_data_dir() / "pmacs.kuzu")
+        ctx["ws_failures"] = kuzu.get_failures_for_ticker(ticker, limit=10)
+    except Exception:
+        ctx["ws_failures"] = []
+
+    return ctx
+
+
 @router.get("/ticker/{ticker}")
 async def ticker_data_page(request: Request, ticker: str):
-    """Render the per-ticker data drill-down (Source.md §16.8)."""
+    """Render the per-ticker data drill-down (Source.md §16.8 / §16.6 workspace)."""
     from pmacs.web.templating import templates
     ticker = ticker.upper().strip()
 
@@ -565,6 +672,7 @@ async def ticker_data_page(request: Request, ticker: str):
                 # lives in the technical packet, not the analyst one.
                 "current_price": tech_current,
                 "no_data": False,
+                **_workspace_context(ticker),
             },
         )
     except Exception as exc:

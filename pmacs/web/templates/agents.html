@@ -494,7 +494,7 @@
     {% if decision_summary %}
     <div class="space-y-2">
         {% for d in decision_summary %}
-        <a href="/memo/{{ d.ticker }}"
+        <a href="/ticker/{{ d.ticker }}#personas"
            class="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-2.5 sm:p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group"
            data-stagger>
             <span class="font-mono font-semibold text-sm text-text-primary">{{ d.ticker }}</span>
@@ -651,8 +651,8 @@ function _buildResultCard(result) {
 
         crucibleHtml +
 
-        '<a href="/memo/' + escapeHtml(result.ticker) + '" ' +
-        'class="mt-1 text-[11px] text-accent hover:underline font-medium self-start">→ View memo</a>';
+        '<a href="/ticker/' + escapeHtml(result.ticker) + '#personas" ' +
+        'class="mt-1 text-[11px] text-accent hover:underline font-medium self-start">→ View in workspace</a>';
 
     return card;
 }
@@ -816,7 +816,7 @@ function openAgentModal(personaName, analysis, evidence, confidence) {
     }
     if (modal) {
         document.getElementById("read-more-modal-title").textContent = title;
-        document.getElementById("read-more-modal-content").innerHTML = html || '<p class="text-text-muted">No data available.</p>';
+        document.getElementById("read-more-modal-content").innerHTML = html || '<p class="text-text-muted">No signal data for this persona yet — it has not produced output in a recorded cycle.</p>';
         modal.classList.remove("hidden");
         modal.focus();
     }

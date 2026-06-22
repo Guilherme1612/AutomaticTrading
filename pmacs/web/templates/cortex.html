@@ -365,6 +365,8 @@ function killSwitchAction() {
         actionId: "cortex.kill_switch_disengage",
         description: "Disengage kill switch",
         consequences: "Trading will resume. Stop-loss monitoring continues.",
+        danger: "Non-Negotiable #5: only the operator can lift the kill switch. Type DISENGAGE to confirm.",
+        confirmSymbol: "DISENGAGE",
         callbackUrl: "/api/cortex/kill-switch/disengage",
         onSuccess: function() { window.location.reload(); }
     });

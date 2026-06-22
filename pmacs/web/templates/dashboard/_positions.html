@@ -1,0 +1,85 @@
+{# Active Positions region — SSE-driven partial (Source.md §14.5, §4.4).
+   Root container carries hx attrs so an outerHTML swap keeps it live. #}
+<div class="dashboard-main-col card card-elevated overflow-hidden" data-stagger
+     id="dash-positions"
+     hx-get="/api/dashboard/partials/positions"
+     hx-trigger="pmacs:refresh from:body"
+     hx-swap="outerHTML">
+    <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
+        Active Positions
+    </h3>
+    {% if positions is defined and positions %}
+    <div class="overflow-x-auto -mx-6 px-6" tabindex="0">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-text-muted border-b border-border-subtle">
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Ticker</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Verdict</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Conviction</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Entry</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Current</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Stop</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Size</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">P&L</th>
+                    <th class="pb-3 font-medium text-xs uppercase tracking-wider">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for pos in positions %}
+                <tr class="border-b border-border-subtle group transition-colors">
+                    <td class="py-3.5 font-mono font-medium">
+                        <a href="/ticker/{{ pos.ticker }}" class="text-accent hover:opacity-80 transition-opacity">{{ pos.ticker }}</a>
+                    </td>
+                    <td class="py-3.5">
+                        <span class="px-2 py-0.5 text-xs rounded-lg font-medium
+                                     {{ 'bg-positive-soft text-positive' if pos.verdict == 'STRONG_BUY' else '' }}
+                                     {{ 'bg-accent-soft text-accent' if pos.verdict == 'BUY' else '' }}">
+                            {{ pos.verdict }}
+                        </span>
+                    </td>
+                    <td class="py-3.5">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono text-text-primary">{{ "%.0f"|format(pos.conviction * 100) }}%</span>
+                            <div class="confidence-bar w-12">
+                                <div class="confidence-fill {{ 'bg-positive' if pos.conviction >= 0.7 else 'bg-accent' }}"
+                                     style="width: {{ "%.0f"|format(pos.conviction * 100) }}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-3.5 font-mono text-text-secondary">${{ "%.2f"|format(pos.entry) }}</td>
+                    <td class="py-3.5 font-mono text-text-primary">${{ "%.2f"|format(pos.current) }}</td>
+                    <td class="py-3.5 font-mono {{ 'text-negative' if pos.stop_price > 0 and pos.current <= pos.stop_price * 1.05 else 'text-text-muted' }}">
+                        {% if pos.stop_price > 0 %}${{ "%.2f"|format(pos.stop_price) }}{% else %}—{% endif %}
+                    </td>
+                    <td class="py-3.5 font-mono text-text-secondary">${{ "%.2f"|format(pos.size_usd) }}</td>
+                    <td class="py-3.5">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono font-medium {{ 'text-positive' if pos.pnl >= 0 else 'text-negative' }}">
+                                {{ "+" if pos.pnl >= 0 else "" }}${{ "%.2f"|format(pos.pnl) }}
+                            </span>
+                            <div class="pnl-bar {{ 'pnl-bar-positive' if pos.pnl >= 0 else 'pnl-bar-negative' }}"
+                                 style="width: {{ 0 if not pos.entry else [([pos.pnl / pos.entry * 100, 0]|max * 3)|round|int, 100]|min }}%; max-width:60px"></div>
+                        </div>
+                    </td>
+                    <td class="py-3.5">
+                        <button type="button" onclick="forceExit('{{ pos.ticker }}')"
+                                title="Operator-confirmed force-exit (Source.md §15/§16.4)"
+                                class="text-[10px] text-negative hover:bg-negative-soft px-2 py-0.5 rounded-lg transition-colors font-medium">Force exit</button>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {% set empty_title = "No active holdings" %}
+    {% set empty_message = "Cycles are running but no STRONG_BUY signals have cleared all gates yet. This is normal during bootstrap. See Pipeline for verdict reasoning." %}
+    {% include "components/empty_state.html" %}
+    <div class="text-center -mt-4 mb-4">
+      <a href="/pipeline" class="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-white transition-colors font-medium">
+        View Pipeline →
+      </a>
+    </div>
+    {% endif %}
+</div>

@@ -26,13 +26,37 @@
     <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2.5 py-1 rounded-lg">{{ mode }}</span>
 </div>
 
+<!-- §20.1 Settings sub-nav — anchor index to every §20 subsection.
+     Items with a contextual home (Universe/Queue/Kill-switch/Audit) link out
+     rather than duplicating; the index still lists them (Source.md §20). -->
+<nav aria-label="Settings sections" class="sticky top-0 z-20 -mx-2 px-2 py-2 mb-6 bg-surface/80 backdrop-blur rounded-xl border border-border-subtle overflow-x-auto">
+    <ul class="flex items-center gap-1 text-[11px] font-medium whitespace-nowrap">
+        <li><a href="#general" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">General</a></li>
+        <li class="text-text-muted/40">·</li>
+        <li><a href="#brokers" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Brokers</a></li>
+        <li><a href="#inference" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Inference</a></li>
+        <li><a href="#budget" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Budget</a></li>
+        <li><a href="#universe" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Universe</a></li>
+        <li><a href="#risk" class="px-2.5 py-1 rounded-lg text-accent bg-accent-soft/50">Risk</a></li>
+        <li><a href="#crucible" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Crucible</a></li>
+        <li><a href="#mutations" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Mutations</a></li>
+        <li><a href="#personas" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Personas</a></li>
+        <li><a href="#queue" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Queue</a></li>
+        <li><a href="#audit" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Audit &amp; Debug</a></li>
+        <li><a href="#operator" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Operator</a></li>
+        <li class="text-text-muted/40">·</li>
+        <li><a href="#notifications" class="px-2.5 py-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-sunken/50 transition-colors">Notifications</a></li>
+        <li><a href="#reset" class="px-2.5 py-1 rounded-lg text-negative/80 hover:text-negative hover:bg-negative/10 transition-colors">Reset</a></li>
+    </ul>
+</nav>
+
 <!-- ═══════════════════════════════════════════
-     ROW 1: Appearance + AI Provider
+     ROW 1: General (§20.2) + Brokers (§20.3) + Inference (§20.4)
      ═══════════════════════════════════════════ -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
-    <!-- Appearance -->
-    <section class="card card-elevated p-6 reveal" data-stagger>
+    <!-- Appearance (§20.2 General: theme / density / timezone / currency) -->
+    <section id="general" class="card card-elevated p-6 reveal" data-stagger>
         <div class="flex items-center gap-2 mb-6">
             <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
             <h3 class="text-sm font-semibold text-text-primary">Appearance</h3>
@@ -97,8 +121,8 @@
         </div>
     </section>
 
-    <!-- AI Provider -->
-    <section class="card card-elevated p-6 reveal" data-stagger>
+    <!-- AI Provider (§20.4 Inference) -->
+    <section id="inference" class="card card-elevated p-6 reveal" data-stagger>
         <div class="flex items-center justify-between mb-6">
             <div class="flex items-center gap-2">
                 <svg class="w-4 h-4 text-crucible" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
@@ -232,9 +256,10 @@
 </div>
 
 <!-- ═══════════════════════════════════════════
-     ROW 2: Budget
+     ROW 2: Budget (cost — folded cost_settings here; cost_widget on
+     dashboard is the read-only summary)
      ═══════════════════════════════════════════ -->
-<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+<section id="budget" class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-2">
             <svg class="w-4 h-4 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -391,9 +416,244 @@
 </section>
 
 <!-- ═══════════════════════════════════════════
-     ROW 3: Notifications
+     §20 expansion: Brokers / Risk / Crucible / Universe / Personas /
+     Queue / Audit & Debug / Operator. Operator-confirmed edits route through
+     the typed-confirm modal (§13.2); LINK cards point to the contextual home.
      ═══════════════════════════════════════════ -->
-<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+    <!-- Brokers (§20.3) -->
+    <section id="brokers" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Brokers</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.3</span>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label class="text-[10px] text-text-muted font-medium block mb-1">Alpaca paper key</label>
+                <div class="text-xs font-mono text-text-secondary bg-surface-sunken/40 px-2.5 py-1.5 rounded-lg border border-border-subtle">
+                    {{ '(configured)' if (inference.has_api_key if inference is defined else False) else 'not set — paper-only' }}
+                </div>
+                <p class="text-[10px] text-text-muted mt-1">Read-only. Edit via operator-confirmed credential rotation (TOML/keyring).</p>
+            </div>
+            <div>
+                <label for="brokers-catastrophe-input" class="text-[10px] text-text-muted font-medium block mb-1">Catastrophe-net stop %</label>
+                <div class="flex items-center gap-2">
+                    <input type="number" step="0.01" min="0.01" max="0.50" id="brokers-catastrophe-input"
+                           value="{{ "%.2f"|format(brokers.catastrophe_net_stop_pct if brokers is defined else 0.15) }}"
+                           class="w-24 text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                    <span class="text-[10px] text-text-muted">broker-side wide stop (default 15%)</span>
+                </div>
+                <button type="button" onclick="saveBrokersConfig()"
+                        class="mt-2 text-[11px] px-3 py-1.5 rounded-lg bg-accent text-white font-medium hover:bg-accent/90 transition-colors">
+                    Update catastrophe-net
+                </button>
+                <p class="text-[10px] text-text-muted mt-1.5">§20.3 operator-confirmed. PMACS manages tight stops; broker gets only the catastrophe net.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Risk (§20.6) -->
+    <section id="risk" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Risk</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.6</span>
+        </div>
+        <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label for="risk-maxpos-input" class="text-[10px] text-text-muted font-medium block mb-1">Max single position %</label>
+                    <input type="number" step="0.01" min="0.01" max="1.0" id="risk-maxpos-input"
+                           value="{{ "%.2f"|format(risk_cfg.max_single_position_pct if risk_cfg is defined else 0.20) }}"
+                           class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                </div>
+                <div>
+                    <label for="risk-maxconcurrent-input" class="text-[10px] text-text-muted font-medium block mb-1">Max concurrent</label>
+                    <input type="number" step="1" min="1" max="20" id="risk-maxconcurrent-input"
+                           value="{{ risk_cfg.max_concurrent_positions if risk_cfg is defined else 5 }}"
+                           class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                </div>
+                <div>
+                    <label for="risk-dailyloss-input" class="text-[10px] text-text-muted font-medium block mb-1">Kill: daily loss %</label>
+                    <input type="number" step="0.01" min="0.01" max="1.0" id="risk-dailyloss-input"
+                           value="{{ "%.2f"|format(risk_cfg.daily_loss_pct if risk_cfg is defined else 0.05) }}"
+                           class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                </div>
+                <div>
+                    <label for="risk-5dloss-input" class="text-[10px] text-text-muted font-medium block mb-1">Kill: 5-day loss %</label>
+                    <input type="number" step="0.01" min="0.01" max="1.0" id="risk-5dloss-input"
+                           value="{{ "%.2f"|format(risk_cfg.rolling_5d_loss_pct if risk_cfg is defined else 0.10) }}"
+                           class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                </div>
+                <div class="col-span-2">
+                    <label for="risk-recon-input" class="text-[10px] text-text-muted font-medium block mb-1">Reconciliation tolerance $</label>
+                    <input type="number" step="1" min="0" id="risk-recon-input"
+                           value="{{ risk_cfg.reconciliation_tolerance_usd if risk_cfg is defined else 100 }}"
+                           class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+                </div>
+            </div>
+            <button type="button" onclick="saveRiskConfig()"
+                    class="text-[11px] px-3 py-1.5 rounded-lg bg-accent text-white font-medium hover:bg-accent/90 transition-colors">
+                Update risk thresholds
+            </button>
+            <p class="text-[10px] text-text-muted">§20.6 operator-confirmed. Writes risk.toml [position]/[kill_switch]; audit-logged.</p>
+        </div>
+    </section>
+
+    <!-- Crucible (§20.7) -->
+    <section id="crucible" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Crucible</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.7</span>
+        </div>
+        <div class="space-y-3">
+            <div>
+                <label for="crucible-seconds-input" class="text-[10px] text-text-muted font-medium block mb-1">Time budget per attack (s)</label>
+                <input type="number" step="1" min="10" max="600" id="crucible-seconds-input"
+                       value="{{ crucible_cfg.seconds_per_attack if crucible_cfg is defined else 90 }}"
+                       class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+            </div>
+            <div>
+                <label for="crucible-cycles-input" class="text-[10px] text-text-muted font-medium block mb-1">Max rewrite cycles</label>
+                <input type="number" step="1" min="1" max="5" id="crucible-cycles-input"
+                       value="{{ crucible_cfg.max_cycles if crucible_cfg is defined else 2 }}"
+                       class="w-full text-xs font-mono px-2 py-1.5 rounded-lg bg-surface-sunken/40 border border-border-subtle text-text-primary focus:outline-none focus:border-accent">
+            </div>
+            <button type="button" onclick="saveCrucibleConfig()"
+                    class="text-[11px] px-3 py-1.5 rounded-lg bg-accent text-white font-medium hover:bg-accent/90 transition-colors">
+                Update Crucible budget
+            </button>
+            <p class="text-[10px] text-text-muted">§20.7 operator-confirmed. Writes crucible.toml [time_budget]; audit-logged.</p>
+        </div>
+    </section>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+    <!-- Agent Personas (§20.9) — read-only display + propose-mutation link -->
+    <section id="personas" class="card card-elevated p-6 reveal" data-stagger">
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-6-3.5 4 4 0 006 3.5z"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Agent Personas</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.9</span>
+        </div>
+        <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            {% for p in (personas if personas is defined else []) %}
+            <div class="flex items-center justify-between text-xs py-1 border-b border-border-subtle/40 last:border-0">
+                <div>
+                    <span class="font-mono text-text-primary">{{ p.name }}</span>
+                    <span class="text-text-muted"> · {{ p.role }}</span>
+                </div>
+                <span class="font-mono text-[10px] {{ 'text-positive' if p.brier and p.brier < 0.30 else 'text-text-muted' if not p.brier else 'text-warning' }}">
+                    {{ 'Brier %.2f'|format(p.brier) if p.brier else 'no data' }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        <a href="#mutations" class="inline-block mt-3 text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+            Propose a prompt mutation →
+        </a>
+        <p class="text-[10px] text-text-muted mt-1.5">Read-only roster. Enable/disable + prompt edits route through the Mutation Engine (§20.9) — never a direct runtime edit.</p>
+    </section>
+
+    <!-- Universe (§20.5) — LINK card -->
+    <section id="universe" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Universe</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.5</span>
+        </div>
+        <p class="text-xs text-text-secondary mb-3">Ticker list, ADV minimum threshold, index-overlay toggle, and limited-history haircut are managed on the Universe page — Settings links rather than duplicates.</p>
+        <a href="/universe" class="inline-block text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+            Manage universe →
+        </a>
+    </section>
+
+    <!-- Queue (§20.10) — LINK card -->
+    <section id="queue" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Queue</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.10</span>
+        </div>
+        <p class="text-xs text-text-secondary mb-3">Default priority for new tickers (P3), auto-elevate held positions to P2, and pin behavior live on the Pipeline page right rail.</p>
+        <a href="/pipeline" class="inline-block text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+            Manage queue →
+        </a>
+    </section>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+    <!-- Audit & Debug (§20.11) — LINK card -->
+    <section id="audit" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Audit &amp; Debug</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.11</span>
+        </div>
+        <div class="space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Audit replication target</span>
+                <span class="font-mono text-text-secondary">not configured — TOML/code-versioned</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Debug log retention</span>
+                <span class="font-mono text-text-secondary">30 days (default)</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Audit retention</span>
+                <span class="font-mono text-text-secondary">1y hot → archive (§24)</span>
+            </div>
+        </div>
+        <a href="/debug" class="inline-block mt-3 text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+            Open debug log →
+        </a>
+        <p class="text-[10px] text-text-muted mt-1.5">Replication target &amp; retention are code-versioned (§20.13) — changing them requires a config edit + restart.</p>
+    </section>
+
+    <!-- Operator (§20.12) -->
+    <section id="operator" class="card card-elevated p-6 reveal" data-stagger>
+        <div class="flex items-center gap-2 mb-5">
+            <svg class="w-4 h-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+            <h3 class="text-sm font-semibold text-text-primary">Operator</h3>
+            <span class="text-[10px] font-mono text-text-muted bg-surface-sunken/50 px-2 py-0.5 rounded-lg ml-auto">§20.12</span>
+        </div>
+        <div class="space-y-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-xs font-medium text-text-primary">Per-trade approval</div>
+                    <p class="text-[10px] text-text-muted">When ON, each trade requires operator approval before signing.</p>
+                </div>
+                <button type="button" id="operator-approval-toggle"
+                        onclick="togglePerTradeApproval()"
+                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {{ 'bg-accent' if (operator_cfg.per_trade_approval if operator_cfg is defined else False) else 'bg-surface-sunken' }}"
+                        aria-pressed="{{ 'true' if (operator_cfg.per_trade_approval if operator_cfg is defined else False) else 'false' }}"
+                        aria-label="Toggle per-trade approval">
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {{ 'translate-x-6' if (operator_cfg.per_trade_approval if operator_cfg is defined else False) else 'translate-x-1' }}"></span>
+                </button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <a href="/pipeline" class="text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium text-center hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+                    Force single-ticker re-run
+                </a>
+                <button type="button" onclick="forceKillSwitchTest()"
+                        class="text-[11px] px-3 py-1.5 rounded-lg border border-border text-text-secondary font-medium hover:border-border-strong hover:bg-surface-sunken/30 transition-colors">
+                    Force kill-switch test
+                </button>
+            </div>
+            <p class="text-[10px] text-text-muted">Mode override (§20.12) is operator-confirmed on the dashboard mode badge. Per-trade approval enforcement is wired in the execution phase; this persists the configured preference.</p>
+        </div>
+    </section>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ROW 3: Notifications (§13.5 levels)
+     ═══════════════════════════════════════════ -->
+<section id="notifications" class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-5">
         <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
         <h3 class="text-sm font-semibold text-text-primary">Notifications</h3>
@@ -431,7 +691,7 @@
 <!-- ═══════════════════════════════════════════
      ROW 4: Reset Progress
      ═══════════════════════════════════════════ -->
-<section class="card card-elevated p-6 mb-6 reveal" data-stagger>
+<section id="reset" class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-2">
         <svg class="w-4 h-4 text-negative" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
         <h3 class="text-sm font-semibold text-text-primary">Reset Progress</h3>
@@ -512,6 +772,9 @@ function resetProgress() {
 <!-- ═══════════════════════════════════════════
      ROW 5: Mutations (only if candidates exist)
      ═══════════════════════════════════════════ -->
+<!-- Persistent anchor so the §20.1 sub-nav #mutations link always resolves,
+     even when there are no pending candidates (the card is hidden-when-empty). -->
+<span id="mutations" class="block" aria-hidden="true" style="height:0"></span>
 {% if mutation_candidates or recent_mutations %}
 <section class="card card-elevated p-6 mb-6 reveal" data-stagger>
     <div class="flex items-center justify-between mb-5">
@@ -850,6 +1113,107 @@ function refreshPricing() {
             } else showToast('Failed', 'error');
         }).catch(function() { showToast('Refresh failed', 'error'); });
 }
+
+// §20.6 Risk thresholds — operator-confirmed, typed-confirm gate (§13.2)
+function saveRiskConfig() {
+    var maxpos = parseFloat(document.getElementById('risk-maxpos-input').value);
+    var maxconc = parseInt(document.getElementById('risk-maxconcurrent-input').value, 10);
+    var dailyloss = parseFloat(document.getElementById('risk-dailyloss-input').value);
+    var fiveday = parseFloat(document.getElementById('risk-5dloss-input').value);
+    var recon = parseFloat(document.getElementById('risk-recon-input').value);
+    if (isNaN(maxpos) || isNaN(maxconc) || isNaN(dailyloss) || isNaN(fiveday) || isNaN(recon)) {
+        showToast('Enter valid thresholds', 'error'); return;
+    }
+    confirmAction({
+        actionId: 'settings.risk',
+        confirmSymbol: maxpos.toFixed(2),
+        description: 'Update risk thresholds (max pos ' + (maxpos*100).toFixed(0) + '%, ' + maxconc + ' concurrent, kill @ ' + (dailyloss*100).toFixed(0) + '%/' + (fiveday*100).toFixed(0) + '%)',
+        danger: '§20.6 operator-confirmed. Type the new max-position % (e.g. ' + maxpos.toFixed(2) + ') to confirm.',
+        callbackUrl: '/api/settings/risk',
+        extraPayload: {
+            max_single_position_pct: maxpos,
+            max_concurrent_positions: maxconc,
+            daily_loss_pct: dailyloss,
+            rolling_5d_loss_pct: fiveday,
+            reconciliation_tolerance_usd: recon
+        },
+        onSuccess: function() {
+            showToast('Risk thresholds updated', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+// §20.7 Crucible time budget — operator-confirmed
+function saveCrucibleConfig() {
+    var secs = parseInt(document.getElementById('crucible-seconds-input').value, 10);
+    var cycles = parseInt(document.getElementById('crucible-cycles-input').value, 10);
+    if (isNaN(secs) || isNaN(cycles)) { showToast('Enter valid values', 'error'); return; }
+    confirmAction({
+        actionId: 'settings.crucible',
+        confirmSymbol: String(secs),
+        description: 'Update Crucible budget: ' + secs + 's/attack, ' + cycles + ' cycles max',
+        danger: '§20.7 operator-confirmed. Type the new seconds-per-attack (' + secs + ') to confirm.',
+        callbackUrl: '/api/settings/crucible',
+        extraPayload: {seconds_per_attack: secs, max_cycles: cycles},
+        onSuccess: function() {
+            showToast('Crucible budget updated', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+// §20.3 Brokers catastrophe-net stop — operator-confirmed
+function saveBrokersConfig() {
+    var cat = parseFloat(document.getElementById('brokers-catastrophe-input').value);
+    if (isNaN(cat)) { showToast('Enter a valid percentage', 'error'); return; }
+    confirmAction({
+        actionId: 'settings.brokers',
+        confirmSymbol: cat.toFixed(2),
+        description: 'Update catastrophe-net stop to ' + (cat*100).toFixed(0) + '%',
+        danger: '§20.3 operator-confirmed. Tight stops stay PMACS-side; this sets only the broker catastrophe net. Type the value (' + cat.toFixed(2) + ') to confirm.',
+        callbackUrl: '/api/settings/brokers',
+        extraPayload: {catastrophe_net_stop_pct: cat},
+        onSuccess: function() {
+            showToast('Catastrophe-net updated', 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+// §20.12 Operator — per-trade approval toggle (operator-confirmed)
+function togglePerTradeApproval() {
+    var btn = document.getElementById('operator-approval-toggle');
+    var currentlyOn = btn.getAttribute('aria-pressed') === 'true';
+    var next = !currentlyOn;
+    confirmAction({
+        actionId: 'settings.operator',
+        confirmSymbol: next ? 'ON' : 'OFF',
+        description: (next ? 'Enable' : 'Disable') + ' per-trade approval',
+        danger: '§20.12 operator-confirmed. Type ' + (next ? 'ON' : 'OFF') + ' to confirm. Enforcement is wired in the execution phase.',
+        callbackUrl: '/api/settings/operator',
+        extraPayload: {per_trade_approval: next},
+        onSuccess: function() {
+            showToast('Per-trade approval ' + (next ? 'enabled' : 'disabled'), 'success');
+            setTimeout(function() { window.location.reload(); }, 800);
+        }
+    });
+}
+
+// §20.12 Operator — force a synthetic kill-switch event to verify wiring
+function forceKillSwitchTest() {
+    confirmAction({
+        actionId: 'cortex.kill_switch_test',
+        confirmSymbol: 'TEST',
+        description: 'Force a synthetic kill-switch test event',
+        danger: '§20.12 — fires a synthetic kill-switch event to verify wiring. Type TEST to confirm. (Non-Negotiable #5: this does not lift an engaged switch.)',
+        callbackUrl: '/api/cortex/kill-switch/engage',
+        extraPayload: {test: true, reason: 'operator-initiated wiring test'},
+        onSuccess: function() {
+            showToast('Kill-switch test fired — check Cortex', 'success');
+        }
+    });
+}
 </script>
 
 <!-- Mutation functions -->
@@ -859,6 +1223,8 @@ function promoteMutation(candidateId) {
         actionId: 'mutation.promote.' + candidateId,
         description: 'Promote mutation: ' + candidateId,
         consequences: 'Applied to production config. Monitored for 50 cycles.',
+        danger: 'Operator-confirmed (§6). Type the candidate id to confirm.',
+        confirmSymbol: candidateId,
         callbackUrl: '/api/mutation/promote',
         onSuccess: function() {
             showToast('Promoted', 'success');
@@ -872,6 +1238,8 @@ function rejectMutation(candidateId) {
         actionId: 'mutation.reject.' + candidateId,
         description: 'Reject mutation: ' + candidateId,
         consequences: 'Permanently rejected.',
+        danger: 'Operator-confirmed (§6). Type the candidate id to confirm.',
+        confirmSymbol: candidateId,
         callbackUrl: '/api/mutation/reject',
         onSuccess: function() {
             showToast('Rejected', 'info');
@@ -885,6 +1253,8 @@ function rollbackMutation(candidateId) {
         actionId: 'mutation.rollback.' + candidateId,
         description: 'Rollback mutation: ' + candidateId,
         consequences: 'Config reverts to pre-mutation state.',
+        danger: 'Operator-confirmed (§6). Type the candidate id to confirm.',
+        confirmSymbol: candidateId,
         callbackUrl: '/api/mutation/rollback',
         onSuccess: function() {
             showToast('Rolled back', 'success');
@@ -897,7 +1267,7 @@ function viewDiff(candidateId) {
     var modal = document.getElementById('diff-modal');
     var container = document.getElementById('diff-container');
     if (!modal || !container) { showToast('Diff viewer not available', 'error'); return; }
-    container.innerHTML = '<p class="text-xs text-text-muted p-4">Loading...</p>';
+    container.innerHTML = '<p class="text-xs text-text-muted p-4">Rendering diff…</p>';
     modal.classList.remove('hidden');
     fetch('/api/mutation/' + candidateId + '/diff')
         .then(function(r) { return r.json(); })

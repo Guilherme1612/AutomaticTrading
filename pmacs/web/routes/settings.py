@@ -112,6 +112,31 @@ class CostCapsRequest(BaseModel):
     monthly_cap: float
 
 
+class RiskConfigRequest(BaseModel):
+    """§20.6 Risk thresholds — operator-confirmed (writes risk.toml)."""
+    max_single_position_pct: float | None = None
+    max_concurrent_positions: int | None = None
+    daily_loss_pct: float | None = None
+    rolling_5d_loss_pct: float | None = None
+    reconciliation_tolerance_usd: float | None = None
+
+
+class CrucibleConfigRequest(BaseModel):
+    """§20.7 Crucible time budget — operator-confirmed (writes crucible.toml)."""
+    seconds_per_attack: int | None = None
+    max_cycles: int | None = None
+
+
+class BrokersConfigRequest(BaseModel):
+    """§20.3 Brokers — catastrophe-net stop % (writes risk.toml [pricing])."""
+    catastrophe_net_stop_pct: float | None = None
+
+
+class OperatorConfigRequest(BaseModel):
+    """§20.12 Operator — per-trade approval toggle (writes risk.toml [operator])."""
+    per_trade_approval: bool | None = None
+
+
 @router.get("/settings")
 async def settings_page(request: Request):
     """Render the settings configuration page."""
@@ -135,6 +160,13 @@ async def settings_page(request: Request):
         # Load inference provider state
         inference = _get_inference_state()
 
+        # §20 Settings expansion: risk / crucible / brokers / operator + persona display
+        risk_cfg = _risk_section(cfg)
+        crucible_cfg = _crucible_section(cfg)
+        brokers = {"catastrophe_net_stop_pct": risk_cfg["catastrophe_net_stop_pct"]}
+        operator_cfg = {"per_trade_approval": risk_cfg["per_trade_approval"]}
+        personas = _persona_display(cfg)
+
         return templates.TemplateResponse(
             request=request,
             name="settings.html",
@@ -150,6 +182,11 @@ async def settings_page(request: Request):
                 "persona_costs": _get_persona_costs(cfg.duckdb_path),
                 "pricing_table": pricing_table,
                 "reconciliation": _get_reconciliation_status(cfg.duckdb_path),
+                "risk_cfg": risk_cfg,
+                "crucible_cfg": crucible_cfg,
+                "brokers": brokers,
+                "operator_cfg": operator_cfg,
+                "personas": personas,
             },
         )
     except Exception as exc:
@@ -720,8 +757,6 @@ async def save_cost_caps(req: CostCapsRequest):
     except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
 
-    import tomli_w
-
     # Read existing risk.toml
     risk_cfg = {}
     if risk_path.exists():
@@ -737,17 +772,11 @@ async def save_cost_caps(req: CostCapsRequest):
     risk_cfg["billing"]["daily_cap_usd"] = req.daily_cap
     risk_cfg["billing"]["monthly_cap_usd"] = req.monthly_cap
 
-    # Atomic write
-    tmp_path = risk_path.with_suffix(".tmp")
+    # Atomic write — _write_toml_atomic prefers tomli_w and falls back to a
+    # flat-section serializer (tomli_w is not a declared dependency; without the
+    # fallback this route 500s on ImportError). risk.toml is flat tables of scalars.
     try:
-        with open(tmp_path, "wb") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                tomli_w.dump(risk_cfg, f)
-                f.flush()
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        tmp_path.replace(risk_path)
+        _write_toml_atomic(risk_path, risk_cfg)
     except Exception as exc:
         return JSONResponse(
             {"ok": False, "error": f"Failed to write config: {exc}"},
@@ -863,3 +892,321 @@ async def reset_progress():
             {"ok": False, "error": "Reset failed — check server logs"},
             status_code=500,
         )
+
+
+# ---------------------------------------------------------------------------
+# §20 Settings expansion — Risk / Crucible / Brokers / Operator config surfaces
+# (Source.md §20.3/§20.6/§20.7/§20.12). Each operator-confirmed change writes the
+# relevant TOML atomically (flocked), audit-logs the change, and is gated by the
+# typed-confirm modal client-side (see test_operator_confirm_gates.py).
+# Mirrors the save_cost_caps pattern (settings.py:707).
+# ---------------------------------------------------------------------------
+
+
+def _read_toml(path: _Path) -> dict:
+    """Read a TOML file, returning {} if missing/invalid."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except Exception:
+        return {}
+
+
+def _write_toml_atomic(path: _Path, data: dict) -> None:
+    """Atomic flocked TOML write (mirrors save_cost_caps).
+
+    Prefers ``tomli_w`` when installed; falls back to a minimal flat-section
+    serializer for the {section: {key: scalar}} shape that risk.toml/crucible.toml
+    use (so the route works without an extra dependency — tomli_w is not declared
+    in pyproject and the existing cost-caps route is latent-broken without it).
+    """
+    tmp_path = path.with_suffix(".tmp")
+    with open(tmp_path, "wb") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                import tomli_w
+                tomli_w.dump(data, f)
+            except ImportError:
+                f.write(_dump_toml_flat(data))
+            f.flush()
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    tmp_path.replace(path)
+
+
+def _toml_scalar(v) -> str:
+    """Serialize a scalar to its TOML representation."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(v, float):
+        return repr(v)
+    if isinstance(v, int):
+        return str(v)
+    # Fallback — quote anything else as a string.
+    return f'"{str(v)}"'
+
+
+def _dump_toml_flat(data: dict) -> bytes:
+    """Minimal TOML serializer for {section: {key: scalar}} + top-level scalars.
+
+    Covers risk.toml / crucible.toml exactly (flat tables of scalars). Not a
+    general TOML serializer — nested tables/arrays are out of scope.
+    """
+    out: list[str] = []
+    for section, kv in data.items():
+        if isinstance(kv, dict):
+            out.append(f"[{section}]")
+            for k, v in kv.items():
+                out.append(f"{k} = {_toml_scalar(v)}")
+            out.append("")
+        else:
+            # top-level scalar
+            out.append(f"{section} = {_toml_scalar(kv)}")
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
+def _audit_config_change(cfg, event: str, payload: dict) -> None:
+    """Append a hash-chained audit entry for a config change (Non-Negotiable #3)."""
+    try:
+        from pmacs.storage.audit import AuditWriter
+        writer = AuditWriter(cfg.audit_path)
+        try:
+            writer.append(event, payload, cycle_id="settings")
+        finally:
+            writer.close()
+    except Exception:
+        # Audit failure must not silently pass; log to stderr but don't crash the response.
+        import logging
+        logging.getLogger("pmacs.web").warning("audit log write failed for %s", event, exc_info=True)
+
+
+def _risk_section(cfg) -> dict:
+    """Current §20.6 Risk + §20.3 catastrophe-net values from risk.toml."""
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    pos = data.get("position", {})
+    ks = data.get("kill_switch", {})
+    pr = data.get("pricing", {})
+    op = data.get("operator", {})
+    return {
+        "max_single_position_pct": pos.get("max_single_position_pct", 0.20),
+        "max_concurrent_positions": pos.get("max_concurrent_positions", 5),
+        "daily_loss_pct": ks.get("daily_loss_pct", 0.05),
+        "rolling_5d_loss_pct": ks.get("rolling_5d_loss_pct", 0.10),
+        "reconciliation_tolerance_usd": ks.get("reconciliation_tolerance_usd", 100.0),
+        "catastrophe_net_stop_pct": pr.get("default_stop_loss_pct", 0.15),
+        "per_trade_approval": op.get("per_trade_approval", False),
+    }
+
+
+def _crucible_section(cfg) -> dict:
+    """Current §20.7 Crucible time-budget values from crucible.toml."""
+    data = _read_toml(_Path(cfg.config_dir) / "crucible.toml")
+    tb = data.get("time_budget", {})
+    return {
+        "seconds_per_attack": tb.get("seconds_per_attack", 90),
+        "max_cycles": tb.get("max_cycles", 2),
+    }
+
+
+def _persona_display(cfg) -> list[dict]:
+    """§20.9 — read-only persona roster with rolling Brier (persona_ticker_affinity).
+
+    Enable/disable is a Mutation Engine concern (§20.9 "Propose mutation"), not a
+    direct toggle here — so this surface is read-only display + a link to #mutations.
+    """
+    roster = [
+        {"id": "catalyst_summarizer", "name": "Catalyst Summarizer", "role": "Event classification"},
+        {"id": "growth_hunter", "name": "Growth Hunter", "role": "Fundamental growth"},
+        {"id": "moat_analyst", "name": "Moat Analyst", "role": "Competitive moat"},
+        {"id": "macro_regime", "name": "Macro Regime", "role": "Macro environment"},
+        {"id": "insider_activity", "name": "Insider Activity", "role": "Insider signals"},
+        {"id": "short_interest", "name": "Short Interest", "role": "Short thesis"},
+        {"id": "forensics", "name": "Forensics", "role": "Accounting quality"},
+        {"id": "crucible", "name": "Crucible", "role": "Adversarial testing"},
+        {"id": "gatekeeper", "name": "Gatekeeper", "role": "Final gate check"},
+    ]
+    # Avg rolling Brier per persona across tickers (DuckDB persona_ticker_affinity).
+    brier: dict[str, float] = {}
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+        adapter = DuckDBAdapter(db_path=_Path(cfg.duckdb_path))
+        try:
+            rows = adapter.execute(
+                "SELECT persona, AVG(avg_brier) as brier FROM persona_ticker_affinity GROUP BY persona"
+            )
+            brier = {r["persona"]: float(r["brier"]) for r in rows if r["brier"] is not None}
+        finally:
+            adapter.close()
+    except Exception:
+        pass
+    out = []
+    for p in roster:
+        out.append({**p, "brier": brier.get(p["id"])})
+    return out
+
+
+@router.get("/api/settings/risk")
+async def get_risk_config():
+    """§20.6 — current risk thresholds (read-only JSON for the Settings card)."""
+    return JSONResponse({"ok": True, "risk": _risk_section(get_config())})
+
+
+@router.post("/api/settings/risk")
+async def save_risk_config(req: RiskConfigRequest):
+    """§20.6 — operator-confirmed risk thresholds. Writes risk.toml [position]/
+    [kill_switch], audit-logs the change. Client-side typed-confirm gate required
+    (test_operator_confirm_gates.py)."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+
+    changes: dict[str, object] = {}
+    if "position" not in data:
+        data["position"] = {}
+    if "kill_switch" not in data:
+        data["kill_switch"] = {}
+
+    if req.max_single_position_pct is not None:
+        v = float(req.max_single_position_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "max_single_position_pct must be in (0, 1.0]"}, status_code=400)
+        data["position"]["max_single_position_pct"] = v
+        changes["max_single_position_pct"] = v
+    if req.max_concurrent_positions is not None:
+        v = int(req.max_concurrent_positions)
+        if not 1 <= v <= 20:
+            return JSONResponse({"ok": False, "error": "max_concurrent_positions must be 1..20"}, status_code=400)
+        data["position"]["max_concurrent_positions"] = v
+        changes["max_concurrent_positions"] = v
+    if req.daily_loss_pct is not None:
+        v = float(req.daily_loss_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "daily_loss_pct must be in (0, 1.0]"}, status_code=400)
+        data["kill_switch"]["daily_loss_pct"] = v
+        changes["daily_loss_pct"] = v
+    if req.rolling_5d_loss_pct is not None:
+        v = float(req.rolling_5d_loss_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "rolling_5d_loss_pct must be in (0, 1.0]"}, status_code=400)
+        data["kill_switch"]["rolling_5d_loss_pct"] = v
+        changes["rolling_5d_loss_pct"] = v
+    if req.reconciliation_tolerance_usd is not None:
+        v = float(req.reconciliation_tolerance_usd)
+        if v < 0:
+            return JSONResponse({"ok": False, "error": "reconciliation_tolerance_usd must be >= 0"}, status_code=400)
+        data["kill_switch"]["reconciliation_tolerance_usd"] = v
+        changes["reconciliation_tolerance_usd"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_risk_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/crucible")
+async def save_crucible_config(req: CrucibleConfigRequest):
+    """§20.7 — operator-confirmed Crucible time budget. Writes crucible.toml
+    [time_budget], audit-logs. Typed-confirm gated."""
+    cfg = get_config()
+    path = _Path(cfg.config_dir) / "crucible.toml"
+    data = _read_toml(path)
+    if "time_budget" not in data:
+        data["time_budget"] = {}
+
+    changes: dict[str, object] = {}
+    if req.seconds_per_attack is not None:
+        v = int(req.seconds_per_attack)
+        if not 10 <= v <= 600:
+            return JSONResponse({"ok": False, "error": "seconds_per_attack must be 10..600"}, status_code=400)
+        data["time_budget"]["seconds_per_attack"] = v
+        changes["seconds_per_attack"] = v
+    if req.max_cycles is not None:
+        v = int(req.max_cycles)
+        if not 1 <= v <= 5:
+            return JSONResponse({"ok": False, "error": "max_cycles must be 1..5"}, status_code=400)
+        data["time_budget"]["max_cycles"] = v
+        changes["max_cycles"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write crucible.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_crucible_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/brokers")
+async def save_brokers_config(req: BrokersConfigRequest):
+    """§20.3 — operator-confirmed catastrophe-net stop %. Writes risk.toml
+    [pricing] default_stop_loss_pct (broker-side catastrophe net), audit-logs."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    if "pricing" not in data:
+        data["pricing"] = {}
+
+    changes: dict[str, object] = {}
+    if req.catastrophe_net_stop_pct is not None:
+        v = float(req.catastrophe_net_stop_pct)
+        # Catastrophe net is a wide stop (15% default); allow 1..50%.
+        if not 0.01 <= v <= 0.50:
+            return JSONResponse({"ok": False, "error": "catastrophe_net_stop_pct must be in [0.01, 0.50]"}, status_code=400)
+        data["pricing"]["default_stop_loss_pct"] = v
+        changes["catastrophe_net_stop_pct"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_brokers_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/operator")
+async def save_operator_config(req: OperatorConfigRequest):
+    """§20.12 — operator-confirmed per-trade approval toggle. Writes risk.toml
+    [operator] per_trade_approval, audit-logs. Note: enforcement is wired in the
+    execution phase; this persists the operator's configured preference."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    if "operator" not in data:
+        data["operator"] = {}
+
+    changes: dict[str, object] = {}
+    if req.per_trade_approval is not None:
+        data["operator"]["per_trade_approval"] = bool(req.per_trade_approval)
+        changes["per_trade_approval"] = bool(req.per_trade_approval)
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_operator_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})

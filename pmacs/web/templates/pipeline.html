@@ -266,7 +266,12 @@
                                         class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Re-run</button>
                                 {% endif %}
                                 <a href="/ticker/{{ item.ticker }}" class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Data</a>
-                                <a href="/memo/{{ item.ticker }}" class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Memo</a>
+                                <a href="/ticker/{{ item.ticker }}#memo" class="text-[10px] text-accent hover:bg-accent-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Memo</a>
+                                {% if item.is_active %}
+                                <button type="button" onclick="forceExit('{{ item.ticker }}')"
+                                        title="Operator-confirmed force-exit (Source.md §15/§16.4)"
+                                        class="text-[10px] text-negative hover:bg-negative-soft px-1.5 py-0.5 rounded-lg transition-colors font-medium">Force exit</button>
+                                {% endif %}
                             </div>
                         </div>
                     </div>

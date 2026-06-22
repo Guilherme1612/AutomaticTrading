@@ -20,6 +20,7 @@ class SSEClient:
         self.nervous_url = nervous_url
         self.handlers: dict[str, list[Callable]] = {}
         self._running = False
+        self._reconnect_delay = 1.0
 
     def on(self, stream: str, handler: Callable) -> None:
         """Register a handler for a named SSE stream."""
@@ -46,6 +47,7 @@ class SSEClient:
                     f"{self.nervous_url}/events",
                     timeout=httpx.Timeout(None),
                 ) as response:
+                    self._reconnect_delay = 1.0
                     for line in response.iter_lines():
                         if not self._running:
                             break
@@ -70,11 +72,13 @@ class SSEClient:
                                     msg="SSE: invalid JSON in data line",
                                 )
             except Exception:
+                delay = self._reconnect_delay
                 log_debug(
                     "SSE_CONNECTION_LOST",
-                    payload={},
+                    payload={"reconnect_delay_s": delay},
                     level="WARN",
                     error_code="SSE_CONNECTION_FAILED",
-                    msg="SSE connection lost, reconnecting in 5s",
+                    msg=f"SSE connection lost, reconnecting in {delay:.0f}s",
                 )
-                time.sleep(5)
+                time.sleep(delay)
+                self._reconnect_delay = min(delay * 2, 60.0)

@@ -1058,31 +1058,89 @@ function handleKillSwitch() {
 //
 // Single-operator, loopback-only system: there is no second-factor gate.
 // Sensitive actions still require an explicit operator action (a click, plus a
-// typed confirmation for destructive ones). confirmAction() executes the action
-// directly; every action is recorded in the hash-chained audit log server-side.
+// typed confirmation for destructive ones — Source.md §13.2). confirmAction()
+// shows a typed-confirm modal when `confirmSymbol` is provided (destructive /
+// §6 operator-confirmed actions); otherwise it POSTs directly (low-stakes).
+// Every action is recorded in the hash-chained audit log server-side.
+
+function _postConfirmedAction(opts) {
+    var body = Object.assign({}, opts.extra || opts.extraPayload || {}, { action_id: opts.actionId || "" });
+    fetch(opts.callbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+        if (data.ok || data.verified) {
+            if (opts.onSuccess) opts.onSuccess(data);
+            show_toast(data.message || "Action completed", "success");
+            if (data.reload) _partialRefreshMain();
+        } else {
+            show_toast(data.error || "Action failed", "error");
+        }
+    }).catch(function (err) {
+        show_toast("Request failed: " + err.message, "error");
+    });
+}
+
+function _showTypedConfirm(opts) {
+    var modal = document.getElementById("confirm-modal");
+    if (!modal) { _postConfirmedAction(opts); return; } // graceful fallback
+    var symbol = String(opts.confirmSymbol);
+    document.getElementById("confirm-modal-title").textContent = opts.description || "Confirm action";
+    document.getElementById("confirm-modal-description").textContent = opts.consequences || "";
+    document.getElementById("confirm-modal-consequences").textContent = opts.danger || "";
+    document.getElementById("confirm-modal-symbol").textContent = symbol;
+    var input = document.getElementById("confirm-modal-input");
+    var confirmBtn = document.getElementById("confirm-modal-confirm");
+    var cancelBtn = document.getElementById("confirm-modal-cancel");
+    input.value = "";
+    confirmBtn.disabled = true;
+
+    function onInput() { confirmBtn.disabled = input.value.trim() !== symbol; }
+    function close() {
+        modal.classList.add("hidden");
+        input.removeEventListener("input", onInput);
+        input.removeEventListener("keydown", onKey);
+        confirmBtn.removeEventListener("click", onConfirm);
+        cancelBtn.removeEventListener("click", close);
+    }
+    function onKey(e) {
+        if (e.key === "Enter" && !confirmBtn.disabled) { close(); _postConfirmedAction(opts); }
+        else if (e.key === "Escape") { close(); }
+    }
+    function onConfirm() { if (confirmBtn.disabled) return; close(); _postConfirmedAction(opts); }
+
+    input.addEventListener("input", onInput);
+    input.addEventListener("keydown", onKey);
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", close);
+    modal.classList.remove("hidden");
+    setTimeout(function () { input.focus(); }, 50);
+}
 
 function confirmAction(opts) {
     opts = opts || {};
-    if (opts.callbackUrl) {
-        var body = Object.assign({}, opts.extra || {}, { action_id: opts.actionId || "" });
-        fetch(opts.callbackUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        }).then(function (r) { return r.json(); }).then(function (data) {
-            if (data.ok || data.verified) {
-                if (opts.onSuccess) opts.onSuccess(data);
-                show_toast(data.message || "Action completed", "success");
-                if (data.reload) _partialRefreshMain();
-            } else {
-                show_toast(data.error || "Action failed", "error");
-            }
-        }).catch(function (err) {
-            show_toast("Request failed: " + err.message, "error");
-        });
-        return;
-    }
+    if (opts.confirmSymbol) { _showTypedConfirm(opts); return; }
+    if (opts.callbackUrl) { _postConfirmedAction(opts); return; }
     if (opts.onSuccess) opts.onSuccess({ ok: true });
+}
+
+// Operator-confirmed force-exit of an active position (Source.md §15/§16.4, §13.2).
+// Typed-confirm gate: operator must type the ticker symbol before the POST fires
+// (Non-Negotiable #5 — operator owns disengagement; force-exit is the per-position
+// equivalent). Available on every page so the dashboard + pipeline cards can both
+// call it without per-template script duplication.
+function forceExit(ticker) {
+    confirmAction({
+        actionId: "pipeline.force_exit." + ticker,
+        description: "Force exit " + ticker,
+        consequences: "Transition " + ticker + " to EXIT_THESIS_INVALIDATED. The position leaves the active set; stop-loss monitoring ceases for it.",
+        danger: "This is an operator-confirmed, audit-logged state change.",
+        confirmSymbol: ticker,
+        callbackUrl: "/api/pipeline/force-exit",
+        extra: { ticker: ticker },
+        onSuccess: function () { _partialRefreshMain(); _dashRefresh("force_exit"); }
+    });
 }
 
 
@@ -1254,6 +1312,15 @@ onSSE("system", function (data) {
     if (data.event_type === "system.kill_switch_disengaged") {
         handleNotification("kill_switch_disengaged", data);
     }
+    // Audit-chain failure — health card must reflect it immediately.
+    if (data.event_type === "system.audit_chain_failure" || data.event === "audit_chain_failure") {
+        _dashRefresh("audit_chain_failure");
+    }
+    // Stop-loss triggered by the stoploss daemon (async, not mid-cycle) — refresh
+    // positions + decisions so the operator sees the exit without a manual reload.
+    if (data.event_type === "stop_loss_triggered" || data.event === "stop_loss_triggered") {
+        _dashRefresh("stop_loss_triggered");
+    }
     // System heartbeat
     if (data.event_type === "system.heartbeat") {
         var indicator = document.getElementById("system-status");
@@ -1310,6 +1377,25 @@ function _partialRefreshMain() {
         select: "#main-content",
         swap: "outerHTML transition:200ms"
     });
+}
+
+// ─── SSE-triggered dashboard region refresh (Source.md §14, Architecture.md §4.4) ──
+// Dispatches a `pmacs:refresh` custom event on <body>. Dashboard region containers
+// carry hx-trigger="pmacs:refresh from:body" + hx-get=<partial>, so htmx fetches
+// and outerHTML-swaps just that region — no full-page reload, no bespoke JS per
+// region (generalises the existing sparkline pattern). No-op when no dashboard
+// region is on the page (e.g. on /agents). cycle_complete keeps its own debounced
+// #main-content refresh; this covers the async events that don't fire mid-cycle:
+// trade fills, stop-loss, audit-chain failure, mutation.
+function _dashRefresh(reason) {
+    if (typeof document === "undefined" || !document.body) return;
+    if (!document.getElementById("dash-positions") &&
+        !document.getElementById("dash-decisions") &&
+        !document.getElementById("dash-health") &&
+        !document.getElementById("dash-mutation")) return;
+    try {
+        document.body.dispatchEvent(new CustomEvent("pmacs:refresh", { detail: { reason: reason || "" } }));
+    } catch (e) { /* CustomEvent unsupported — silently skip */ }
 }
 
 onSSE("cycle", function (data) {
@@ -1370,6 +1456,7 @@ onSSE("cycle", function (data) {
 onSSE("trade", function (data) {
     if (data.event_type === "trade.filled" || data.event === "filled") {
         handleNotification(data.mode === "LIVE" ? "trade_filled_live" : "trade_filled_paper", data);
+        _dashRefresh("trade_filled");
     }
     if (data.event_type === "trade.signed") {
         showToast("Trade signed: " + (data.ticker || ""), "info");
@@ -1467,9 +1554,11 @@ onSSE("agent", function (data) {
 onSSE("mutation", function (data) {
     if (data.event === "candidate_ready" || data.event_type === "mutation.candidate_ready") {
         handleNotification("mutation_candidate_ready", data);
+        _dashRefresh("mutation_candidate_ready");
     }
     if (data.event === "mutation_approved" || data.event_type === "mutation.promoted") {
         handleNotification("mutation_approved", data);
+        _dashRefresh("mutation_approved");
     }
     if (data.event_type) {
         handleNotification(data.event_type, data);

@@ -2348,6 +2348,98 @@ class CycleOrchestrator:
                 level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}")
             self._upsert_holding(holding, cycle_id)
+
+            # Write a low-conviction HOLD decision + minimal memo so the cycle produces
+            # a complete audit trail for the operator. Without this, a
+            # Crucible-aborted symbol produces 0 decisions and the cycle's
+            # audit trail has no record of why. The HOLD verdict reflects the
+            # Crucible's high-severity finding — operator can still BUY/SELL
+            # later via the override path.
+            #
+            # Inline write matches the memo+decision block used by the normal
+            # post-decision path (~line 2730). We synthesize a minimal
+            # memo_dict + arbitrated stub since the symbol never reached the
+            # memo writer. Use a SHORT, auditable note — no LLM, no fake
+            # p_up/p_down beyond a flat 0.30/0.40/0.30 (no edge).
+            try:
+                import json as _persist_j
+                from datetime import datetime as _dt, timezone as _tz
+                from pmacs.schemas.arbitration import Arbitrated
+                from pmacs.engines.conviction import compute_conviction
+
+                abort_arb = Arbitrated(
+                    ticker=ticker,
+                    cycle_id=cycle_id,
+                    p_up=0.30, p_flat=0.40, p_down=0.30,  # flat — Crucible rejected
+                    agreement_score=0.0,
+                    matured_sources_used=0,
+                    abort_reason=f"crucible_abort:severity={crucible_severity:.2f}",
+                    # decision uses default (PROCEED) — schema is what we care about here
+                )
+                abort_conv = compute_conviction(
+                    arb=abort_arb,
+                    crucible_severity=crucible_severity,
+                    ev_multiple=0.0,  # neutral EV — Crucible rejected the thesis
+                    is_bootstrap=False,
+                )
+                abort_verdict_str = "HOLD"  # forced — Crucible's signal IS the verdict here
+                abort_decided_at = _dt.now(_tz.utc).isoformat()
+                abort_memo_dict = {
+                    "verdict_line": f"HOLD — Crucible aborted (severity {crucible_severity:.2f})",
+                    "thesis": (
+                        f"Crucible adversarial review aborted this symbol at "
+                        f"severity {crucible_severity:.2f} after "
+                        f"{crucible_iterations} cycle(s). Conservative HOLD "
+                        f"recorded so the cycle's audit trail + memo are "
+                        f"complete. Operator can still BUY/SELL via the "
+                        f"override path if they disagree with Crucible."
+                    ),
+                    "p_up": 0.30, "p_flat": 0.40, "p_down": 0.30,
+                    "conviction": float(abort_conv),
+                    "crucible_severity": float(crucible_severity),
+                    "crucible_iterations": int(crucible_iterations),
+                    "abort_reason": "crucible_abort",
+                }
+                abort_memo_json = _persist_j.dumps(abort_memo_dict)
+                abort_raw = abort_memo_dict["thesis"]
+                conn = _sql_connect(self._db_path)
+                try:
+                    conn.execute(
+                        "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+                        "memo_json, raw_text, memo_score, memo_grade, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, abort_verdict_str, float(abort_conv),
+                         abort_memo_json, abort_raw, None, None, abort_decided_at),
+                    )
+                    # Mirror to decisions table (same dual-write as pipeline.py)
+                    conn.execute(
+                        "INSERT INTO decisions (cycle_id, ticker, verdict, "
+                        "conviction_score, thesis_summary, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, abort_verdict_str, float(abort_conv),
+                         abort_memo_json, abort_decided_at),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                log_debug(
+                    "CRUCIBLE_ABORT_HOLD_WRITTEN",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "crucible_severity": crucible_severity,
+                             "conviction": float(abort_conv)},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} Crucible-aborted; conservative HOLD written to memos+decisions",
+                )
+            except Exception as _dec_exc:
+                log_debug(
+                    "CRUCIBLE_ABORT_DECISION_FAILED",
+                    payload={"ticker": ticker, "error": str(_dec_exc)},
+                    level="WARN",
+                    error_code="ABORTED_LLM",
+                    cycle_id=cycle_id,
+                    msg=f"Could not write HOLD-on-abort decision for {ticker}: {_dec_exc}",
+                )
+
             self._symbol_holdings.pop(ticker, None)
             return op + 1
 

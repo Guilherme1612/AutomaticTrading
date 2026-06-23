@@ -288,7 +288,11 @@ class PersonaRunner(ABC):
 
             return persona_output
 
-        # All attempts exhausted
+        # All attempts exhausted — log the abort, then try the safe-default
+        # fallback (deterministic conservative output from the simulation
+        # module) so downstream personas still receive a valid schema.
+        # Without this, a single LLM parse-fail drops the persona and the
+        # conviction collapses to 0 (SKIP) for the whole symbol.
         log_debug(
             "LLM_ABORTED",
             payload={
@@ -302,7 +306,50 @@ class PersonaRunner(ABC):
             msg=f"All {MAX_RETRIES + 1} attempts failed for {self.persona_name}",
         )
 
-        # Simulation fallback: generate deterministic conservative output
+        # Live-mode safe-default fallback (same as simulation). Produces a
+        # Pydantic-valid conservative output so the cycle completes; the
+        # reasoning strings carry "SIMULATION — " prefix so downstream
+        # memo rendering can flag them as low-confidence fallbacks.
+        try:
+            from pmacs.agents.simulation import make_simulation_output
+            model_cls = self.get_pydantic_model()
+            sim_data = make_simulation_output(
+                persona_name=self.persona_name,
+                model_cls=model_cls,
+                evidence=evidence,
+                cycle_id=self.cycle_id or "",
+            )
+            if sim_data is not None:
+                log_debug(
+                    "LLM_FALLBACK_SAFE_DEFAULT",
+                    payload={
+                        "persona": self.persona_name,
+                        "trigger": "retry_exhausted",
+                    },
+                    level="WARN",
+                    error_code="ABORTED_LLM",
+                    cycle_id=self.cycle_id,
+                    msg=(
+                        f"{self.persona_name} falling back to safe-default "
+                        f"after {MAX_RETRIES + 1} failed LLM parses"
+                    ),
+                )
+                return model_cls.model_validate(sim_data)
+        except Exception as _fallback_exc:
+            log_debug(
+                "LLM_FALLBACK_FAILED",
+                payload={
+                    "persona": self.persona_name,
+                    "error": str(_fallback_exc),
+                },
+                level="ERROR",
+                error_code="ABORTED_LLM",
+                cycle_id=self.cycle_id,
+                msg=f"Safe-default fallback also failed for {self.persona_name}: {_fallback_exc}",
+            )
+
+        # Simulation fallback path (deterministic, no LLM) — only used when
+        # simulation_mode is set explicitly (kept for backward compatibility).
         if self.simulation_mode:
             return self._generate_simulation_output(evidence)
 

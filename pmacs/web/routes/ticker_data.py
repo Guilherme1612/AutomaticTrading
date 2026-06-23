@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -300,6 +301,13 @@ _FWD_PE_SANITY_MAX_ABS = 200.0
 # quarterly loss / one-time gain gets projected into a fake TTM.
 _TTM_DIVERGENCE_THRESHOLD = 3.0
 
+# In-process cache for period-end closes fetched from Polygon. Historical
+# closes are objective market data (identical regardless of when queried) so
+# caching for an hour is safe and dramatically cuts load time when Polygon
+# 429-rate-limits the operator.
+_PERIOD_PRICE_CACHE: dict[tuple[str, tuple[str, ...]], tuple[float, dict[str, float]]] = {}
+_PERIOD_PRICE_TTL_SECS = 3600.0  # 1h for hits, 60s for failures (see _fetch_period_prices)
+
 
 def _ttm_divergence_ratio(ttm_value: float | None, annual_value: float | None) -> float | None:
     """Return |ttm/annual| when both are positive; None when either is missing
@@ -558,9 +566,22 @@ def _extract(ticker: str, ev: dict) -> dict:
 
 
 def _fetch_period_prices(ticker: str, periods: list[str]) -> dict:
-    """Fetch period-end closes from Polygon (widened window). Empty dict on failure."""
+    """Fetch period-end closes from Polygon (widened window). Empty dict on failure.
+
+    Period prices are objective market data (historical close), so we cache them
+    in-process for an hour. Without this cache, every page render hits Polygon
+    for daily bars; when Polygon 429-rate-limits the operator, the page blocks
+    for ~10s waiting for the rate-limit bucket. The cache also short-circuits
+    to {} on persistent failures, so a 429 storm doesn't make the entire
+    dashboard unusable.
+    """
     if not periods:
         return {}
+    cache_key = (ticker, tuple(sorted(periods)))
+    now = time.monotonic()
+    cached = _PERIOD_PRICE_CACHE.get(cache_key)
+    if cached is not None and (now - cached[0]) < _PERIOD_PRICE_TTL_SECS:
+        return cached[1]
     try:
         from pmacs.data.sources.technical import fetch_period_end_prices
         from pmacs.data.gateway import DataGateway
@@ -572,10 +593,15 @@ def _fetch_period_prices(ticker: str, periods: list[str]) -> dict:
         if not key:
             return {}
         with DataGateway() as gw:
-            return fetch_period_end_prices(ticker, gw, key, periods)
+            result = fetch_period_end_prices(ticker, gw, key, periods)
     except Exception as exc:  # pragma: no cover - network/credential dependent
         _log.info("period-end price fetch failed for %s: %s", ticker, exc)
+        # Cache the failure briefly (60s) so a 429 storm doesn't drag every
+        # subsequent page load into the same 10s wait. After 60s we retry.
+        _PERIOD_PRICE_CACHE[cache_key] = (now, {})
         return {}
+    _PERIOD_PRICE_CACHE[cache_key] = (now, result)
+    return result
 
 
 def _display_groups(ticker: str, ev: dict, derived: object, sector: str = "") -> list[dict]:
@@ -600,16 +626,30 @@ def _display_groups(ticker: str, ev: dict, derived: object, sector: str = "") ->
     def row(label, value, unit="", state="value"):
         return {"label": label, "value": value, "unit": unit, "state": state}
 
+    # Valuation multiples in the raw grid should mirror the divergence-suppressed
+    # values the main summary cards render — otherwise operators see P/E "—"
+    # in the summary and 106.69 in raw for the same ticker (NBIS canonical),
+    # which is confusing. The engine's derived.current has the suppressed
+    # values (None when the TTM-divergence check fires); the template renders
+    # the em-dash via the `r.value is none` branch, which is the right answer
+    # for the raw grid too.
+    cur_pe = getattr(getattr(derived, "current", None), "pe", None)
+    cur_fpe = getattr(getattr(derived, "current", None), "forward_pe", None)
+    cur_ps = getattr(getattr(derived, "current", None), "ps", None)
+    cur_pb = getattr(getattr(derived, "current", None), "pb", None)
+    cur_ev = getattr(getattr(derived, "current", None), "ev_ebitda", None)
+    cur_peg = getattr(getattr(derived, "current", None), "peg", None)
+
     # Technical info is rendered in its own dedicated section (with RSI colour
     # coding and 52w distance), so we omit it from the raw-fundamentals grid.
     groups = [
         {"title": "Valuation", "rows": [
-            row("P/E (normalized)", m.get("peNormalizedAnnual")),
-            row("Forward P/E", _sanitize_multiple(m.get("forwardPE"), label="forwardPE")),
-            row("P/S", m.get("psAnnual")),
-            row("P/B", m.get("pbAnnual")),
-            row("EV/EBITDA", m.get("evToEbitdaTTM")),
-            row("PEG", m.get("pegTTM")),
+            row("P/E (normalized)", cur_pe),
+            row("Forward P/E", cur_fpe),
+            row("P/S", cur_ps),
+            row("P/B", cur_pb),
+            row("EV/EBITDA", cur_ev),
+            row("PEG", cur_peg),
         ]},
         {"title": "Growth", "rows": [
             row("Revenue YoY", m.get("revenueGrowthTTMYoy"), "%"),

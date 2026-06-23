@@ -40,6 +40,7 @@ class TestPersonaEvidenceMap:
         expected = {
             "MacroRegime", "CatalystSummarizer", "MoatAnalyst",
             "GrowthHunter", "InsiderActivity", "ShortInterest", "Forensics",
+            "ValuationAgent",
         }
         assert set(PERSONA_EVIDENCE_MAP.keys()) == expected
 

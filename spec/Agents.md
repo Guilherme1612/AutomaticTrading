@@ -29,6 +29,7 @@
 11.  Persona: Forensics
 12.  Persona: Crucible
 13.  Persona: MemoWriter
+13b. Persona: ValuationAgent (post-arbitration forward-valuation assumptions)
 14.  Inter-persona communication model
 15.  Failure Diagnostic Engine — the 18 outcome + 5 reasoning-flaw taxonomy types
 16.  Crucible adversarial loop (inner state machine)
@@ -56,6 +57,9 @@
 | Holding state machine | `Architecture.md` | §8.2 |
 | Mutation Engine process (daemon, lifecycle, SQLite) | `Architecture.md` | §10 |
 | Mutation rollback mechanics (code, tables) | `Architecture.md` | §10.7, §10.8 |
+| Forward-valuation engine (EV/EBITDA, 6-12mo) | `Architecture.md` | §9.4b |
+| Forward-valuation memo display | `Source.md` | §16.9 |
+| ValuationAgent persona (assumptions, not price) | `Agents.md` | §13b |
 | Failure Diagnostic Engine (engine code) | `Architecture.md` | §9.5 |
 | Per-persona file paths | `Architecture.md` | §3 (repo tree) |
 | Cycle orchestration (when personas run) | `Architecture.md` | §12 |
@@ -119,6 +123,7 @@ This independence prevents correlated hallucination. If MoatAnalyst hallucinates
 | 10 | **CrossPersonaAuditor** | Yes | Second-wave. Audits wave-1 outputs for citation gaps, unsupported conclusions, conflicting conclusions, number misuse. Emits structured flags — **never probabilities** | Wave 2 |
 | — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence + auditor flags. Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
 | — | **MemoWriter** | Yes | Reads all persona outputs + Arbitrated + Crucible. Produces the operator-facing memo. | Runs after Crucible |
+| — | **ValuationAgent** | Yes | Post-arbitration. Emits bull/base/bear forward-valuation ASSUMPTIONS (revenue growth path, margin trajectory, EBITDA margin at horizon, acquisition impact, exit EV/EBITDA multiple) with rationale + per-scenario `probability_of_occurrence`. Consumed by the deterministic `ForwardValuationEngine` (Architecture.md §9.4b). Does **not** enter Arbitration, does **not** amend conviction, does **not** emit a price. | Runs after Arbitration, before/within valuation triangulation (step 13e5) |
 
 The Gatekeeper is not a persona in the LLM sense. It is deterministic Python that runs in Phase 0. It is included in the roster for completeness.
 
@@ -1194,6 +1199,124 @@ class MemoWriterOutput(BaseModel):
 - `key_evidence` items are non-empty strings
 - `conviction` matches the conviction engine output (±0.01)
 - MemoWriter is NOT included in arbitration (it does not produce a DirectionalProbability)
+
+---
+
+## 13b. Persona: ValuationAgent
+
+**Files:** `pmacs/agents/valuation_agent.py`, `prompts/valuation_agent.md`, `grammars/valuation_agent.gbnf`, `sanity/valuation_agent.py`
+
+**Architecture ref:** `Architecture.md §9.4b` (ForwardValuationEngine). **This persona is post-arbitration and NOT wave-1.** It does NOT enter Arbitration, does NOT emit `p_up/p_flat/p_down`, and does NOT amend conviction. It is the operator's "predict valuation from scenarios and numbers" lens on a 6-12 month horizon.
+
+### 13b.1 Purpose
+
+Emit structured **bull/base/bear forward-valuation ASSUMPTIONS** — a revenue growth path to the horizon, a margin trajectory, an EBITDA margin at the horizon, an exit EV/EBITDA multiple, and (where supportable) an acquisition-revenue contribution — each with a rationale and a per-scenario `probability_of_occurrence`. The deterministic `ForwardValuationEngine` (`Architecture.md §9.4b`) consumes these assumptions and computes the price target.
+
+**The LLM never emits a price number** (Five Non-Negotiable #2 — LLMs never math, `§1.6`). It emits the inputs to the price math. The agent also double-checks its own assumptions for accuracy and consistency before emitting (self-critique is mandatory, see §13b.3).
+
+### 13b.2 Evidence consumed
+
+In priority order (mirrors the prompt):
+
+1. **Forward valuation / guidance proxy** (`yahoo_{ticker}_forward_valuation`): `eps_trend{current_q,next_q,current_year,next_year}`, `next_year_eps_growth_pct`, `ntm_revenue_consensus`, `current_year_revenue_growth_pct`, `next_year_revenue_consensus`, `forward_ps`, `earnings_growth_yoy`, `revenue_growth_yoy`. Structured management guidance is NOT fetched — analyst consensus is the guidance-growth proxy, declared in `data_gaps`.
+2. **Fundamentals annual series** (`fundamentals_{ticker}_metrics`): `annual_revenue`, `annual_ebitda`, `annual_freeCashFlow`, `annual_sbc`, `revenueGrowthTTMYoy`/`revenueGrowth3Y`/`revenueGrowth5Y`, the TTM margin series, `ebitdaMarginTTM`, and the Finnhub gap-fill `annual_{gross,net,operating,fcf}Margin_trend`. The agent derives the margin trajectory (COMPRESSING/EXPANDING/STABLE) and per-year EBITDA margin from these.
+3. **EDGAR financials** (`edgar_{ticker}_financials`): revenue/EPS/SBC/CapEx/FCF YoY — cross-checks the consensus growth path against reported actuals.
+4. **Press releases + IR pages**: the ONLY source for acquisition narrative. There is NO structured M&A feed. Acquisition impact is inferred narratively, flagged `LOW`/`MODERATE` confidence, with a `data_gaps` note. Never a fabricated hard deal number.
+5. **Analyst price targets** (`yahoo_{ticker}_price_target`): sanity check only — never the anchor for the exit multiple.
+
+Mapped in `evidence_router.py` `PERSONA_EVIDENCE_MAP["ValuationAgent"] = [FUNDAMENTALS, YAHOO, EDGAR, PRESS, IR_PAGES]`.
+
+### 13b.3 System prompt skeleton
+
+```markdown
+You are a forward-valuation analyst for {ticker} on {today_date}. You produce
+structured bull/base/bear ASSUMPTIONS for a 6-to-12-month forward valuation.
+A deterministic Python engine (ForwardValuationEngine, Architecture.md §9.4b)
+consumes your assumptions and computes the price target. YOU DO NOT EMIT A PRICE.
+You emit the inputs: revenue growth path to the horizon, margin trajectory,
+EBITDA margin at the horizon, exit EV/EBITDA multiple, and (where supportable)
+acquisition-revenue contribution. You also emit a probability_of_occurrence per
+scenario, and you double-check your own assumptions for accuracy and consistency
+before emitting.
+
+Scenario lens:
+- bull: growth at high end / accelerating, margin EXPANDING or STABLE, exit
+  multiple at/above peer median.
+- base: growth at consensus, margin STABLE, exit multiple at peer median.
+  Usually highest probability.
+- bear: growth at low end / contracting, margin COMPRESSING, exit multiple below
+  peer median.
+probability_of_occurrence across bull+base+bear MUST sum to ~1.0.
+
+INSUFFICIENT_DATA fallback (anti-hallucination, mandatory): if any input is N/A,
+emit a near-uniform distribution (e.g. 0.30/0.40/0.30), set acquisition_confidence
+NONE with contribution 0.0, populate data_gaps with one short string per N/A input.
+NEVER fabricate a number — a missing input degrades the engine gracefully, which
+is correct and preferred over a wrong number.
+
+Self-critique (mandatory, before emitting): re-read your assumptions. Verify
+revenue_growth_path_pct is bull>base>bear in fraction terms; ebitda_margin is
+plausible vs history and margin_trajectory agrees with margin_delta_pct sign;
+exit_multiple is plausible vs peers; probabilities sum ~1.0 and the highest-
+probability scenario has the strongest cited evidence; each rationale cites >=1
+evidence_id. If any answer is no, revise the assumption, not the evidence.
+
+{episodic_context}
+```
+
+### 13b.4 Output schema
+
+```python
+class ValuationScenarioAssumptions(BaseModel):
+    revenue_growth_path_pct: float            # ge -0.5, le 1.0 (fraction)
+    margin_trajectory: Literal["COMPRESSING", "EXPANDING", "STABLE"]
+    margin_delta_pct: float                    # ge -0.2, le 0.2 (signed fraction)
+    ebitda_margin_at_horizon_pct: float        # ge -0.1, le 0.9 (fraction)
+    acquisition_revenue_contribution_pct: float = 0.0   # ge 0, le 0.5
+    acquisition_confidence: Literal["HIGH", "MODERATE", "LOW", "NONE"]
+    exit_multiple: float                       # gt 0, le 100 (EV/EBITDA)
+    rationale: str = Field(max_length=800)     # cites >=1 evidence_id
+    probability_of_occurrence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(min_length=1)
+
+class ValuationAgentOutput(BaseModel):
+    ticker: str
+    horizon_months: int = Field(ge=6, le=12)
+    bull: ValuationScenarioAssumptions
+    base: ValuationScenarioAssumptions
+    bear: ValuationScenarioAssumptions
+    data_gaps: list[str]
+    evidence_ids: list[str] = Field(min_length=1)   # top-level
+
+    @model_validator(mode="after")
+    def _check_invariants(self):
+        total = bull.probability_of_occurrence + base.probability_of_occurrence
+                + bear.probability_of_occurrence
+        if abs(total - 1.0) > 0.10: raise ValueError(...)
+        if degenerate (all mass on bull or bear): raise ValueError(...)
+        if any scenario acquisition_revenue_contribution_pct > 0:
+            acquisition_confidence must be LOW/MODERATE
+            data_gaps must mention "acqui"
+        return self
+```
+
+Note: this persona does NOT emit `p_up/p_flat/p_down`. The per-scenario `probability_of_occurrence` is the agent's own scenario weighting (consumed by `ForwardValuationEngine.expected_price_usd`), NOT the Arbitrated vector.
+
+### 13b.5 Sanity validator
+
+- Every `bull`/`base`/`bear` + top-level `evidence_id` resolves to a real packet.
+- `horizon_months ∈ [6, 12]`.
+- `bull + base + bear probability_of_occurrence` sums to ~1.0 (±0.10).
+- Per scenario: `exit_multiple ∈ [0.5, 80]`; `ebitda_margin ∈ [-0.10, 0.85]`.
+- `margin_trajectory` agrees with `margin_delta_pct` sign (EXPANDING ⇒ ≥ -0.005, COMPRESSING ⇒ ≤ 0.005).
+- `acquisition_revenue_contribution_pct > 0` ⇒ `acquisition_confidence` ∈ {LOW, MODERATE} AND `data_gaps` mentions "acqui".
+- Each scenario `rationale` cites ≥1 of that block's `evidence_ids`.
+- Reject degenerate distributions (all mass on bull, or all on bear).
+- Ordering: `bull.revenue_growth_path_pct ≥ base ≥ bear` (reject if violated).
+
+### 13b.6 Integration (post-arbitration)
+
+Run by the orchestrator after Arbitration, alongside the reverse-DCF engine. The `ForwardValuationEngine` consumes the agent's `.model_dump()` scenario blocks and computes per-scenario forward prices. When `ForwardValuationResult.is_available` AND all three prices > 0, `ScenarioPriceEngine` uses the forward prices; otherwise it falls back to the reverse-DCF sensitivity grid unchanged (`VALUATION_SOURCE_CHOSEN` audit event records the source). The result surfaces in `MemoWriterOutput` only (`Source.md §16.9` "Forward valuation (6-12 month)" block) — never on the /ticker page, never as a dashboard tile, and never as a conviction amendment.
 
 ---
 

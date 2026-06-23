@@ -89,7 +89,7 @@ Including engine-internal models. Engines import: `from pmacs.schemas.arbitratio
 
 Service names: `pmacs.<category>.<key>`. Read via `pmacs/storage/keychain.py`. Never environment variables. Never config files. Never the repository. Never logged. Never serialized.
 
-Implements `Source.md §4` promise 2 (local-only) and `Source.md §6` decision rights for credentials.
+Implements `Source.md §4` promise 2 (mode-pure inference) and `Source.md §6` decision rights for credentials.
 
 ### 1.4 Process isolation is structural, not procedural
 
@@ -1863,15 +1863,19 @@ Standard implementations in `pmacs/engines/*.py`. Cross-field validation always 
 
 Detailed signatures and invariants are documented in their module docstrings.
 
-### 9.4b ReverseDcfEngine, ScenarioPriceEngine (deterministic valuation)
+### 9.4b ReverseDcfEngine, ForwardValuationEngine, ScenarioPriceEngine (deterministic valuation)
 
-Two pure-Python, LLM-free valuation engines — peers of `ticker_metrics.py` (`Source.md §16.8`). Neither enters Arbitration (neither is a persona); neither amends the conviction formula. They provide the deterministic valuation anchor for the bull/bear debate and the memo.
+Three pure-Python valuation engines — peers of `ticker_metrics.py` (`Source.md §16.8`). None enters Arbitration; none amends the conviction formula. They provide the deterministic valuation anchor for the bull/bear debate and the memo. The price math is always Python (Five Non-Negotiable #2 — LLMs never math): where the `ForwardValuationEngine` consumes LLM-produced assumptions, the LLM emits assumptions only and never emits a price.
 
 **ReverseDcfEngine** (`pmacs/engines/reverse_dcf.py`): solves the growth rate the market is *implying* from the current price, then compares it to the GrowthHunter's estimated growth. Inputs are stored `EvidencePacket` primitives (price, shares, `annual_freeCashFlow` + `fcf_ttm_usd`, growth assumption from `GrowthHunterOutput.revenue_yoy_pct` or yfinance `revenueGrowthTTMYoy`) via the same `_extract` pattern as `pmacs/web/routes/ticker_data.py`. Gordon-style: `price = fcf_ttm * (1 + g) / (discount - g)` → solve for `g` = implied growth. Output `ReverseDcfResult`: `implied_growth_pct`, `assumed_growth_pct`, `growth_gap_pct`, `fair_value_usd`, `current_price_usd`, `valuation_lean` (BULLISH if implied < assumed — market is under-pricing growth; BEARISH if implied > assumed; NEUTRAL otherwise), `sensitivity`. No LLM, no network (Five Non-Negotiable #2/#4). When primitives are missing, returns a `NEUTRAL` result with a notes field — never fabricates.
 
-**ScenarioPriceEngine** (`pmacs/engines/scenario_price.py`): consumes the `Arbitrated` probability vector plus the reverse-DCF fair value / valuation range and produces a probability-weighted expected price: `E[price] = p_up * bull_price + p_flat * base_price + p_down * bear_price`. Output `ScenarioPriceResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd`. Feeds `MemoWriterOutput` only — it does **not** replace `compute_ev`'s `ev_multiple` (which is a trade-expectancy ratio, `§9.4 PricingEngine`, not a valuation multiple). The two are kept distinct and both surface in the memo.
+**ForwardValuationEngine** (`pmacs/engines/forward_valuation.py`): a deterministic EV/EBITDA forward-price engine on a 6-12 month horizon. Consumes the `ValuationAgent`'s structured bull/base/bear scenario assumptions (revenue growth path to the horizon, EBITDA margin at horizon, exit EV/EBITDA multiple, acquisition revenue contribution) and computes a per-scenario forward fair-value price: `forward_revenue = ttm_revenue * (1 + g)^years + acquisition_contribution`, `forward_ebitda = forward_revenue * margin`, `forward_ev = forward_ebitda * exit_multiple`, `equity_value = max(0, forward_ev - net_debt)` (limited liability — a shareholder's downside is floored at zero; when `forward_ev < net_debt` the scenario is flagged `equity underwater (EV < net debt), floored at $0` in the scenario-point notes rather than emitting a negative price), `price_per_share = equity_value / shares`. Output `ForwardValuationResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd` (scenario-probability-weighted using the agent's per-scenario `probability_of_occurrence`, NOT the Arbitrated vector), `scenario_points` (echo of inputs for audit), `is_available`. Inputs come from stored `EvidencePacket` primitives (annual revenue/total debt/cash, shares outstanding from `*_profile`, current price) via `_extract_forward_valuation_inputs`. When `is_available`, the orchestrator prefers `ForwardValuationResult` bull/base/bear prices for `ScenarioPriceEngine` over the reverse-DCF sensitivity grid; when not available, it falls back to the reverse-DCF grid unchanged. Never fabricates — missing primitives degrade to `is_available=False` + `notes`.
 
-Both engines require `cycle_id` and log to both audit and debug streams (`§1.8`, `§1.11`).
+**ValuationAgent** (`pmacs/agents/valuation_agent.py`): a post-arbitration LLM persona (`Agents.md §13b`) that emits the bull/base/bear *assumptions* consumed by the ForwardValuationEngine. It is NOT wave-1, does NOT enter Arbitration, does NOT emit `p_up/p_flat/p_down`, and does NOT amend conviction. The LLM never emits the price number (§1.6) — only the structured assumptions (growth path, margin trajectory, EBITDA margin, exit multiple, acquisition impact) with rationale and a per-scenario `probability_of_occurrence`. Guidance-growth is proxied from the yfinance `forward_valuation` packet (structured management guidance is not fetched); acquisition impact is inferred narratively from filings/press with a `LOW`/`MODERATE` confidence flag and a `data_gaps` note — never a fabricated deal number. An `INSUFFICIENT_DATA` fallback emits near-uniform probabilities and lists the N/A inputs rather than fabricating.
+
+**ScenarioPriceEngine** (`pmacs/engines/scenario_price.py`): consumes the `Arbitrated` probability vector plus bull/base/bear fair-value prices (from `ForwardValuationEngine` when available, else the reverse-DCF sensitivity grid) and produces a probability-weighted expected price: `E[price] = p_up * bull_price + p_flat * base_price + p_down * bear_price`. Output `ScenarioPriceResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd`. Feeds `MemoWriterOutput` only — it does **not** replace `compute_ev`'s `ev_multiple` (which is a trade-expectancy ratio, `§9.4 PricingEngine`, not a valuation multiple). The two are kept distinct and both surface in the memo.
+
+All three engines require `cycle_id` and log to both audit and debug streams (`§1.8`, `§1.11`). The `VALUATION_SOURCE_CHOSEN` debug event records whether `scenario_price` used `forward_valuation` or the `reverse_dcf_grid` fallback, so the audit trail shows which source priced the memo.
 
 ### 9.5 FailureDiagnosticEngine
 
@@ -2756,34 +2760,35 @@ universe_flags = "flag_only"
 ```json
 {
   "backends": {
-    "llama_server": {
-      "url": "http://127.0.0.1:8080",
-      "default_model": "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL",
-      "structured_output": "gbnf"
-    },
-    "ollama": {
-      "url": "http://127.0.0.1:11434",
-      "default_model": "qwen3.6:35b-a3b-coding-mxfp8",
-      "structured_output": "json_schema"
-    }
+    "llama_server": { "url": "http://127.0.0.1:8080", "default_model": "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL", "structured_output": "gbnf", "api_key_ref": "", "base_url": "" },
+    "ollama":       { "url": "http://127.0.0.1:11434", "default_model": "qwen3.6:35b-a3b-coding-mxfp8", "structured_output": "json_schema", "api_key_ref": "", "base_url": "" },
+    "anthropic":    { "default_model": "claude-sonnet-4-20250514", "structured_output": "tool_use", "api_key_ref": "pmacs.credentials.anthropic_api_key", "base_url": "https://api.anthropic.com" },
+    "openai":       { "default_model": "gpt-4o", "structured_output": "json_schema", "api_key_ref": "pmacs.credentials.openai_api_key", "base_url": "https://api.openai.com/v1" },
+    "openrouter":   { "default_model": "deepseek/deepseek-v4-flash", "structured_output": "json_schema", "api_key_ref": "pmacs.credentials.openrouter_api_key", "base_url": "https://openrouter.ai/api/v1" }
   },
   "active": "llama_server",
   "personas": {
     "gatekeeper": null,
-    "macro_regime": "default",
-    "catalyst_summarizer": "default",
-    "moat_analyst": "default",
-    "growth_hunter": "default",
-    "insider_activity": "default",
-    "short_interest": "default",
-    "forensics": "default",
-    "crucible": "default"
+    "macro_regime": "default", "catalyst_summarizer": "default", "moat_analyst": "default",
+    "growth_hunter": "default", "insider_activity": "default", "short_interest": "default",
+    "forensics": "default", "crucible": "default",
+    "bull_advocate": "default", "bear_advocate": "default", "cross_persona_auditor": "default",
+    "valuation_agent": "default"
   },
   "candidates": {}
 }
 ```
 
-The `candidates` field is populated by the Mutation Engine for in-flight A/B tests.
+**Backend mode purity (operator directive, `Source.md §5` #4).** The `active` backend sets the inference mode for the entire cycle — there is no per-persona or per-call backend routing. Every persona (wave-1, wave-2 debate, `ValuationAgent`) uses the active backend. A `personas` value of `"default"` means "use the active backend's `default_model`"; no per-persona *backend* override is supported.
+
+- **Local mode** — `active` is `llama_server` or `ollama`. Every persona's inference runs on that local backend. No cloud LLM calls anywhere in the cycle. The inference process is `pf`-blocked from internet egress. `structured_output` is `gbnf` (llama-server) or `json_schema` (Ollama).
+- **API mode** — `active` is `openai`, `openrouter`, `anthropic`, or another OpenAI-compatible provider. Every persona's inference calls the configured cloud provider. Egress is required, so the `pf`-block on inference is lifted in API mode. `structured_output` is `json_schema` (OpenAI-compatible: `response_format: {"type": "json_object"}` + prompt-injected field names + balanced-JSON extraction, `pmacs/agents/base.py::_call_llm_openai`) or `tool_use` (Anthropic).
+
+The mode is **derived from the backend** (spec-only guarantee — no runtime guard, no extra config field): a backend with a non-empty `api_key_ref` or a non-localhost `base_url` is API mode; otherwise local mode. Data fetching (yfinance/EDGAR/Finnhub/Polygon) is orthogonal and uses the internet in both modes — "local" governs *inference*, not data sourcing. No telemetry in either mode. The web pipeline's own caller (`pmacs/web/routes/pipeline.py::_call_llm`) reads the same `active` field, so both dispatch paths honor the selected mode.
+
+**Config preservation (operator directive).** Switching the active backend (`set_inference_provider`) changes only `active` — it never touches a backend's `default_model` or API key. Writing a per-backend model (`set_inference_model`) is guarded: an empty/whitespace model means "keep the existing value", so a switch can never silently clobber a previously-configured model with a placeholder. The wizard's provider step follows the same guard (`if api_model:` — only overwrite when a model is actually entered). API keys live in the macOS keychain (`pmacs.credentials.<provider>_api_key`), not in this file, so they survive config rewrites.
+
+The `candidates` field is populated by the Mutation Engine for in-flight A/B tests (candidate arms run SHADOW-only and must stay within the active mode — no cross-mode A/B).
 
 ### 17.6 `config/model_hashes.toml`
 

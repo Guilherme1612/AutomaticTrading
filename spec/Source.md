@@ -79,7 +79,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | Field | Value |
 |---|---|
 | **Name** | PMACS — Portfolio Management and Catalyst Automation System |
-| **Kind** | Single-operator, local-only, catalyst-driven, LLM-assisted decision engine with deterministic arbitration |
+| **Kind** | Single-operator, mode-pure (local or API inference), catalyst-driven, LLM-assisted decision engine with deterministic arbitration |
 | **Holding style** | Thesis-bound. Hold while thesis is valid and risk-adjusted. No time-based forced exits. |
 | **Cadence** | Boot-driven. One cycle per 24h+ gap detected at startup. Manual single-ticker re-runs from UI. |
 | **Host** | Apple M1 Max, 64GB unified memory, macOS |
@@ -91,7 +91,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | **Capital (paper)** | $5,000 simulated. 20% max single position ($1,000). |
 | **Modes** | SHADOW + PAPER (concurrent) → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDARD → LIVE_EXPANDED |
 | **Realistic timeline** | ~6 weeks to first PAPER cycles; 3-6 months to PAPER_VALIDATED depending on boot frequency |
-| **Network** | `localhost`-only. No telemetry. No cloud LLM. No external observation. |
+| **Network** | Inference mode is operator-selected and mode-pure: *local* backends (llama-server/Ollama) run `localhost`-only with the inference process `pf`-blocked from egress; *API* backends (OpenAI/OpenRouter/Anthropic/other) call the configured cloud provider. No telemetry in either mode. No external observation of operator decisions. Data fetching (yfinance/EDGAR/Finnhub/Polygon) uses the internet in both modes. |
 | **Tone** | Notion aesthetic. Information-dense without clutter. Numbers in JetBrains Mono. |
 
 ---
@@ -138,7 +138,7 @@ A vision document without a trust contract is marketing. This is the binding sta
 
 1. **Every decision is auditable in deterministic detail.** Hash-chained immutable log. The operator can prove what the system saw, what each persona said, how they were weighted, what the Crucible found, what was sized, what was traded, and what filled — for every cycle, forever.
 
-2. **Local-only execution.** No cloud LLM calls. No telemetry. No external observation of operator decisions. The audit log replicates only to operator-controlled destinations.
+2. **Mode-pure inference.** The operator selects one inference mode for the whole cycle: *local* (llama-server or Ollama — no cloud LLM, inference `pf`-blocked from egress) or *API* (OpenAI/OpenRouter/Anthropic/other — all inference via the configured cloud provider). No per-persona backend mixing — every persona uses the active backend. No telemetry in either mode. No external observation of operator decisions. The audit log replicates only to operator-controlled destinations.
 
 3. **The operator controls the kill switch.** PMACS can engage it autonomously when triggered. Only the operator can disengage it, with a typed reason.
 
@@ -178,7 +178,7 @@ These are repeated in `Architecture.md §1.1-1.15` as code-level invariants. The
 
 3. **Every state transition is hash-chained.** Including audit log entries, holding state changes (via the state machine), and mode promotions. Tampering with one line breaks the chain. Cortex verifies on startup and hourly.
 
-4. **Local-only execution.** No cloud calls of any kind. The inference process is `pf`-blocked from internet egress.
+4. **Mode-pure inference.** The active backend sets the mode for the whole cycle. *Local mode* (llama-server/Ollama): no cloud LLM calls; the inference process is `pf`-blocked from internet egress. *API mode* (OpenAI/OpenRouter/Anthropic/other): inference calls the configured cloud provider (egress required, no `pf`-block on inference). No telemetry in either mode. No per-persona or per-call backend mixing — all personas use the active backend. Data fetching is orthogonal and uses the internet in both modes.
 
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
@@ -1049,11 +1049,12 @@ with a link to the Universe page.
 
 ### 16.9 Memo debate + valuation sections
 
-The memo (rendered in the single-ticker drawer §16.6 and on `/memo/{ticker}`) gains three new sections from the wave-2 debate/audit layer and the deterministic valuation engines (`Architecture.md §9.4b`). These are *displays only* — they do not change the verdict, which is still produced by the unchanged conviction formula (§7.2).
+The memo (rendered in the single-ticker drawer §16.6 and on `/memo/{ticker}`) gains four new sections from the wave-2 debate/audit layer and the deterministic valuation engines (`Architecture.md §9.4b`). These are *displays only* — they do not change the verdict, which is still produced by the unchanged conviction formula (§7.2).
 
 - **Bull vs Bear debate.** A two-column section: the BullAdvocate's thesis (and which wave-1 persona it pushed against) on the left, the BearAdvocate's thesis on the right, and a one-line "consensus lean" underneath. The operator sees the case each advocate made and which signal they contested — this is the adversarial pressure on consensus made visible, not hidden inside Arbitration weights.
 - **What would change my mind.** A short bulleted list of pre-registered falsification conditions the MemoWriter extracts from the debate (e.g. "if next-quarter revenue growth falls below 8%, the bull case fails"). These feed the weekly re-evaluation (§7.3): a trigger that fires becomes an `EXIT_THESIS_INVALIDATED` candidate without re-running the whole pipeline.
 - **Valuation anchor (reverse-DCF).** A compact block: "Market is pricing **18%** growth; GrowthHunter estimates **9%** — **BEARISH gap**" (the `growth_gap_pct` and `valuation_lean` from `ReverseDcfResult`), plus the probability-weighted expected price from `ScenarioPriceResult` against the current price. This is the deterministic bull/bear arbiter — pure math, no LLM (`Architecture.md §9.4b`) — and it gives the operator a sanity check on whether the debate's directional lean matches what the market is actually pricing.
+- **Forward valuation (6-12 month).** A scenario-valuation block from the `ValuationAgent` + `ForwardValuationEngine` (`Agents.md §13b`, `Architecture.md §9.4b`): bull/base/bear forward fair-value prices, the scenario-probability-weighted expected price vs the current price, the `horizon_months`, and the base-case assumptions (revenue growth path, EBITDA margin at horizon, exit EV/EBITDA multiple, acquisition impact with its confidence flag). This is the operator's "predict valuation from scenarios and numbers" lens — the LLM emits the *assumptions* (growth → guidance proxy → margin trajectory → EBITDA margin → acquisition impact) and a deterministic Python engine computes the price (Five Non-Negotiable #2 — LLMs never math, `§1.6`). When `ForwardValuationResult.is_available` is False (missing revenue/shares/net-debt primitives), the block shows "forward valuation unavailable this cycle" rather than a fabricated price.
 
 When wave-2 timed out or aborted for a cycle, these sections show a "debate unavailable this cycle" note rather than fabricated content.
 
@@ -1525,10 +1526,10 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 
 - **Short positions, options, futures, crypto.** Risk model and Crucible are calibrated for long-equity. Adding these without recalibration is unsafe.
 - **Brokers other than Alpaca paper (v1) and IBKR earmarked (v2 live).** Each broker integration carries credential, reconciliation, and corporate-action surface.
-- **Cloud LLM calls, telemetry, external observation.** Local-only is structural.
+- **Telemetry and external observation of operator decisions.** Structural in both inference modes. (Cloud LLM calls are not a non-goal — in API mode they *are* the mode. Local-only inference is a non-goal only when the operator has selected API mode.)
 - **Multi-user, multi-operator, team collaboration.** Single-operator simplifies the trust contract dramatically.
 - **Tax reporting (Modelo 3, Anexo J for Portugal).** Tax is the operator's responsibility offline.
-- **Mobile app.** Dashboard is desktop-web on `localhost`. Mobile would require remote access, which conflicts with local-only.
+- **Mobile app.** Dashboard is desktop-web on `localhost`. Mobile would require remote access, which conflicts with the localhost-only dashboard (independent of inference mode).
 - **SMS, email, or push alerting.** Notifications are in-UI. Future versions may add macOS native notifications via `osascript`.
 - **Backtesting against historical LLM outputs.** Epistemically invalid (the model's training data contains the test period's future).
 - **Self-play, agent-vs-agent training.** Deferred to v2.

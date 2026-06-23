@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from pmacs.data.evidence_router import DataSource
 from pmacs.engines.arbitration import ArbitrationSignal, arbitrate
 from pmacs.nervous.orchestrator import (
     CycleOrchestrator,
@@ -170,11 +173,30 @@ class TestParseAuditorFlags:
 def _evidence_packet(ticker, ev_id, data):
     return SimpleNamespace(
         ticker=ticker,
-        evidence=[SimpleNamespace(id=ev_id, data=data)],
+        evidence=[SimpleNamespace(id=ev_id, source=DataSource.FUNDAMENTALS, data=data)],
     )
 
 
 class TestComputeValuation:
+    @pytest.fixture(autouse=True)
+    def _stub_valuation_agent(self, monkeypatch):
+        """Skip the post-arbitration ValuationAgent so these tests exercise the
+        reverse-DCF path deterministically and fast. The forward-valuation flow
+        (agent → engine → scenario_price source choice) is covered in
+        tests/integration/test_forward_valuation_pipeline.py.
+        """
+        from pmacs.agents import valuation_agent as va_mod
+        from pmacs.data import evidence_router as er_mod
+        monkeypatch.setattr(
+            va_mod.ValuationAgentRunner, "run",
+            lambda self, evidence, episodic_context=None: None,
+        )
+        # The filter rebuilds real EvidencePackets from the lightweight
+        # SimpleNamespace fixtures used here; short-circuit it since the runner
+        # is stubbed and never inspects the filtered evidence.
+        monkeypatch.setattr(er_mod, "filter_evidence_for_persona",
+                            lambda evidence, persona_name: [])
+
     def test_fcf_negative_degrades_to_neutral(self):
         orch = _orchestrator()
         orch._current_price = 100.0
@@ -189,7 +211,8 @@ class TestComputeValuation:
             raw_output='{"revenue_yoy_pct": 18.0}',
         )}
         arbitrated = SimpleNamespace(p_up=0.5, p_flat=0.3, p_down=0.2)
-        rdcf, scenario = orch._compute_valuation("X", "c1", packets, persona_results, arbitrated)
+        rdcf, forward, scenario = orch._compute_valuation("X", "c1", packets, persona_results, arbitrated)
+        assert forward is None  # agent stubbed → reverse-DCF fallback
         assert rdcf.valuation_lean == "NEUTRAL"
         assert not rdcf.is_available
         assert not scenario.is_available
@@ -208,7 +231,8 @@ class TestComputeValuation:
             raw_output='{"revenue_yoy_pct": 5.0}',
         )}
         arbitrated = SimpleNamespace(p_up=0.6, p_flat=0.3, p_down=0.1)
-        rdcf, scenario = orch._compute_valuation("X", "c1", packets, persona_results, arbitrated)
+        rdcf, forward, scenario = orch._compute_valuation("X", "c1", packets, persona_results, arbitrated)
+        assert forward is None  # agent stubbed → reverse-DCF grid feeds scenario_price
         assert rdcf.is_available
         assert rdcf.fair_value_usd is not None
         assert rdcf.valuation_lean in ("BULLISH", "BEARISH", "NEUTRAL")
@@ -221,6 +245,7 @@ class TestComputeValuation:
         packets = [_evidence_packet("X", f"fundamentals_X_metrics", {
             "annual_freeCashFlow": [{"period": "2025", "v": 100_000_000.0}],
         })]
-        rdcf, scenario = orch._compute_valuation("X", "c1", packets, {}, SimpleNamespace(p_up=0.5, p_flat=0.3, p_down=0.2))
+        rdcf, forward, scenario = orch._compute_valuation("X", "c1", packets, {}, SimpleNamespace(p_up=0.5, p_flat=0.3, p_down=0.2))
+        assert forward is None
         assert not rdcf.is_available
         assert "market cap" in rdcf.notes

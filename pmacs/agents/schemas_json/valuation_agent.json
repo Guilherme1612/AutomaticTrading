@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "valuation_agent",
+  "description": "JSON Schema for valuation_agent persona output (Agents.md §18, Architecture.md §9.4b). Post-arbitration forward-valuation assumptions; LLM never emits a price.",
+  "type": "object",
+  "properties": {
+    "ticker": {"type": "string"},
+    "horizon_months": {"type": "integer", "minimum": 6, "maximum": 12},
+    "bull": {"$ref": "#/definitions/scenario"},
+    "base": {"$ref": "#/definitions/scenario"},
+    "bear": {"$ref": "#/definitions/scenario"},
+    "data_gaps": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    }
+  },
+  "required": ["ticker", "horizon_months", "bull", "base", "bear", "data_gaps", "evidence_ids"],
+  "additionalProperties": false,
+  "definitions": {
+    "scenario": {
+      "type": "object",
+      "properties": {
+        "revenue_growth_path_pct": {"type": "number", "minimum": -0.5, "maximum": 1.0},
+        "margin_trajectory": {"type": "string", "enum": ["COMPRESSING", "EXPANDING", "STABLE"]},
+        "margin_delta_pct": {"type": "number", "minimum": -0.2, "maximum": 0.2},
+        "ebitda_margin_at_horizon_pct": {"type": "number", "minimum": -0.1, "maximum": 0.9},
+        "acquisition_revenue_contribution_pct": {"type": "number", "minimum": 0.0, "maximum": 0.5},
+        "acquisition_confidence": {"type": "string", "enum": ["HIGH", "MODERATE", "LOW", "NONE"]},
+        "exit_multiple": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+        "rationale": {"type": "string", "maxLength": 800},
+        "probability_of_occurrence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        }
+      },
+      "required": [
+        "revenue_growth_path_pct",
+        "margin_trajectory",
+        "margin_delta_pct",
+        "ebitda_margin_at_horizon_pct",
+        "acquisition_revenue_contribution_pct",
+        "acquisition_confidence",
+        "exit_multiple",
+        "rationale",
+        "probability_of_occurrence",
+        "evidence_ids"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

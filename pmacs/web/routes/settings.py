@@ -326,9 +326,16 @@ async def set_inference_model(req: InferenceModelRequest):
             status_code=400,
         )
 
-    backends[req.provider]["default_model"] = req.model.strip()
-    _save_registry(registry)
-    return JSONResponse({"ok": True, "provider": req.provider, "model": req.model})
+    # Preservation guarantee (operator directive): switching the active backend
+    # must never silently clobber a previously-configured per-backend model. An
+    # empty/whitespace model is treated as "no change" — we keep the existing
+    # default_model and return it, rather than overwriting it with "".
+    model = req.model.strip()
+    if model:
+        backends[req.provider]["default_model"] = model
+        _save_registry(registry)
+    effective = backends[req.provider].get("default_model", "")
+    return JSONResponse({"ok": True, "provider": req.provider, "model": effective})
 
 
 @router.post("/api/settings/inference/test")

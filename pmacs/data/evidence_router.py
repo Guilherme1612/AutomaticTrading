@@ -135,6 +135,18 @@ PERSONA_EVIDENCE_MAP: dict[str, list[DataSource]] = {
         DataSource.TECHNICAL,    # price action anomalies
         DataSource.YAHOO,        # forward valuation sanity check
     ],
+    # Post-arbitration forward-valuation persona (Agents.md §18, Architecture.md §9.4b).
+    # FUNDAMENTALS for annual revenue/EBITDA/SBC series + TTM margins; YAHOO for the
+    # forward_valuation packet (guidance proxy: eps_trend, next-year revenue/eps
+    # consensus) + price_target; EDGAR for filings; PRESS/IR_PAGES for acquisition
+    # narrative and guidance commentary (low-confidence inference only).
+    "ValuationAgent": [
+        DataSource.FUNDAMENTALS,
+        DataSource.YAHOO,
+        DataSource.EDGAR,
+        DataSource.PRESS,
+        DataSource.IR_PAGES,
+    ],
 }
 
 

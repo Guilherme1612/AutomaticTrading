@@ -25,6 +25,10 @@ class PersonaName(str, Enum):
     CROSS_PERSONA_AUDITOR = "cross_persona_auditor"
     CRUCIBLE = "crucible"
     MEMO_WRITER = "memo_writer"
+    # Post-arbitration forward-valuation persona (Agents.md §18, Architecture.md
+    # §9.4b). Emits bull/base/bear ASSUMPTIONS consumed by the deterministic
+    # ForwardValuationEngine. Does NOT enter Arbitration, does NOT amend conviction.
+    VALUATION_AGENT = "valuation_agent"
 
 
 class DirectionalProbability(BaseModel):

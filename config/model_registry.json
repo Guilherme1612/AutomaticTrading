@@ -30,13 +30,13 @@
     },
     "openrouter": {
       "url": "",
-      "default_model": "openai/gpt-4o",
+      "default_model": "deepseek/deepseek-v4-flash",
       "structured_output": "json_schema",
       "api_key_ref": "pmacs.credentials.openrouter_api_key",
       "base_url": "https://openrouter.ai/api/v1"
     }
   },
-  "active": "llama_server",
+  "active": "openrouter",
   "personas": {
     "gatekeeper": null,
     "macro_regime": "default",

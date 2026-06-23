@@ -760,3 +760,128 @@ class AuditorOutput(BaseModel):
     cycle_id: str = ""
     flags: list[AuditorFlag] = Field(max_length=20, default_factory=list)
     summary: str = Field(max_length=600, default="")
+
+
+# ---------------------------------------------------------------------------
+# ValuationAgent — post-arbitration forward-valuation assumptions (Agents.md §13b)
+# ---------------------------------------------------------------------------
+
+class ValuationScenarioAssumptions(BaseModel):
+    """One scenario block (bull/base/bear) of forward-valuation assumptions.
+
+    The LLM emits ASSUMPTIONS only — never a price. The deterministic
+    ForwardValuationEngine (Architecture.md §9.4b) consumes these to compute the
+    per-scenario price. All fractions are decimals (0.18 = 18%), not percentages.
+
+    spec_ref: Agents.md §13b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Revenue CAGR to the horizon (fraction). Negative = contraction.
+    revenue_growth_path_pct: float = Field(ge=-0.50, le=1.00)
+    # Margin direction the agent expects over the horizon.
+    margin_trajectory: Literal["COMPRESSING", "EXPANDING", "STABLE"]
+    # Signed margin delta to apply (fraction, e.g. -0.03 = -3pp).
+    margin_delta_pct: float = Field(ge=-0.20, le=0.20)
+    # EBITDA margin the agent assumes at the horizon (fraction).
+    ebitda_margin_at_horizon_pct: float = Field(ge=-0.10, le=0.90)
+    # Acquisition revenue contribution as a fraction of current revenue
+    # (low-confidence — LLM-inferred from filings/press narrative, no hard deal
+    # number). 0.0 when acquisitions are N/A or immaterial.
+    acquisition_revenue_contribution_pct: float = Field(ge=0.0, le=0.50, default=0.0)
+    acquisition_confidence: Literal["HIGH", "MODERATE", "LOW", "NONE"] = "NONE"
+    # Exit EV/EBITDA multiple the agent assumes at the horizon.
+    exit_multiple: float = Field(gt=0.0, le=100.0)
+    rationale: str = Field(max_length=800)
+    # The agent's probability THIS scenario occurs. Bull/base/bear must sum ~1.0.
+    probability_of_occurrence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator(
+        "revenue_growth_path_pct", "margin_delta_pct",
+        "ebitda_margin_at_horizon_pct", "acquisition_revenue_contribution_pct",
+        "exit_multiple", "probability_of_occurrence",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_floats(cls, v: object) -> float | None:
+        return _coerce_optional_float(v)
+
+    @field_validator("probability_of_occurrence", mode="before")
+    @classmethod
+    def _snap_scenario_prob(cls, v: object) -> float:
+        coerced = _coerce_optional_float(v)
+        if coerced is None:
+            return 0.0
+        return _snap_to_grid(coerced)
+
+
+class ValuationAgentOutput(BaseModel):
+    """ValuationAgent persona output — forward-valuation scenario assumptions.
+
+    Post-arbitration ONLY (Architecture.md §9.4b). Does NOT emit p_up/p_flat/p_down
+    and does NOT enter Arbitration — the per-scenario ``probability_of_occurrence``
+    is the agent's view of which scenario materializes, used only by the
+    ForwardValuationEngine to weight an expected price for the memo. The LLM never
+    emits the price number (§1.6 LLMs never math) — only the structured assumptions.
+
+    spec_ref: Agents.md §13b, Architecture.md §9.4b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    horizon_months: int = Field(ge=6, le=12)
+    bull: ValuationScenarioAssumptions
+    base: ValuationScenarioAssumptions
+    bear: ValuationScenarioAssumptions
+    # Free-text notes of N/A inputs (e.g. "acquisitions: N/A, inferred narratively",
+    # "management guidance: N/A, using analyst consensus proxy").
+    data_gaps: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> ValuationAgentOutput:
+        # Scenario probabilities must sum ~1.0 (±0.10 reject, else normalize).
+        p_bull = self.bull.probability_of_occurrence
+        p_base = self.base.probability_of_occurrence
+        p_bear = self.bear.probability_of_occurrence
+        total = p_bull + p_base + p_bear
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(
+                f"scenario probabilities sum to {total:.4f}, expected ~1.0 "
+                f"(bull={p_bull}, base={p_base}, bear={p_bear})"
+            )
+        if abs(total - 1.0) > 1e-9 and total > 0:
+            nb, na, nr = (
+                round(p_bull / total, 2),
+                round(p_base / total, 2),
+                round(p_bear / total, 2),
+            )
+            object.__setattr__(self.bull, "probability_of_occurrence", nb)
+            object.__setattr__(self.base, "probability_of_occurrence", na)
+            object.__setattr__(self.bear, "probability_of_occurrence", nr)
+
+        # Reject degenerate distributions (all mass on one scenario).
+        if p_bull == 1.0 and p_base == 0.0 and p_bear == 0.0:
+            raise ValueError("degenerate distribution: all mass on bull")
+        if p_bear == 1.0 and p_base == 0.0 and p_bull == 0.0:
+            raise ValueError("degenerate distribution: all mass on bear")
+
+        # Acquisition contribution > 0 must carry a LOW/MODERATE confidence flag
+        # (the operator's "no fabricated deal numbers" guardrail) and be noted in
+        # data_gaps so the memo surfaces the low confidence.
+        for name, block in (("bull", self.bull), ("base", self.base), ("bear", self.bear)):
+            if block.acquisition_revenue_contribution_pct > 0.0:
+                if block.acquisition_confidence not in ("LOW", "MODERATE"):
+                    raise ValueError(
+                        f"{name} acquisition contribution >0 but confidence="
+                        f"{block.acquisition_confidence} (must be LOW/MODERATE)"
+                    )
+                if not any("acqui" in g.lower() for g in self.data_gaps):
+                    raise ValueError(
+                        f"{name} acquisition contribution >0 but data_gaps has no "
+                        f"acquisition note"
+                    )
+        return self

@@ -25,6 +25,8 @@ PERSONAS = frozenset({
     "bull_advocate",
     "bear_advocate",
     "cross_persona_auditor",
+    # Post-arbitration forward-valuation persona (Agents.md §18, Architecture.md §9.4b)
+    "valuation_agent",
 })
 
 

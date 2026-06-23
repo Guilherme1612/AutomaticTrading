@@ -2,7 +2,7 @@
 
 ## Identity
 
-PMACS is a single-operator, local-only, catalyst-driven, LLM-assisted decision engine with deterministic arbitration. It runs local LLMs (Qwen3.6-35B-A3B) for narrative analysis and Python for math, sizing, arbitration, and execution. LLMs never decide, never math, never sign. The system trades paper money ($5K) from day 1 and graduates to live capital only after empirical performance gates pass.
+PMACS is a single-operator, mode-pure (local or API inference), catalyst-driven, LLM-assisted decision engine with deterministic arbitration. In local mode it runs local LLMs (Qwen3.6-35B-A3B) for narrative analysis; in API mode it calls the configured cloud provider (OpenAI/OpenRouter/Anthropic/other). Python does the math, sizing, arbitration, and execution. LLMs never decide, never math, never sign. The system trades paper money ($5K) from day 1 and graduates to live capital only after empirical performance gates pass.
 
 ## The Four-File Spec
 
@@ -41,7 +41,7 @@ These are absolute. They are not guidelines. Violating any of them is a bug.
 1. **LLMs never sign trades.** Trades are Ed25519-signed by `pmacs-execution`. An LLM cannot directly cause a trade.
 2. **LLMs never math.** Probabilities are combined, sized, and arbitrated by Python. LLMs produce structured outputs only.
 3. **Every state transition is hash-chained.** Audit log with `prev_sha256`. Tampering with one line breaks the chain.
-4. **Local-only execution.** No cloud LLM calls. No telemetry. The inference process is pf-blocked from internet.
+4. **Mode-pure inference.** The active backend sets the mode for the whole cycle. *Local mode* (llama-server/Ollama): no cloud LLM calls; inference `pf`-blocked from internet. *API mode* (OpenAI/OpenRouter/Anthropic/other): inference calls the configured cloud provider (no `pf`-block on inference). No telemetry in either mode. No per-persona backend mixing — all personas use the active backend. Data fetching uses the internet in both modes.
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
 ## Anti-Patterns (enforce via pre-commit + CI)
@@ -170,7 +170,7 @@ All in `config/`:
 
 | Process | Port | Responsibility |
 |---|---|---|
-| pmacs-inference | internal | llama-server (pf-blocked from internet) |
+| pmacs-inference | internal | llama-server (local mode, pf-blocked from internet) or the configured cloud provider (API mode) |
 | pmacs-cortex | daemon | Health monitoring, kill switch, boot detection |
 | pmacs-cortex-self-check | daemon | Meta-monitor: pings cortex every 60s |
 | pmacs-execution | UDS | Trade signing (Ed25519) + broker submission |

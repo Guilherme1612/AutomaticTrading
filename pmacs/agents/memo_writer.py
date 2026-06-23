@@ -45,6 +45,7 @@ class MemoWriterRunner(PersonaRunner):
         advocate_outputs: dict | None = None,
         auditor_flags: list | None = None,
         reverse_dcf: object | None = None,
+        forward_valuation: object | None = None,
         scenario_price: object | None = None,
     ) -> None:
         """Inject the full analytical synthesis so the memo has real numbers.
@@ -169,6 +170,41 @@ class MemoWriterRunner(PersonaRunner):
         elif reverse_dcf is not None:
             notes = getattr(reverse_dcf, "notes", "") or "unavailable"
             lines.append(f"\n## Reverse-DCF Valuation Anchor\n  Unavailable ({notes}).")
+
+        # ── Forward valuation (6-12mo, Architecture.md §9.4b) ──────────────────
+        # The ValuationAgent's LLM-produced assumptions, priced by the deterministic
+        # ForwardValuationEngine. The LLM never emits the price (§1.6). Surfaces the
+        # bull/base/bear scenario prices + the agent's scenario-weighted expected
+        # price + key base-case assumptions + data gaps. When unavailable, the memo
+        # falls back to the reverse-DCF anchor above — never fabricates.
+        if forward_valuation is not None and getattr(forward_valuation, "is_available", False):
+            lines.append(f"\n## Forward Valuation ({forward_valuation.horizon_months}mo)")
+            lines.append(
+                f"  Bull=${forward_valuation.bull_price:,.2f}  "
+                f"Base=${forward_valuation.base_price:,.2f}  "
+                f"Bear=${forward_valuation.bear_price:,.2f}"
+            )
+            if forward_valuation.expected_price_usd is not None:
+                lines.append(
+                    f"  Scenario-weighted expected price: ${forward_valuation.expected_price_usd:,.2f}"
+                )
+            base_pt = (forward_valuation.scenario_points or {}).get("base")
+            if base_pt is not None:
+                g = base_pt.revenue_growth_path_pct
+                m = base_pt.ebitda_margin_at_horizon_pct
+                x = base_pt.exit_multiple
+                parts = []
+                if g is not None:
+                    parts.append(f"revenue growth {g*100:.1f}% to horizon")
+                if m is not None:
+                    parts.append(f"EBITDA margin {m*100:.1f}%")
+                if x is not None:
+                    parts.append(f"exit EV/EBITDA {x:.1f}x")
+                if parts:
+                    lines.append(f"  Base-case assumptions: {', '.join(parts)}")
+        elif forward_valuation is not None:
+            notes = getattr(forward_valuation, "notes", "") or "unavailable"
+            lines.append(f"\n## Forward Valuation\n  Unavailable ({notes}).")
 
         if scenario_price is not None and getattr(scenario_price, "is_available", False):
             lines.append("\n## Scenario-Weighted Expected Price")

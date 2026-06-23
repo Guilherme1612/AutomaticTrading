@@ -346,6 +346,37 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 ---
 
+### Phase 7c: Forward-valuation agent + engine (scenario valuation, 6-12 month)
+
+**Goal:** The operator's "predict valuation from scenarios and numbers" lens. A new post-arbitration LLM persona (`ValuationAgent`) emits structured bull/base/bear forward-valuation *assumptions* (revenue growth path to a 6-12 month horizon, margin trajectory, EBITDA margin at horizon, exit EV/EBITDA multiple, acquisition-revenue contribution) each with rationale + `probability_of_occurrence`. A new deterministic Python engine (`ForwardValuationEngine`) consumes those assumptions and computes a per-scenario forward fair-value price. **The conviction formula is unchanged** — like reverse-DCF and scenario-price, this is a memo display and a scenario-price source, not a conviction input. The LLM never emits the price number (`§1.6`).
+
+**What gets built:**
+- `pmacs/schemas/agents.py` — `PersonaName` enum extended (`VALUATION_AGENT`)
+- `pmacs/schemas/personas.py` — `ValuationScenarioAssumptions`, `ValuationAgentOutput` (`Agents.md §13b`); model_validator enforces scenario-prob sum ~1.0, non-degenerate, acquisition-confidence+data_gaps invariants
+- `pmacs/schemas/forward_valuation.py` — `ForwardValuationResult`, `ForwardScenarioPoint`
+- `pmacs/engines/forward_valuation.py` — `compute_forward_valuation`, deterministic EV/EBITDA forward-price math, graceful degradation to `is_available=False` (`Architecture.md §9.4b`)
+- `pmacs/agents/valuation_agent.py` + `prompts/valuation_agent.md` + `grammars/valuation_agent.gbnf` + `sanity/valuation_agent.py` + `schemas_json/valuation_agent.json` — four-file contract
+- `pmacs/data/evidence_router.py` — `PERSONA_EVIDENCE_MAP["ValuationAgent"] = [FUNDAMENTALS, YAHOO, EDGAR, PRESS, IR_PAGES]`
+- `pmacs/nervous/orchestrator.py` — `_run_forward_valuation` post-arbitration; `_extract_forward_valuation_inputs`; `_compute_valuation` prefers `ForwardValuationResult` prices for `ScenarioPriceEngine` when `is_available` AND all three > 0, else falls back to the reverse-DCF sensitivity grid unchanged; `VALUATION_SOURCE_CHOSEN` audit event
+- `pmacs/agents/memo_writer.py` — `set_analytical_context(forward_valuation=...)`; render "Forward Valuation ({horizon}mo)" block (`Source.md §16.9`)
+- `tests/unit/test_forward_valuation.py`, `tests/unit/test_valuation_agent_sanity.py`, `tests/integration/test_forward_valuation_pipeline.py`
+
+**Dependencies:** Phase 7b (reverse-DCF + scenario-price + MemoWriter sections). Extends the post-arbitration valuation layer.
+
+**Exit test:**
+1. `pytest tests/unit/test_forward_valuation.py` — forward math to the cent (organic + acquisition revenue, EBITDA, EV, equity, price); `expected_price_usd` weights by the agent's scenario probs; horizon clamped to [6,12]; degradation on each missing primitive (revenue/shares/net-debt/margin/multiple) → `is_available=False` + notes (no fabrication); round-trip into `ScenarioPriceEngine`; frozen schema.
+2. `pytest tests/unit/test_valuation_agent_sanity.py` — evidence_id resolution (nested blocks + top-level); scenario-prob sum ~1.0 (±0.10); horizon ∈ [6,12]; exit-multiple ∈ [0.5,80]; ebitda_margin ∈ [-0.10,0.85]; margin_trajectory↔margin_delta_pct sign agreement; acquisition >0 ⇒ LOW/MODERATE + data_gaps "acqui" note; rationale cites ≥1 evidence_id; degenerate-prob rejection; bull≥base≥bear growth ordering.
+3. `pytest tests/integration/test_forward_valuation_pipeline.py` — full cycle on a synthetic ticker (simulation_mode): agent → engine → scenario_price → MemoWriter. Assert `forward.is_available`; `scenario_price` bull/base/bear == forward prices (forward preferred); memo contains the "Forward Valuation" block.
+4. **Regression (critical):** `compute_conviction` signature and outputs identical to baseline with the agent disabled — conviction is NOT amended. The reverse-DCF-grid fallback path for `scenario_price` is byte-identical to today when `forward.is_available` is False.
+5. Degradation path: agent aborts/returns None → `VALUATION_AGENT_ABORTED` audit event → reverse-DCF grid fallback → memo shows "forward valuation unavailable this cycle".
+6. Live smoke on AAPL or NBIS: `/memo/{ticker}` renders the "Forward Valuation (12mo)" block with bull/base/bear prices, scenario-weighted expected price, base-case assumptions, and data gaps.
+
+**Duration estimate:** 3-5 days.
+
+**Backlog (deferred — documented, not built in 7c):** structured M&A / acquisitions feed (currently inferred narratively with LOW/MODERATE confidence); structured management guidance fetch (currently analyst-consensus proxy); peer-set exit-multiple calibration; SBC-adjusted EBITDA.
+
+---
+
 ### Phase 8: Paper trading — Alpaca paper + sim ledger + wizard
 
 **Goal:** The system trades paper money. Alpaca paper API integration. The wizard works end-to-end. SHADOW + PAPER mode concurrent from first boot.

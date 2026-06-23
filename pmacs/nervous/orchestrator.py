@@ -1199,9 +1199,14 @@ class CycleOrchestrator:
         holding, arbitrated, op = result
 
         # -- Step 13e5: Valuation triangulation (Architecture.md §9.4b) ---
-        # Deterministic, LLM-free. Feeds MemoWriter only — does NOT amend conviction.
-        self._last_reverse_dcf, self._last_scenario_price = self._compute_valuation(
-            ticker, cycle_id, evidence_packets, persona_results, arbitrated,
+        # Deterministic engines (reverse-DCF, forward-valuation, scenario-price).
+        # The forward-valuation engine consumes the ValuationAgent's LLM-produced
+        # assumptions, but the price math is pure Python. Feeds MemoWriter only —
+        # does NOT amend conviction.
+        self._last_reverse_dcf, self._last_forward_valuation, self._last_scenario_price = (
+            self._compute_valuation(
+                ticker, cycle_id, evidence_packets, persona_results, arbitrated, brief,
+            )
         )
 
         # -- Auditor flags → FDE feed (Agents.md §11d.6.3) ---
@@ -1670,20 +1675,32 @@ class CycleOrchestrator:
         evidence_packets: list[Any],
         persona_results: dict[str, Any],
         arbitrated: Any,
-    ) -> tuple[Any, Any]:
-        """Step 13e5: deterministic valuation triangulation (Architecture.md §9.4b).
+        brief: str | None = None,
+    ) -> tuple[Any, Any, Any]:
+        """Step 13e5: valuation triangulation (Architecture.md §9.4b).
 
-        reverse_dcf (market-implied vs estimated growth) + scenario_price
-        (probability-weighted expected price). Pure math, no LLM. Feeds MemoWriter
-        only — does NOT enter Arbitration and does NOT amend conviction.
+        reverse_dcf (market-implied vs estimated growth) + forward_valuation
+        (LLM-assumption-driven 6-12mo EV/EBITDA price) + scenario_price
+        (probability-weighted expected price). The forward-valuation engine consumes
+        the ValuationAgent's LLM-produced assumptions, but the price math is pure
+        Python (Five Non-Negotiable #2 — LLMs never math). Feeds MemoWriter only —
+        does NOT enter Arbitration and does NOT amend conviction.
+
+        Returns (reverse_dcf, forward_valuation, scenario_price). When the
+        forward-valuation engine is available, its bull/base/bear prices are
+        preferred for scenario_price; otherwise the reverse-DCF sensitivity grid is
+        used (verbatim fallback, preserving today's behavior).
         """
+        import json as _json
         from pmacs.engines.reverse_dcf import compute_reverse_dcf
         from pmacs.engines.scenario_price import compute_scenario_price
+        from pmacs.engines.forward_valuation import compute_forward_valuation
 
         market_cap, fcf_ttm, assumed_growth = self._extract_valuation_inputs(
             evidence_packets, persona_results,
         )
         current_price = getattr(self, "_current_price", None)
+        current_price_num = current_price if isinstance(current_price, (int, float)) else None
 
         rdcf = compute_reverse_dcf(
             ticker=ticker,
@@ -1693,20 +1710,56 @@ class CycleOrchestrator:
             assumed_growth_pct=assumed_growth,
         )
 
-        # Derive bull/base/bear fair-value prices from the reverse-DCF sensitivity
-        # grid (high-growth = bull, low-growth = bear). When the reverse-DCF is
-        # unavailable (FCF-negative names — common in the current universe), the
-        # scenario price degrades gracefully to is_available=False.
-        base_price = rdcf.fair_value_usd
-        sens_values = [v for v in rdcf.sensitivity.values() if isinstance(v, (int, float)) and v > 0]
-        bull_price = max(sens_values) if sens_values else None
-        bear_price = min(sens_values) if sens_values else None
-        if base_price is None and sens_values:
-            # fair_value undefined (assumed>=discount) but sensitivity exists — use the
-            # assumed-growth grid point as base if present, else the median.
-            base_price = rdcf.sensitivity.get(
+        # --- Forward valuation (ValuationAgent → ForwardValuationEngine) ---
+        forward = self._run_forward_valuation(
+            ticker, cycle_id, evidence_packets, brief, current_price_num,
+        )
+
+        # --- Choose bull/base/bear for scenario_price ---
+        # Prefer the forward-valuation prices when the engine produced all three;
+        # fall back to the reverse-DCF sensitivity grid otherwise (verbatim, today's
+        # behavior). This is the riskiest integration step — the fallback preserves
+        # the existing reverse-DCF-only path unchanged.
+        rdcf_base = rdcf.fair_value_usd
+        rdcf_sens = [v for v in rdcf.sensitivity.values() if isinstance(v, (int, float)) and v > 0]
+        rdcf_bull = max(rdcf_sens) if rdcf_sens else None
+        rdcf_bear = min(rdcf_sens) if rdcf_sens else None
+        if rdcf_base is None and rdcf_sens:
+            rdcf_base = rdcf.sensitivity.get(
                 f"{rdcf.assumed_growth_pct * 100:.1f}%"
             ) if rdcf.assumed_growth_pct is not None else None
+
+        if (
+            forward is not None
+            and forward.is_available
+            and forward.bull_price is not None and forward.bull_price > 0
+            and forward.base_price is not None and forward.base_price > 0
+            and forward.bear_price is not None and forward.bear_price > 0
+        ):
+            bull_price = forward.bull_price
+            base_price = forward.base_price
+            bear_price = forward.bear_price
+            valuation_source = "forward_valuation"
+        else:
+            bull_price = rdcf_bull
+            base_price = rdcf_base
+            bear_price = rdcf_bear
+            valuation_source = "reverse_dcf_grid"
+
+        log_debug(
+            "VALUATION_SOURCE_CHOSEN",
+            payload={
+                "ticker": ticker,
+                "source": valuation_source,
+                "forward_available": bool(forward and forward.is_available),
+                "bull_price": bull_price,
+                "base_price": base_price,
+                "bear_price": bear_price,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"valuation source {ticker}: {valuation_source}",
+        )
 
         p_up = getattr(arbitrated, "p_up", None)
         p_flat = getattr(arbitrated, "p_flat", None)
@@ -1720,9 +1773,94 @@ class CycleOrchestrator:
             bull_price=bull_price,
             base_price=base_price,
             bear_price=bear_price,
-            current_price_usd=current_price if isinstance(current_price, (int, float)) else None,
+            current_price_usd=current_price_num,
         )
-        return rdcf, scenario
+        return rdcf, forward, scenario
+
+    def _run_forward_valuation(
+        self,
+        ticker: str,
+        cycle_id: str,
+        evidence_packets: list[Any],
+        brief: str | None,
+        current_price_usd: float | None,
+    ):
+        """Run the ValuationAgent + ForwardValuationEngine (Architecture.md §9.4b).
+
+        Post-arbitration, LLM-assumption-driven. Best-effort: any failure (agent
+        returns None, parse error, missing primitives) degrades to None and the
+        caller falls back to the reverse-DCF sensitivity grid. Never raises into
+        the cycle. The LLM never emits the price — only assumptions (§1.6).
+        """
+        import json as _json
+        from pmacs.agents.valuation_agent import ValuationAgentRunner
+        from pmacs.data.evidence_router import filter_evidence_for_persona
+        from pmacs.engines.forward_valuation import compute_forward_valuation
+
+        filtered = filter_evidence_for_persona(evidence_packets, "ValuationAgent")
+
+        valuation_output = None
+        try:
+            runner = ValuationAgentRunner(
+                cycle_id=cycle_id,
+                audit_writer=getattr(self, "_audit", None),
+                simulation_mode=bool(getattr(self, "simulation_mode", False)),
+            )
+            po = runner.run(filtered, episodic_context=brief)
+            if po is not None and getattr(po, "raw_output", ""):
+                valuation_output = po
+        except Exception as exc:
+            log_debug(
+                "VALUATION_AGENT_ABORTED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                msg=f"ValuationAgent aborted for {ticker}: {type(exc).__name__}",
+            )
+            return None
+
+        if valuation_output is None:
+            log_debug(
+                "VALUATION_AGENT_ABORTED",
+                payload={"ticker": ticker, "reason": "returned_none"},
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                msg=f"ValuationAgent returned None for {ticker}; using reverse-DCF fallback",
+            )
+            return None
+
+        # Parse the agent's assumptions (raw_output is JSON).
+        try:
+            from pmacs.schemas.personas import ValuationAgentOutput
+            data = _json.loads(valuation_output.raw_output)
+            model = ValuationAgentOutput.model_validate(data)
+        except Exception as exc:
+            log_debug(
+                "VALUATION_AGENT_PARSE_FAILED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="GBNF_PARSE_FAIL", cycle_id=cycle_id,
+                msg=f"ValuationAgent output unparseable for {ticker}: reverse-DCF fallback",
+            )
+            return None
+
+        revenue_ttm, shares, net_debt = self._extract_forward_valuation_inputs(evidence_packets)
+
+        scenario_probs = {
+            "bull": float(model.bull.probability_of_occurrence),
+            "base": float(model.base.probability_of_occurrence),
+            "bear": float(model.bear.probability_of_occurrence),
+        }
+        return compute_forward_valuation(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            horizon_months=model.horizon_months,
+            bull_assumptions=model.bull.model_dump(),
+            base_assumptions=model.base.model_dump(),
+            bear_assumptions=model.bear.model_dump(),
+            scenario_probabilities=scenario_probs,
+            current_revenue_ttm_usd=revenue_ttm,
+            shares_outstanding=shares,
+            net_debt_usd=net_debt,
+            current_price_usd=current_price_usd,
+        )
 
     def _extract_valuation_inputs(
         self,
@@ -1802,6 +1940,88 @@ class CycleOrchestrator:
                     pass
 
         return market_cap, fcf_ttm, assumed_growth_pct
+
+    def _extract_forward_valuation_inputs(
+        self,
+        evidence_packets: list[Any],
+    ) -> tuple[float | None, float | None, float | None]:
+        """Pull TTM revenue, shares outstanding, and net debt from evidence.
+
+        Defensive: returns None for any missing primitive so the ForwardValuationEngine
+        degrades to is_available=False rather than fabricating. Net debt = total
+        debt - cash (already net of cash); when either series is missing the whole
+        net_debt is None (the engine then degrades gracefully).
+        """
+        revenue_ttm: float | None = None
+        shares: float | None = None
+        total_debt: float | None = None
+        cash: float | None = None
+        net_debt_finnhub: float | None = None
+
+        edata: dict[str, dict] = {}
+        for packet in evidence_packets:
+            for ev in getattr(packet, "evidence", []) or []:
+                ev_id = getattr(ev, "id", "") or ""
+                data = getattr(ev, "data", {}) or {}
+                if isinstance(data, dict):
+                    edata[ev_id] = data
+
+        for ev_id, data in edata.items():
+            if not ev_id.endswith("_metrics"):
+                continue
+
+            # TTM revenue: prefer the annual series' most recent value, then revenueTTM.
+            if revenue_ttm is None:
+                rev_series = data.get("annual_revenue") or []
+                if isinstance(rev_series, list) and rev_series:
+                    first = rev_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            revenue_ttm = float(v)
+                if revenue_ttm is None:
+                    ttm = data.get("revenueTTM")
+                    if isinstance(ttm, (int, float)):
+                        revenue_ttm = float(ttm)
+
+            # Net debt components from the annual series.
+            if total_debt is None:
+                debt_series = data.get("annual_total_debt") or []
+                if isinstance(debt_series, list) and debt_series:
+                    first = debt_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            total_debt = float(v)
+            if cash is None:
+                cash_series = data.get("annual_cash") or []
+                if isinstance(cash_series, list) and cash_series:
+                    first = cash_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            cash = float(v)
+            # Finnhub gap-fill net debt (already net of cash).
+            if net_debt_finnhub is None:
+                nd = data.get("netDebtAnnual")
+                if isinstance(nd, (int, float)):
+                    net_debt_finnhub = float(nd)
+
+        # Shares outstanding: fundamentals profile stores it in millions.
+        for ev_id, data in edata.items():
+            if ev_id.endswith("_profile") and shares is None:
+                so = data.get("shareOutstanding")
+                if isinstance(so, (int, float)) and so > 0:
+                    shares = float(so) * 1_000_000
+
+        # Resolve net debt: prefer the derived (total_debt - cash), else Finnhub.
+        net_debt: float | None = None
+        if total_debt is not None and cash is not None:
+            net_debt = float(total_debt) - float(cash)
+        elif net_debt_finnhub is not None:
+            net_debt = float(net_debt_finnhub)
+
+        return revenue_ttm, shares, net_debt
 
     def _write_auditor_flags_to_fde(
         self, holding_id: str, cycle_id: str, ticker: str, flags: list[Any]
@@ -2313,6 +2533,7 @@ class CycleOrchestrator:
                 advocate_outputs=getattr(self, "_last_advocate_outputs", {}),
                 auditor_flags=getattr(self, "_last_auditor_flags", []),
                 reverse_dcf=getattr(self, "_last_reverse_dcf", None),
+                forward_valuation=getattr(self, "_last_forward_valuation", None),
                 scenario_price=getattr(self, "_last_scenario_price", None),
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
@@ -2371,6 +2592,77 @@ class CycleOrchestrator:
                 memo_dict["scenario_price"] = (
                     sp.model_dump() if hasattr(sp, "model_dump") else dict(sp)
                 )
+            # Forward-valuation (LLM-assumption-driven, Architecture.md §9.4b). Persist
+            # so the memo template / audit can surface the 6-12mo scenario prices.
+            fv = getattr(self, "_last_forward_valuation", None)
+            if fv is not None:
+                memo_dict["forward_valuation"] = (
+                    fv.model_dump() if hasattr(fv, "model_dump") else dict(fv)
+                )
+            # Inject the wave-2 Bull/Bear advocate debate (Agents.md §11b-§11c, §16.9).
+            # _last_advocate_outputs holds the bull_advocate/bear_advocate PersonaOutput
+            # objects; their `reasoning` becomes the operator-readable bull/bear cases and
+            # a derived advocate_lean summarises which side won the debate. Without this
+            # injection the memo's Bull/Bear Debate card renders empty even though the
+            # advocates ran. Best-effort: any parse failure is skipped so wave-2 never
+            # aborts an otherwise-valid memo (consistent with _step_13d5_debate contract).
+            try:
+                from pmacs.schemas.personas import (
+                    BullAdvocateOutput,
+                    BearAdvocateOutput,
+                )
+
+                adv = getattr(self, "_last_advocate_outputs", {}) or {}
+                bull_po = adv.get("bull_advocate")
+                bear_po = adv.get("bear_advocate")
+
+                def _typed_adv(po, model_cls):
+                    raw = getattr(po, "raw_output", "") or ""
+                    if not raw:
+                        return None
+                    try:
+                        return model_cls.model_validate(_persist_j.loads(raw))
+                    except Exception:
+                        return None
+
+                bull = _typed_adv(bull_po, BullAdvocateOutput) if bull_po is not None else None
+                bear = _typed_adv(bear_po, BearAdvocateOutput) if bear_po is not None else None
+                # Start with the LLM-produced debate dict (if any) so we never
+                # discard fields the memo writer already emitted (e.g. advocate_lean,
+                # bull_case, bear_case) when the orchestrator's own advocate outputs
+                # are empty or fail to parse. Only override specific fields below.
+                bbd: dict = dict(memo_dict.get("bull_bear_debate") or {})
+                if bull is not None and getattr(bull, "reasoning", ""):
+                    bbd["bull_case"] = bull.reasoning
+                if bear is not None and getattr(bear, "reasoning", ""):
+                    bbd["bear_case"] = bear.reasoning
+                # Bull advocate pushes p_up; bear advocate pushes p_down. Net lean.
+                if bull is not None and bear is not None:
+                    if bull.p_up > bear.p_down + 0.02:
+                        bbd["advocate_lean"] = "BULL"
+                    elif bear.p_down > bull.p_up + 0.02:
+                        bbd["advocate_lean"] = "BEAR"
+                    else:
+                        bbd["advocate_lean"] = "NEUTRAL"
+                elif bull is not None:
+                    bbd["advocate_lean"] = "BULL" if bull.p_up >= bull.p_down else "BEAR"
+                elif bear is not None:
+                    bbd["advocate_lean"] = "BEAR" if bear.p_down >= bear.p_up else "BULL"
+                # reverse_dcf_gap: a one-line summary the debate card renders verbatim.
+                rdcf_for_gap = getattr(self, "_last_reverse_dcf", None)
+                if rdcf_for_gap is not None:
+                    _gap = getattr(rdcf_for_gap, "growth_gap_pct", None)
+                    _imp = getattr(rdcf_for_gap, "implied_growth_pct", None)
+                    _asm = getattr(rdcf_for_gap, "assumed_growth_pct", None)
+                    if _gap is not None and _imp is not None and _asm is not None:
+                        bbd["reverse_dcf_gap"] = (
+                            f"Market implies {_imp:.1f}% growth vs {_asm:.1f}% "
+                            f"assumed (gap {_gap:+.1f}pp)."
+                        )
+                if bbd:
+                    memo_dict["bull_bear_debate"] = bbd
+            except Exception:
+                pass
             memo_json_str = _persist_j.dumps(memo_dict)
             raw_text = memo_dict.get("raw_text") or memo_json_str
             conn = _sql_connect(self._db_path)

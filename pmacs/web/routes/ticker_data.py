@@ -68,6 +68,50 @@ def _is_universe_ticker(ticker: str) -> bool:
         return False
 
 
+def _universe_meta(ticker: str) -> dict:
+    """Read the universe row for `ticker` and return a render-ready dict.
+
+    Template-stable shape: all keys are always present. ``in_universe`` is
+    True iff a row was found for ``ticker``; everything else is the column
+    value or None. On DB error or no row, returns the empty shape with
+    ``in_universe`` falsy so the template can render "not in universe"
+    uniformly without conditional plumbing for each field.
+    """
+    keys = ("in_universe", "sector", "subsector", "catalyst_type",
+            "pinned_priority", "halted", "delisted", "added_at")
+    empty = {k: None for k in keys}
+    try:
+        from pmacs.config import data_dir
+        import sqlite3
+        db = data_dir() / "pmacs.db"
+        if not db.exists():
+            return empty
+        con = sqlite3.connect(db)
+        try:
+            row = con.execute(
+                "SELECT sector, subsector, catalyst_type, pinned_priority, "
+                "halted, delisted, added_at FROM universe WHERE ticker = ? LIMIT 1",
+                (ticker,),
+            ).fetchone()
+        finally:
+            con.close()
+        if not row:
+            return empty
+        return {
+            "in_universe": True,
+            "sector": row[0],
+            "subsector": row[1],
+            "catalyst_type": row[2],
+            "pinned_priority": row[3],
+            "halted": bool(row[4]),
+            "delisted": bool(row[5]),
+            "added_at": row[6],
+        }
+    except Exception as exc:
+        _log.info("universe meta read failed for %s: %s", ticker, exc)
+        return empty
+
+
 def _evidence_fresh_enough(ticker: str) -> bool:
     """True iff `ticker` has any cached evidence row fresher than the lazy TTL.
 
@@ -166,6 +210,69 @@ def _maybe_warm_evidence_cache(ticker: str) -> bool:
         return False
 
 
+# Per-ticker events for the synchronous first-fetch path: concurrent requests
+# for the same cold universe ticker share one fetch and all await its
+# completion rather than each spawning a duplicate.
+_SYNC_FETCH_EVENTS: dict[str, asyncio.Event] = {}
+
+
+async def _await_warm_evidence_cache(ticker: str, *, max_attempts: int = 2) -> bool:
+    """Run the evidence fetch inline and await it, blocking the page render
+    until the cache is populated (operator directive 2026-06-23).
+
+    Unlike `_maybe_warm_evidence_cache` (a fire-and-forget background task that
+    leaves the operator on a warming spinner awaiting a manual reload), this
+    awaits the fetch so the first click on a cold universe ticker renders the
+    populated workspace in the same request — identical to what a manual reload
+    shows. The blocking fetch runs in a worker thread so the event loop stays
+    responsive for other requests during the ~8-15s it takes. A bounded retry
+    (`max_attempts`) loops until evidence lands or the attempts are exhausted,
+    so a transient upstream hiccup doesn't strand the operator on the empty
+    state.
+
+    Returns True iff cached evidence is available after the attempt(s).
+    """
+    if _evidence_fresh_enough(ticker):
+        return True
+
+    # If a sync fetch for this ticker is already running on another request,
+    # wait on its event instead of spawning a duplicate.
+    existing = _SYNC_FETCH_EVENTS.get(ticker)
+    if existing is not None:
+        await existing.wait()
+        return bool(_evidence_by_id(ticker))
+
+    event = asyncio.Event()
+    _SYNC_FETCH_EVENTS[ticker] = event
+    _LAZY_FETCH_IN_FLIGHT.add(ticker)
+    cycle_id = f"LAZY-{ticker}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    try:
+        from pmacs.data.evidence_router import fetch_minimal_evidence_for_ticker
+        loop = asyncio.get_running_loop()
+        for attempt in range(1, max_attempts + 1):
+            try:
+                rows = await loop.run_in_executor(
+                    None, fetch_minimal_evidence_for_ticker, ticker, cycle_id,
+                )
+                _log.info(
+                    "SYNC_EVIDENCE_FETCH_COMPLETE ticker=%s attempt=%d rows=%d cycle_id=%s",
+                    ticker, attempt, rows, cycle_id,
+                )
+            except Exception as exc:
+                _log.warning(
+                    "SYNC_EVIDENCE_FETCH_FAILED ticker=%s attempt=%d error=%s",
+                    ticker, attempt, exc,
+                )
+                rows = 0
+            if _evidence_by_id(ticker):
+                return True
+        return False
+    finally:
+        _LAZY_FETCH_IN_FLIGHT.discard(ticker)
+        _SYNC_FETCH_EVENTS.pop(ticker, None)
+        event.set()
+
+
 def _num(value):
     """Coerce to float, tolerating strings like '29.6%'; None on failure."""
     if value is None or isinstance(value, bool):
@@ -184,6 +291,31 @@ def _num(value):
 # negatives. 200× is the cap used throughout this codebase as the "no longer
 # meaningful" band (tone_class('multiple') already implicitly assumes this).
 _FWD_PE_SANITY_MAX_ABS = 200.0
+
+# When yfinance's TTM EPS (or revenue) diverges from the most-recent annual
+# figure by more than this ratio, the TTM stitching is unreliable and any
+# multiple derived from it (P/E, P/S, EV/EBITDA, P/FCF) is suppressed.
+# Threshold is set wide enough to allow normal seasonal variation in mature
+# names (typically <2×) but tight enough to catch the yfinance bug where a
+# quarterly loss / one-time gain gets projected into a fake TTM.
+_TTM_DIVERGENCE_THRESHOLD = 3.0
+
+
+def _ttm_divergence_ratio(ttm_value: float | None, annual_value: float | None) -> float | None:
+    """Return |ttm/annual| when both are positive; None when either is missing
+    or non-positive (can't compute a meaningful ratio through a zero or sign flip).
+
+    Used to detect yfinance TTM-stitching bugs: a 6× ratio between TTM and the
+    most-recent fiscal-year value means the TTM is unreliable.
+    """
+    if ttm_value is None or annual_value is None:
+        return None
+    if annual_value <= 0 or ttm_value <= 0:
+        # Either zero / negative: ratios are unbounded or undefined. Negative
+        # values often indicate sign flips (gain → loss) which themselves are
+        # a divergence signal; caller decides what to do with that.
+        return None
+    return abs(ttm_value / annual_value)
 
 
 def _sanitize_multiple(value, *, label: str, max_abs: float = _FWD_PE_SANITY_MAX_ABS):
@@ -339,14 +471,44 @@ def _extract(ticker: str, ev: dict) -> dict:
     )
     price_by_period = _fetch_period_prices(ticker, periods)
 
+    # Sanity-check yfinance TTM-based multiples against the most-recent annual
+    # value. yfinance's TTM stitching is unreliable for recently-IPO'd or
+    # rapidly-reversing tickers (NBIS is the canonical example: TTM EPS
+    # $2.58 vs. annual FY2025 EPS $0.40 → yfinance reports P/E = 108 when the
+    # real FY-based P/E is closer to 700). When TTM and most-recent-annual
+    # diverge sharply, suppress the multiple so the template renders an em-dash
+    # rather than a confidently-wrong number.
+    most_recent_eps = _num(eps_series[0]["v"]) if eps_series else None
+    most_recent_revenue = _num(revenue_series[0]["v"]) if revenue_series else None
+    ttm_eps = _num(metrics.get("epsTTM"))
+    ttm_revenue = _num(metrics.get("revenueTTM"))
+    eps_ttm_divergence = _ttm_divergence_ratio(ttm_eps, most_recent_eps)
+    rev_ttm_divergence = _ttm_divergence_ratio(ttm_revenue, most_recent_revenue)
+    eps_ttm_unreliable = eps_ttm_divergence is not None and eps_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD
+    rev_ttm_unreliable = rev_ttm_divergence is not None and rev_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD
+
     # Current point-in-time multiples (passthrough to engine for echo/context).
     # Fwd P/E is magnitude-sanitized because yfinance can return extreme ratios
     # when forward EPS is near zero or negative; the engine has its own
     # per-year-multiple guards but no current-multiples guard.
+    pe_value = _sanitize_multiple(metrics.get("peNormalizedAnnual"), label="peNormalizedAnnual")
+    if eps_ttm_unreliable and pe_value is not None:
+        _log.info(
+            "suppressing peNormalizedAnnual=%s for %s (TTM EPS=%s vs FY EPS=%s diverge by %.1fx; yfinance TTM stitching unreliable)",
+            pe_value, ticker, ttm_eps, most_recent_eps, eps_ttm_divergence,
+        )
+        pe_value = None
+    ps_value = _num(metrics.get("psAnnual"))
+    if rev_ttm_unreliable and ps_value is not None:
+        _log.info(
+            "suppressing psAnnual=%s for %s (TTM revenue=%s vs FY revenue=%s diverge by %.1fx; yfinance TTM stitching unreliable)",
+            ps_value, ticker, ttm_revenue, most_recent_revenue, rev_ttm_divergence,
+        )
+        ps_value = None
     current_multiples = {
-        "pe": _num(metrics.get("peNormalizedAnnual")),
+        "pe": pe_value,
         "forward_pe": _sanitize_multiple(metrics.get("forwardPE"), label="forwardPE"),
-        "ps": _num(metrics.get("psAnnual")),
+        "ps": ps_value,
         "pb": _num(metrics.get("pbAnnual")),
         "ev_ebitda": _num(metrics.get("evToEbitdaTTM")),
         "peg": _num(metrics.get("pegTTM")),
@@ -501,6 +663,11 @@ def _workspace_context(ticker: str) -> dict:
         "ws_stop_events": [],
         "ws_failures": [],
         "ws_days_held": None,
+        # Universe metadata — read once at workspace-context time so the
+        # summary strip on the ticker page can show catalyst_type / priority /
+        # halted / delisted badges without re-hitting the DB in the template.
+        # Always present (template-stable shape) even on early-return paths.
+        "universe_meta": _universe_meta(ticker),
     }
 
     from pmacs.web.config import get_config as _get_config
@@ -591,18 +758,28 @@ def _workspace_context(ticker: str) -> dict:
 
 @router.get("/ticker/{ticker}")
 async def ticker_data_page(request: Request, ticker: str):
-    """Render the per-ticker data drill-down (Source.md §16.8 / §16.6 workspace)."""
+    """Render the per-ticker data drill-down (Source.md §16.8 / §16.6 workspace).
+
+    Operator directive 2026-06-23 (revised): navigation must be near-instant.
+    We do NOT block the request on a cold-cache fetch — instead we render
+    whatever we have (warming state for cold tickers) immediately and fire
+    the fetch off in the background. The operator clicks a ticker and the
+    page renders in <200ms; a soft reload a few seconds later picks up the
+    freshly-warmed evidence. The previous blocking version cost 8-15s on
+    cold tickers and made the dashboard feel sluggish.
+    """
     from pmacs.web.templating import templates
     ticker = ticker.upper().strip()
 
     try:
         ev = _evidence_by_id(ticker)
-        if not ev:
-            # Lazy fetch (operator directive 2026-06-19): for universe tickers
-            # with no recent evidence, warm the cache in the background so the
-            # operator can reload to see the populated page. Non-universe
-            # tickers (test fakes, URL typos) keep the original empty state.
-            warming = _maybe_warm_evidence_cache(ticker) if _is_universe_ticker(ticker) else False
+        if not ev and _is_universe_ticker(ticker):
+            # Cold universe ticker: dispatch a background fetch and render the
+            # warming state immediately. The fetch is deduped via the
+            # _LAZY_FETCH_IN_FLIGHT set so concurrent clicks on the same ticker
+            # only spawn one fetch. When it completes, the next reload picks
+            # up the populated workspace.
+            _maybe_warm_evidence_cache(ticker)
             return templates.TemplateResponse(
                 request=request,
                 name="ticker_detail.html",
@@ -610,9 +787,25 @@ async def ticker_data_page(request: Request, ticker: str):
                     "page": "ticker",
                     "ticker": ticker,
                     "no_data": True,
-                    "warming": warming,
+                    "warming": True,
                     "company_name": "",
                     "sector": "",
+                    "universe_meta": _universe_meta(ticker),
+                },
+            )
+        if not ev:
+            # Non-universe ticker (test fake, URL typo) — empty state, no fetch.
+            return templates.TemplateResponse(
+                request=request,
+                name="ticker_detail.html",
+                context={
+                    "page": "ticker",
+                    "ticker": ticker,
+                    "no_data": True,
+                    "warming": False,
+                    "company_name": "",
+                    "sector": "",
+                    "universe_meta": _universe_meta(ticker),
                 },
             )
 

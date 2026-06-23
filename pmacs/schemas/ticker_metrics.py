@@ -110,11 +110,24 @@ class TickerDerivedMetrics(BaseModel):
 
     # Multi-year multiples
     per_year: list[YearMultiple] = Field(default_factory=list)
-    pe_3y_avg: float | None = None
-    pfcf_3y_avg: float | None = None
-    ps_3y_avg: float | None = None
-    pb_3y_avg: float | None = None
-    ev_ebitda_3y_avg: float | None = None
+    pe_ny_avg: float | None = None
+    """Average P/E over the most recent N years actually available (N is
+    ``pe_ny_avg_years``). Falls back to whatever years the annual EPS series
+    covers, even when fewer than the nominal 3-year lookback. The 3-year
+    constant is the maximum window, not a hard requirement — younger tickers
+    with 1-2 years of data still get a meaningful average."""
+    pe_ny_avg_years: int = 0
+    """How many fiscal years the ``pe_ny_avg`` is computed over. Surfaced in
+    the UI as the badge text ('1Y avg', '2Y avg', '3Y avg') so the operator
+    can tell a 1-year average from a 3-year average at a glance."""
+    pfcf_ny_avg: float | None = None
+    pfcf_ny_avg_years: int = 0
+    ps_ny_avg: float | None = None
+    ps_ny_avg_years: int = 0
+    pb_ny_avg: float | None = None
+    pb_ny_avg_years: int = 0
+    ev_ebitda_ny_avg: float | None = None
+    ev_ebitda_ny_avg_years: int = 0
 
     # Current point-in-time multiples (passthrough + context)
     current: CurrentMultiples = Field(default_factory=CurrentMultiples)

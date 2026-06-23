@@ -3,6 +3,47 @@
 {% block title %}{{ ticker }} — Data{% endblock %}
 
 {% block content %}
+{# ── Universe status macro — always-visible identity metadata for the ticker.
+   Renders a one-line strip with catalyst_type / pinned_priority / halted /
+   delisted badges, or "not in universe" if the ticker is not in the
+   operator's active universe. Invoked from BOTH the populated and empty
+   branches so it appears regardless of whether a workspace exists. #}
+{% macro universe_status(meta) -%}
+    {% set _um = meta or {} %}
+    {% set _um_in = _um.in_universe %}
+    <div class="card card-elevated p-3 mb-5 reveal flex flex-wrap items-center gap-x-6 gap-y-2 text-sm"
+         role="region"
+         aria-label="{{ ticker }} universe status"
+         data-ws-universe>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Universe</span>
+            {% if _um_in %}
+                {% if _um.catalyst_type %}
+                <span class="font-mono tabular-nums text-text-primary">{{ _um.catalyst_type }}</span>
+                {% endif %}
+                {% if _um.pinned_priority is not none %}
+                <span class="font-mono tabular-nums text-text-secondary">p{{ _um.pinned_priority }}</span>
+                {% endif %}
+                {% if _um.sector %}
+                <span class="text-text-secondary">{{ _um.sector }}{% if _um.subsector %} &middot; {{ _um.subsector }}{% endif %}</span>
+                {% endif %}
+                {% if _um.halted %}
+                <span class="px-1.5 py-0.5 rounded-md bg-warning-soft text-warning font-medium" role="status">HALTED</span>
+                {% endif %}
+                {% if _um.delisted %}
+                <span class="px-1.5 py-0.5 rounded-md bg-negative-soft text-negative font-medium" role="status">DELISTED</span>
+                {% endif %}
+                {% if _um.added_at %}
+                <span class="text-text-muted text-xs">added {{ _um.added_at[:10] }}</span>
+                {% endif %}
+            {% else %}
+                <span class="text-text-muted italic">not in universe</span>
+            {% endif %}
+        </span>
+        <a href="/universe" class="text-accent hover:underline text-xs ml-auto">view universe &rarr;</a>
+    </div>
+{%- endmacro %}
+
 {# ── Header (hero card) — always rendered for screen-reader H1 ── #}
 {# Operator directive: present the ticker identity as a single elevated hero
    card. Symbol + sector chip on the top row, company name as a subtitle,
@@ -34,6 +75,8 @@
     </div>
 </header>
 
+{{ universe_status(universe_meta) }}
+
 {% if error %}
 {% set error_code = error.code %}
 {% set error_description = error.description %}
@@ -58,7 +101,6 @@
         Once {{ ticker }} runs through a cycle, its fundamentals appear here.
     </p>
     {%- endif -%}
-    <a href="/universe" class="text-sm text-accent hover:underline">Go to Universe &rarr;</a>
 </section>
 {% else %}
 {# ── Unified ticker workspace (Source.md §16.6 single-ticker drawer) ── #}
@@ -192,7 +234,17 @@
         {%- elif value >= 30 -%}Healthy
         {%- else -%}Weak
         {%- endif -%}
-    {%- else -%}{{ fmt(value) }}
+    {%- elif kind == "arr" -%}
+        {%- if value >= 1e9 -%}Substantial
+        {%- elif value >= 1e8 -%}Meaningful
+        {%- else -%}Reported
+        {%- endif -%}
+    {%- elif kind == "rpo" -%}
+        {%- if value >= 1e9 -%}Substantial backlog
+        {%- elif value >= 1e8 -%}Meaningful backlog
+        {%- else -%}Reported
+        {%- endif -%}
+    {%- else -%}Reported
     {%- endif -%}
 {%- endmacro %}
 
@@ -273,23 +325,30 @@
 {%- endmacro %}
 
 {# ── Compact metric card: current value + optional 3Y average. ── #}
-{# The tone is relative to the ticker's OWN 3-year average — NOT to absolute
+{# The tone is relative to the ticker's OWN N-year average — NOT to absolute
    cross-ticker bands. Absolute P/E bands (≤15 "cheap" / >30 "expensive") flag
    structurally premium names (e.g. AMZN) as "expensive" forever, which is
    wrong: a high-multiple name is cheap when it trades below its own recent
-   average. So: current < avg → below 3Y (positive/cheap), current within ±5%
-   of avg → near 3Y (neutral), current > avg → above 3Y (negative/pricey). No
+   average. So: current < avg → below NY (positive/cheap), current within ±5%
+   of avg → near NY (neutral), current > avg → above NY (negative/pricey). No
    average → neutral with no cheap/expensive claim (better no claim than a
-   wrong one). #}
-{% macro metric_card(label, current, average, unit="", note="") -%}
+   wrong one). NY is dynamic per operator directive: the average window is
+   whatever years the underlying series actually covers, not a hard 3-year
+   floor. #}
+{% macro metric_card(label, current, average, n_years=0, unit="", note="") -%}
     {%- set has_current = current is not none -%}
     {%- set has_avg = average is not none -%}
-    {%- set rel = namespace(color='neutral', label='No 3Y avg') -%}
+    {%- if has_avg and n_years > 0 -%}
+        {%- set ny_label = n_years ~ 'Y' -%}
+    {%- else -%}
+        {%- set ny_label = 'N' -%}
+    {%- endif -%}
+    {%- set rel = namespace(color='neutral', label='No ' ~ ny_label ~ ' avg') -%}
     {%- if has_current and has_avg -%}
         {%- set d = (current - average) / average -%}
-        {%- if d <= -0.05 -%}{%- set rel.color = 'positive' -%}{%- set rel.label = 'Below 3Y' -%}
-        {%- elif d <= 0.05 -%}{%- set rel.color = 'neutral' -%}{%- set rel.label = 'Near 3Y' -%}
-        {%- else -%}{%- set rel.color = 'negative' -%}{%- set rel.label = 'Above 3Y' -%}
+        {%- if d <= -0.05 -%}{%- set rel.color = 'positive' -%}{%- set rel.label = 'Below ' ~ ny_label -%}
+        {%- elif d <= 0.05 -%}{%- set rel.color = 'neutral' -%}{%- set rel.label = 'Near ' ~ ny_label -%}
+        {%- else -%}{%- set rel.color = 'negative' -%}{%- set rel.label = 'Above ' ~ ny_label -%}
         {%- endif -%}
     {%- endif -%}
     {%- set txt = {'positive':'text-positive','negative':'text-negative','neutral':'text-text-secondary'}[rel.color] -%}
@@ -301,12 +360,12 @@
             <div class="text-3xl font-bold tabular-nums {{ txt if has_current else 'text-text-muted' }}">{{ fmt(current, unit) if has_current else '&mdash;' }}</div>
             <div class="mt-1 flex items-center gap-2 text-xs">
                 {%- if has_avg -%}
-                <span class="text-text-muted">3Y avg {{ fmt(average, unit) }}</span>
+                <span class="text-text-muted">{{ ny_label }} avg {{ fmt(average, unit) }}</span>
                 <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md {{ bg }} {{ txt }} text-[10px] font-semibold uppercase tracking-widest">
                     <span class="w-1 h-1 rounded-full {{ dot }}"></span>{{ rel.label }}
                 </span>
                 {%- else -%}
-                <span class="text-text-muted">3Y average unavailable</span>
+                <span class="text-text-muted">N-year average unavailable</span>
                 {%- endif -%}
             </div>
             {%- if note and not has_avg -%}
@@ -349,11 +408,11 @@
     </div>
 {%- endmacro %}
 
-{# ── Valuation summary: current vs 3Y average ── #}
+{# ── Valuation summary: current vs dynamic N-year average ── #}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="val-heading">
     <div class="flex items-baseline justify-between gap-4 mb-4">
         <h2 id="val-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Valuation summary</h2>
-        <span class="text-[10px] text-text-muted">Current value + 3-year historical average where computable</span>
+        <span class="text-[10px] text-text-muted">Current value + multi-year historical average where computable</span>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {# "needs historical X" notes are only accurate when the underlying series
@@ -365,11 +424,11 @@
         {%- set has_debt_series = (derived.per_year|map(attribute='total_debt_usd')|select('ne', none)|list|length) > 0 -%}
         {%- set has_cash_series = (derived.per_year|map(attribute='cash_usd')|select('ne', none)|list|length) > 0 -%}
         {%- set ev_series_complete = has_ebitda_series and has_debt_series and has_cash_series -%}
-        {{ metric_card("P/E", derived.current.pe, derived.pe_3y_avg) }}
-        {{ metric_card("Forward P/E", derived.current.forward_pe, none, note="Forward multiple; no historical average available.") }}
-        {{ metric_card("P/S", derived.current.ps, derived.ps_3y_avg) }}
-        {{ metric_card("P/B", derived.current.pb, derived.pb_3y_avg, note="3Y P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
-        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_3y_avg, note="3Y EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
+        {{ metric_card("P/E", derived.current.pe, derived.pe_ny_avg, derived.pe_ny_avg_years) }}
+        {{ metric_card("Forward P/E", derived.current.forward_pe, none, 0, note="Forward multiple; no historical average available.") }}
+        {{ metric_card("P/S", derived.current.ps, derived.ps_ny_avg, derived.ps_ny_avg_years) }}
+        {{ metric_card("P/B", derived.current.pb, derived.pb_ny_avg, derived.pb_ny_avg_years, note="Multi-year P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
+        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_ny_avg, derived.ev_ebitda_ny_avg_years, note="Multi-year EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
         {# PEG is a point-in-time ratio (like Forward P/E) with no 3Y average, so it
            renders as a plain value with no cheap/expensive tone. Absolute P/E-style
            bands are meaningless here — and previously always rendered "cheap"

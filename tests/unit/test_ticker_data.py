@@ -15,6 +15,7 @@ from pmacs.web.routes.ticker_data import (
     _is_universe_ticker,
     _LAZY_FETCH_IN_FLIGHT,
     _maybe_warm_evidence_cache,
+    _universe_meta,
 )
 
 
@@ -199,3 +200,129 @@ def test_maybe_warm_evidence_cache_skips_when_fresh(tmp_path, monkeypatch):
         result = _maybe_warm_evidence_cache("AMZN")
         assert result is False
         mock_task.assert_not_called()
+
+
+# ── _universe_meta (operator directive 2026-06-23: always-visible
+#    Universe column on the ticker-page workspace summary strip) ─────────
+
+
+def test_universe_meta_returns_empty_shape_when_no_db(tmp_path, monkeypatch):
+    """No pmacs.db → empty shape with in_universe falsy."""
+    import pmacs.config as _cfg
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
+    meta = _universe_meta("AMZN")
+    assert meta == {
+        "in_universe": None,
+        "sector": None,
+        "subsector": None,
+        "catalyst_type": None,
+        "pinned_priority": None,
+        "halted": None,
+        "delisted": None,
+        "added_at": None,
+    }
+    assert not meta["in_universe"]
+
+
+def test_universe_meta_returns_empty_shape_when_ticker_missing(
+    tmp_path, monkeypatch
+):
+    """DB exists, ticker not present → empty shape (not an error)."""
+    import sqlite3
+    import pmacs.config as _cfg
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE universe ("
+        "ticker TEXT PRIMARY KEY, sector TEXT, subsector TEXT, "
+        "halted INTEGER NOT NULL DEFAULT 0, "
+        "delisted INTEGER NOT NULL DEFAULT 0, "
+        "catalyst_type TEXT, pinned_priority INTEGER, added_at TEXT NOT NULL DEFAULT '')"
+    )
+    con.execute(
+        "INSERT INTO universe VALUES ('OTHER', 'Tech', 'Infra', 0, 0, 'AI', 3, '2026-01-15')"
+    )
+    con.commit()
+    con.close()
+
+    meta = _universe_meta("AMZN")
+    assert meta["in_universe"] is None
+    assert meta["catalyst_type"] is None
+
+
+def test_universe_meta_reads_full_row_with_correct_types(tmp_path, monkeypatch):
+    """Round-trip a full row, asserting halted/delisted coerce to bool and
+    pinned_priority / catalyst_type / added_at / sector / subsector pass
+    through unchanged."""
+    import sqlite3
+    import pmacs.config as _cfg
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE universe ("
+        "ticker TEXT PRIMARY KEY, sector TEXT, subsector TEXT, "
+        "halted INTEGER NOT NULL DEFAULT 0, "
+        "delisted INTEGER NOT NULL DEFAULT 0, "
+        "catalyst_type TEXT, pinned_priority INTEGER, added_at TEXT NOT NULL DEFAULT '')"
+    )
+    con.execute(
+        "INSERT INTO universe VALUES "
+        "('AAPL', 'Technology', 'Hardware', 1, 0, 'AI_CATALYST', 5, '2026-02-20')"
+    )
+    con.execute(
+        "INSERT INTO universe VALUES "
+        "('NORM', 'Healthcare', 'Biotech', 0, 0, 'FDA_TRIAL', NULL, '2026-03-01')"
+    )
+    con.commit()
+    con.close()
+
+    # halted row
+    halted = _universe_meta("AAPL")
+    assert halted["in_universe"] is True
+    assert halted["sector"] == "Technology"
+    assert halted["subsector"] == "Hardware"
+    assert halted["catalyst_type"] == "AI_CATALYST"
+    assert halted["pinned_priority"] == 5
+    assert halted["halted"] is True  # bool coercion from int 1
+    assert halted["delisted"] is False
+    assert halted["added_at"] == "2026-02-20"
+
+    # NULL pinned_priority round-trips as None
+    norm = _universe_meta("NORM")
+    assert norm["in_universe"] is True
+    assert norm["pinned_priority"] is None
+    assert norm["halted"] is False
+    assert norm["delisted"] is False
+
+
+def test_universe_meta_delisted_row(tmp_path, monkeypatch):
+    """Delisted row must surface delisted=True (the empty-state link copy
+    uses in_universe truthy regardless, but the summary strip must show
+    the DELISTED badge)."""
+    import sqlite3
+    import pmacs.config as _cfg
+    monkeypatch.setattr(_cfg, "data_dir", lambda: tmp_path)
+
+    db = tmp_path / "pmacs.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE universe ("
+        "ticker TEXT PRIMARY KEY, sector TEXT, subsector TEXT, "
+        "halted INTEGER NOT NULL DEFAULT 0, "
+        "delisted INTEGER NOT NULL DEFAULT 0, "
+        "catalyst_type TEXT, pinned_priority INTEGER, added_at TEXT NOT NULL DEFAULT '')"
+    )
+    con.execute(
+        "INSERT INTO universe VALUES ('OLDX', 'Tech', '', 0, 1, '', NULL, '')"
+    )
+    con.commit()
+    con.close()
+
+    meta = _universe_meta("OLDX")
+    assert meta["in_universe"] is True
+    assert meta["delisted"] is True
+    assert meta["halted"] is False

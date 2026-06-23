@@ -32,7 +32,7 @@ def _eps(*pairs):
     return [{"period": p, "v": v} for p, v in pairs]
 
 
-def test_pe_3y_average_over_three_years():
+def test_pe_ny_average_over_three_years():
     m = compute_ticker_metrics(
         "AAA",
         eps_series=_eps(("2023-12-31", 10.0), ("2022-12-31", 8.0), ("2021-12-31", 5.0)),
@@ -44,7 +44,7 @@ def test_pe_3y_average_over_three_years():
     )
     assert [y.pe for y in m.per_year] == [20.0, 20.0, 30.0]
     # mean(20, 20, 30) = 23.33
-    assert m.pe_3y_avg == 23.33
+    assert m.pe_ny_avg == 23.33
 
 
 def test_pe_skips_non_positive_eps_with_note():
@@ -53,7 +53,7 @@ def test_pe_skips_non_positive_eps_with_note():
         eps_series=_eps(("2023-12-31", 10.0), ("2022-12-31", -2.0)),
         price_by_period={"2023-12-31": 100.0, "2022-12-31": 50.0},
     )
-    assert m.pe_3y_avg == 10.0  # only the positive-EPS year counts
+    assert m.pe_ny_avg == 10.0  # only the positive-EPS year counts
     assert any("EPS <= 0" in n for n in m.notes)
 
 
@@ -68,7 +68,7 @@ def test_pfcf_uses_historical_shares_when_available():
     year = m.per_year[0]
     assert year.pfcf == 5.0
     assert year.shares_approximated is False
-    assert m.pfcf_3y_avg == 5.0
+    assert m.pfcf_ny_avg == 5.0
 
 
 def test_pfcf_falls_back_to_current_shares_and_flags_it():
@@ -91,7 +91,7 @@ def test_pfcf_skips_negative_fcf():
         price_by_period={"2023-12-31": 50.0},
         shares_outstanding=100.0,
     )
-    assert m.pfcf_3y_avg is None
+    assert m.pfcf_ny_avg is None
     assert any("FCF <= 0" in n for n in m.notes)
 
 
@@ -129,7 +129,7 @@ def test_only_three_most_recent_years_used():
     )
     assert len(m.per_year) == 3
     assert "2020-12-31" not in [y.period for y in m.per_year]
-    assert m.pe_3y_avg == 10.0
+    assert m.pe_ny_avg == 10.0
 
 
 def test_partial_history_notes_year_count():
@@ -138,7 +138,7 @@ def test_partial_history_notes_year_count():
         eps_series=_eps(("2023-12-31", 10.0)),
         price_by_period={"2023-12-31": 100.0},
     )
-    assert m.pe_3y_avg == 10.0
+    assert m.pe_ny_avg == 10.0
     assert any("1 year" in n for n in m.notes)
 
 
@@ -148,14 +148,14 @@ def test_non_numeric_values_are_ignored():
         eps_series=[{"period": "2023-12-31", "v": "N/A"}, {"period": "2022-12-31", "v": 5.0}],
         price_by_period={"2022-12-31": 50.0},
     )
-    assert m.pe_3y_avg == 10.0  # 50 / 5, the bad row dropped
+    assert m.pe_ny_avg == 10.0  # 50 / 5, the bad row dropped
 
 
 def test_empty_evidence_yields_empty_metrics():
     m = compute_ticker_metrics("JJJ")
     assert m.per_year == []
-    assert m.pe_3y_avg is None
-    assert m.pfcf_3y_avg is None
+    assert m.pe_ny_avg is None
+    assert m.pfcf_ny_avg is None
     assert m.fcf_yield_pct is None
 
 
@@ -166,7 +166,7 @@ def _series(*pairs):
 # ── Historical averages for other multiples ─────────────────────────────────
 
 
-def test_ps_3y_average_over_three_years():
+def test_ps_ny_average_over_three_years():
     # price 10, shares 100, market cap 1000, revenue 200 -> P/S 5.0
     m = compute_ticker_metrics(
         "KKK",
@@ -181,10 +181,10 @@ def test_ps_3y_average_over_three_years():
         shares_outstanding=100.0,
     )
     assert [y.ps for y in m.per_year] == [5.0, 5.0, 5.33]
-    assert m.ps_3y_avg == 5.11
+    assert m.ps_ny_avg == 5.11
 
 
-def test_pb_3y_average_over_three_years():
+def test_pb_ny_average_over_three_years():
     m = compute_ticker_metrics(
         "LLL",
         book_value_series=_series(
@@ -199,10 +199,10 @@ def test_pb_3y_average_over_three_years():
     )
     # market cap 1000 / book value 500 = 2.0, etc.
     assert [y.pb for y in m.per_year] == [2.0, 2.0, 2.0]
-    assert m.pb_3y_avg == 2.0
+    assert m.pb_ny_avg == 2.0
 
 
-def test_ev_ebitda_3y_average():
+def test_ev_ebitda_ny_average():
     # market cap 1000 + debt 100 - cash 50 = EV 1050; EBITDA 150 -> 7.0
     m = compute_ticker_metrics(
         "MMM",
@@ -223,7 +223,7 @@ def test_ev_ebitda_3y_average():
         shares_outstanding=100.0,
     )
     assert [round(y.ev_ebitda, 2) for y in m.per_year] == [7.0, 6.75, 6.46]
-    assert m.ev_ebitda_3y_avg == 6.74
+    assert m.ev_ebitda_ny_avg == 6.74
 
 
 # ── SaaS KPI extraction ───────────────────────────────────────────────────────

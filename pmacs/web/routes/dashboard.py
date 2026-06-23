@@ -178,7 +178,16 @@ _DASHBOARD_PARTIALS = {
 
 @router.get("/")
 async def dashboard_page(request: Request):
-    """Render the main dashboard page with portfolio summary."""
+    """Render the main dashboard page with portfolio summary.
+
+    On every dashboard view, opportunistically warm the evidence cache for any
+    universe tickers that don't yet have a recent row. This makes the FIRST
+    click on /ticker/{ticker} instant (it hits the warming-state branch but
+    the fetch is already in flight from when the operator opened the
+    dashboard), and a soft reload a few seconds later lands on the fully
+    populated workspace. Operator directive 2026-06-23: "moving/reload pages
+    almost instant" — this is the cache-warmth leg of that directive.
+    """
     cfg = get_config()
     try:
         ctx = _gather_dashboard_context(cfg)
@@ -193,7 +202,45 @@ async def dashboard_page(request: Request):
             },
         )
     ctx["page"] = "dashboard"
+
+    # Opportunistic background warm for cold universe tickers. The fetch is
+    # deduped via the ticker_data route's _LAZY_FETCH_IN_FLIGHT set so
+    # concurrent dashboard loads don't spawn N duplicate fetches. Errors are
+    # logged inside the fetcher; we never propagate them.
+    try:
+        _opportunistic_universe_warm(cfg)
+    except Exception:
+        pass
+
     return templates.TemplateResponse(request=request, name="dashboard.html", context=ctx)
+
+
+def _opportunistic_universe_warm(cfg) -> None:
+    """Kick off background evidence fetches for any cold universe tickers.
+
+    Reads the SQLite universe list, asks ticker_data for the per-ticker
+    freshness status, and dispatches a non-blocking fetch for any ticker
+    whose evidence is older than the lazy TTL (or absent). Existing
+    _maybe_warm_evidence_cache handles dedup + the actual fetch.
+    """
+    try:
+        from pmacs.web.routes import ticker_data as _td
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            rows = db.execute(
+                "SELECT ticker FROM universe WHERE halted = 0 AND delisted = 0"
+            ).fetchall()
+        finally:
+            db.close()
+        for r in rows:
+            ticker = r[0]
+            if not _td._evidence_fresh_enough(ticker):
+                _td._maybe_warm_evidence_cache(ticker)
+    except Exception:
+        # Warming is best-effort. Any failure here is a no-op — the operator
+        # still sees the dashboard, and the per-ticker page will dispatch its
+        # own fetch on click.
+        pass
 
 
 @router.get("/api/dashboard/partials/{region}")

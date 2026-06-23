@@ -87,6 +87,19 @@ _DEFAULT_UNIVERSE: dict[str, dict[str, str | None]] = {
     # Large-cap tech with richest data for all 7 agents (IMP-5)
     "MSFT": {"sector": "Technology", "subsector": "Cloud / Enterprise"},
     "AMZN": {"sector": "Technology", "subsector": "E-Commerce / Cloud"},
+    # Operator-curated universe: original 7 (memory: 2026-06) + ONDS + ZETA
+    # (added 2026-06-23). Seeded on fresh DBs so the operator's working set
+    # appears without manual /api/universe/add calls. Sector/subsector is
+    # duplicated from the static maps in pmacs/web/routes/universe.py — the
+    # web route's display overrides any stale Finnhub metadata at render time.
+    "NBIS": {"sector": "Technology", "subsector": "AI Infrastructure"},
+    "PLTR": {"sector": "Technology", "subsector": "Enterprise AI / Analytics"},
+    "NET":  {"sector": "Technology", "subsector": "Cloud / CDN"},
+    "MELI": {"sector": "Consumer Discretionary", "subsector": "E-Commerce / FinTech"},
+    "CELH": {"sector": "Consumer Staples", "subsector": "Beverages / Energy"},
+    "INMD": {"sector": "Healthcare", "subsector": "Medical Devices"},
+    "ONDS": {"sector": "Technology", "subsector": "Wireless / Drones"},
+    "ZETA": {"sector": "Technology", "subsector": "MarTech / AdTech"},
 }
 
 

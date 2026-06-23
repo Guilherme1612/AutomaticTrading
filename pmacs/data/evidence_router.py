@@ -509,67 +509,92 @@ def fetch_evidence_for_ticker(
     _fetch_start = _time.monotonic()
 
     with DataGateway(timeout=10) as gw:
-        for source, fetcher in _SOURCE_FETCHERS:
+
+        def _run_source(source: DataSource, fetcher: Any) -> tuple[DataSource, EvidencePacket | None, float, Exception | None]:
+            """Fetch one data source and return (source, packet, elapsed_ms, error)."""
             api_key = _read_key(source, cycle_id)
-            _src_start = _time.monotonic()
+            _start = _time.monotonic()
             try:
                 packet = fetcher(ticker, gw, api_key, cycle_id)
-                _elapsed = _time.monotonic() - _src_start
-                log_debug(
-                    "EVIDENCE_SOURCE_OK",
-                    payload={"source": source.value, "ticker": ticker, "ms": int(_elapsed * 1000)},
-                    cycle_id=cycle_id,
-                    msg=f"[{ticker}] {source.value}: {int(_elapsed*1000)}ms",
-                )
-                if packet and packet.evidence:
-                    all_evidence.extend(packet.evidence)
-                    sources_ok += 1
+                return source, packet, _time.monotonic() - _start, None
             except Exception as exc:
-                _elapsed = _time.monotonic() - _src_start
-                crit = _SOURCE_CRITICALITY.get(source, CriticalityLevel.NICE_TO_HAVE)
-                log_debug(
-                    "EVIDENCE_SOURCE_FAILED",
-                    payload={
-                        "source": source.value,
-                        "ticker": ticker,
-                        "error": str(exc)[:200],
-                        "criticality": crit.value,
-                        "ms": int(_elapsed * 1000),
-                    },
-                    level="WARN" if crit == CriticalityLevel.CRITICAL else "INFO",
-                    error_code="DATA_UNAVAILABLE" if crit == CriticalityLevel.CRITICAL else None,
-                    cycle_id=cycle_id,
-                    msg=f"Evidence fetch failed for {source.value}/{ticker} ({int(_elapsed*1000)}ms): {exc}",
-                )
-                if crit == CriticalityLevel.CRITICAL:
-                    has_stale = True
-                elif crit == CriticalityLevel.IMPORTANT:
-                    important_failures += 1
+                return source, None, _time.monotonic() - _start, exc
 
-        # Secondary fetchers (same-source follow-ups; share the YAHOO/gateway
-        # context but produce distinct evidence packets).
-        for fetcher in _SECONDARY_FETCHERS:
-            _src_start = _time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            fut_map = {
+                pool.submit(_run_source, source, fetcher): source
+                for source, fetcher in _SOURCE_FETCHERS
+            }
+            for future in concurrent.futures.as_completed(fut_map):
+                source, packet, _elapsed, error = future.result()
+                if error is None:
+                    log_debug(
+                        "EVIDENCE_SOURCE_OK",
+                        payload={"source": source.value, "ticker": ticker, "ms": int(_elapsed * 1000)},
+                        cycle_id=cycle_id,
+                        msg=f"[{ticker}] {source.value}: {int(_elapsed*1000)}ms",
+                    )
+                    if packet and packet.evidence:
+                        all_evidence.extend(packet.evidence)
+                        sources_ok += 1
+                else:
+                    crit = _SOURCE_CRITICALITY.get(source, CriticalityLevel.NICE_TO_HAVE)
+                    log_debug(
+                        "EVIDENCE_SOURCE_FAILED",
+                        payload={
+                            "source": source.value,
+                            "ticker": ticker,
+                            "error": str(error)[:200],
+                            "criticality": crit.value,
+                            "ms": int(_elapsed * 1000),
+                        },
+                        level="WARN" if crit == CriticalityLevel.CRITICAL else "INFO",
+                        error_code="DATA_UNAVAILABLE" if crit == CriticalityLevel.CRITICAL else None,
+                        cycle_id=cycle_id,
+                        msg=f"Evidence fetch failed for {source.value}/{ticker} ({int(_elapsed*1000)}ms): {error}",
+                    )
+                    if crit == CriticalityLevel.CRITICAL:
+                        has_stale = True
+                    elif crit == CriticalityLevel.IMPORTANT:
+                        important_failures += 1
+
+        # Secondary fetchers (same-source follow-ups; produce distinct
+        # evidence packets under their own source IDs).
+        def _run_secondary(fetcher: Any) -> tuple[EvidencePacket | None, float, Exception | None]:
+            """Fetch one secondary source and return (packet, elapsed_ms, error)."""
+            _start = _time.monotonic()
             try:
                 packet = fetcher(ticker, gw, "", cycle_id)
-                _elapsed = _time.monotonic() - _src_start
-                if packet and packet.evidence:
-                    all_evidence.extend(packet.evidence)
-                log_debug(
-                    "EVIDENCE_SOURCE_OK",
-                    payload={"source": fetcher.__name__, "ticker": ticker, "ms": int(_elapsed * 1000)},
-                    cycle_id=cycle_id,
-                    msg=f"[{ticker}] {fetcher.__name__}: {int(_elapsed*1000)}ms",
-                )
+                return packet, _time.monotonic() - _start, None
             except Exception as exc:
-                _elapsed = _time.monotonic() - _src_start
-                log_debug(
-                    "EVIDENCE_SOURCE_FAILED",
-                    payload={"source": fetcher.__name__, "ticker": ticker, "error": str(exc)[:200], "ms": int(_elapsed * 1000)},
-                    level="INFO",
-                    cycle_id=cycle_id,
-                    msg=f"Secondary evidence fetch failed for {fetcher.__name__}/{ticker} ({int(_elapsed*1000)}ms): {exc}",
-                )
+                return None, _time.monotonic() - _start, exc
+
+        if _SECONDARY_FETCHERS:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                sec_fut_map = {
+                    pool.submit(_run_secondary, fetcher): fetcher
+                    for fetcher in _SECONDARY_FETCHERS
+                }
+                for future in concurrent.futures.as_completed(sec_fut_map):
+                    fetcher = sec_fut_map[future]
+                    packet, _elapsed, error = future.result()
+                    if error is None:
+                        if packet and packet.evidence:
+                            all_evidence.extend(packet.evidence)
+                        log_debug(
+                            "EVIDENCE_SOURCE_OK",
+                            payload={"source": fetcher.__name__, "ticker": ticker, "ms": int(_elapsed * 1000)},
+                            cycle_id=cycle_id,
+                            msg=f"[{ticker}] {fetcher.__name__}: {int(_elapsed*1000)}ms",
+                        )
+                    else:
+                        log_debug(
+                            "EVIDENCE_SOURCE_FAILED",
+                            payload={"source": fetcher.__name__, "ticker": ticker, "error": str(error)[:200], "ms": int(_elapsed * 1000)},
+                            level="INFO",
+                            cycle_id=cycle_id,
+                            msg=f"Secondary evidence fetch failed for {fetcher.__name__}/{ticker} ({int(_elapsed*1000)}ms): {error}",
+                        )
 
     _total_elapsed = _time.monotonic() - _fetch_start
     log_debug(
@@ -1086,6 +1111,12 @@ def _save_evidence_cache(ticker: str, evidence: list[Evidence], cycle_id: str) -
                 rows,
             )
             con.commit()
+            # Purge stale cache entries older than the 10 most recent cycles.
+            # Skip eviction for lazy-fetched evidence (LAZY- cycle_ids) because
+            # those cycle_ids don't exist in the cycles table — the eviction
+            # subquery would find no match and delete the freshly-saved rows.
+            if not cycle_id.startswith("LAZY-"):
+                _evict_evidence_cache(con=con)
         finally:
             con.close()
     except Exception as exc:
@@ -1096,3 +1127,23 @@ def _save_evidence_cache(ticker: str, evidence: list[Evidence], cycle_id: str) -
             cycle_id=cycle_id,
             msg=f"Failed to save evidence cache for {ticker}: {exc}",
         )
+
+
+def _evict_evidence_cache(con: object | None = None) -> None:
+    """Purge evidence_cache rows not in the 10 most recent cycles."""
+    from pmacs.config import data_dir
+    try:
+        own_conn = con is None
+        if own_conn:
+            db_path = data_dir() / "pmacs.db"
+            con = _sql_connect(db_path)
+        con.execute(
+            "DELETE FROM evidence_cache WHERE cycle_id NOT IN ("
+            "SELECT cycle_id FROM cycles ORDER BY opened_at DESC LIMIT 10)"
+        )
+        con.commit()
+    except Exception:
+        pass
+    finally:
+        if own_conn and con is not None:
+            con.close()

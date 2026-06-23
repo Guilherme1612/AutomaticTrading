@@ -65,6 +65,12 @@ def compute_fcf_yields(
 ) -> tuple[float | None, float | None]:
     """Return (unadjusted_yield_pct, sbc_adjusted_yield_pct).
 
+    Convention: the caller should pass a TTM FCF value when available (preferred
+    for yield — it is the most recent twelve months and avoids stale fiscal-year
+    data). Annual FCF is accepted as the fallback. Using annual FCF for yield is
+    explicitly a degradation: it may reflect financial results that are many months
+    stale (e.g. Dec 2024 annual FCF computed in June 2025).
+
     Unadjusted = FCF / market cap. SBC-adjusted treats stock-based compensation as
     a real cash-equivalent cost: (FCF - SBC) / market cap. SBC of None means we
     have no SBC figure, so the adjusted column is also None (not silently 0).
@@ -284,6 +290,7 @@ def compute_ticker_metrics(
     market_cap_usd: float | None = None,
     sbc_usd: float | None = None,
     current_multiples: dict | None = None,
+    fcf_ttm_usd: float | None = None,
     fcf_margin_ttm: float | None = None,
     roic_ttm: float | None = None,
     revenue_growth_yoy: float | None = None,
@@ -316,10 +323,16 @@ def compute_ticker_metrics(
     shares_by_period = shares_by_period or {}
     notes: list[str] = []
 
-    # Latest FCF = most recent fiscal year present in the FCF series.
+    # Latest FCF = TTM FCF when available, falling back to most recent annual.
+    # TTM is preferred for yield because it reflects the most recent twelve months
+    # and avoids stale fiscal-year data. Annual is a degradation: e.g. Dec 2024
+    # annual FCF computed in June 2025 excludes H1 2025 activity entirely.
     latest_fcf_usd: float | None = None
-    if fcf_by_period:
+    if fcf_ttm_usd is not None:
+        latest_fcf_usd = fcf_ttm_usd
+    elif fcf_by_period:
         latest_fcf_usd = fcf_by_period[max(fcf_by_period)]
+        notes.append("FCF yield uses trailing annual FCF — TTM FCF unavailable.")
 
     fcf_yield_pct, fcf_yield_sbc_pct = compute_fcf_yields(
         latest_fcf_usd, sbc_usd, market_cap_usd
@@ -328,7 +341,10 @@ def compute_ticker_metrics(
         notes.append("SBC-adjusted FCF yield unavailable — no SBC figure in evidence.")
 
     # The fiscal years we report on: the union of periods that have any series,
-    # most recent first, capped at the lookback window.
+    # most recent first, capped at the lookback window. We CAP at the lookback
+    # (typically 3) for the per-year table, but the average below uses
+    # WHATEVER years are present — for a newer ticker with 1 year of data, the
+    # average is just that 1 year, labeled "1Y avg" in the UI.
     candidate_periods = sorted(
         set(eps_by_period)
         | set(fcf_by_period)
@@ -445,37 +461,56 @@ def compute_ticker_metrics(
             )
         )
 
-    pe_3y_avg = round(sum(pe_values) / len(pe_values), 2) if pe_values else None
-    pfcf_3y_avg = (
+    pe_ny_avg = round(sum(pe_values) / len(pe_values), 2) if pe_values else None
+    pfcf_ny_avg = (
         round(sum(pfcf_values) / len(pfcf_values), 2) if pfcf_values else None
     )
-    ps_3y_avg = round(sum(ps_values) / len(ps_values), 2) if ps_values else None
-    pb_3y_avg = round(sum(pb_values) / len(pb_values), 2) if pb_values else None
-    ev_ebitda_3y_avg = (
+    ps_ny_avg = round(sum(ps_values) / len(ps_values), 2) if ps_values else None
+    pb_ny_avg = round(sum(pb_values) / len(pb_values), 2) if pb_values else None
+    ev_ebitda_ny_avg = (
         round(sum(ev_ebitda_values) / len(ev_ebitda_values), 2)
         if ev_ebitda_values
         else None
     )
+    # Each average is computed over the years that actually had a computable
+    # value for THAT metric. The count is per-metric, not per-ticker — a 3-year
+    # EPS series with one year of negative FCF yields pe_ny_avg_years=3 and
+    # pfcf_ny_avg_years=2. This is the operator directive: "use the average of
+    # N years, but be dynamic — based on timeframe from the stock price
+    # existence." The cap is the lookback window, not a hard floor.
+    pe_ny_avg_years = len(pe_values)
+    pfcf_ny_avg_years = len(pfcf_values)
+    ps_ny_avg_years = len(ps_values)
+    pb_ny_avg_years = len(pb_values)
+    ev_ebitda_ny_avg_years = len(ev_ebitda_values)
+
+    def _ny_label(years: int) -> str:
+        return f"{years}Y avg" if years > 0 else "No avg"
 
     if 0 < len(pe_values) < _LOOKBACK_YEARS:
         notes.append(
-            f"3Y average P/E computed over {len(pe_values)} year(s) of available data."
+            f"P/E {_ny_label(pe_ny_avg_years)} computed over {len(pe_values)} "
+            f"year(s) of available data (window cap {_LOOKBACK_YEARS}Y)."
         )
     if 0 < len(pfcf_values) < _LOOKBACK_YEARS:
         notes.append(
-            f"3Y FCF multiple computed over {len(pfcf_values)} year(s) of available data."
+            f"P/FCF {_ny_label(pfcf_ny_avg_years)} computed over {len(pfcf_values)} "
+            f"year(s) of available data (window cap {_LOOKBACK_YEARS}Y)."
         )
     if 0 < len(ps_values) < _LOOKBACK_YEARS:
         notes.append(
-            f"3Y P/S computed over {len(ps_values)} year(s) of available data."
+            f"P/S {_ny_label(ps_ny_avg_years)} computed over {len(ps_values)} "
+            f"year(s) of available data (window cap {_LOOKBACK_YEARS}Y)."
         )
     if 0 < len(pb_values) < _LOOKBACK_YEARS:
         notes.append(
-            f"3Y P/B computed over {len(pb_values)} year(s) of available data."
+            f"P/B {_ny_label(pb_ny_avg_years)} computed over {len(pb_values)} "
+            f"year(s) of available data (window cap {_LOOKBACK_YEARS}Y)."
         )
     if 0 < len(ev_ebitda_values) < _LOOKBACK_YEARS:
         notes.append(
-            f"3Y EV/EBITDA computed over {len(ev_ebitda_values)} year(s) of available data."
+            f"EV/EBITDA {_ny_label(ev_ebitda_ny_avg_years)} computed over {len(ev_ebitda_values)} "
+            f"year(s) of available data (window cap {_LOOKBACK_YEARS}Y)."
         )
 
     saas_kpis = _extract_saas_kpis(
@@ -524,11 +559,16 @@ def compute_ticker_metrics(
         fcf_yield_pct=fcf_yield_pct,
         fcf_yield_sbc_adjusted_pct=fcf_yield_sbc_pct,
         per_year=per_year,
-        pe_3y_avg=pe_3y_avg,
-        pfcf_3y_avg=pfcf_3y_avg,
-        ps_3y_avg=ps_3y_avg,
-        pb_3y_avg=pb_3y_avg,
-        ev_ebitda_3y_avg=ev_ebitda_3y_avg,
+        pe_ny_avg=pe_ny_avg,
+        pe_ny_avg_years=pe_ny_avg_years,
+        pfcf_ny_avg=pfcf_ny_avg,
+        pfcf_ny_avg_years=pfcf_ny_avg_years,
+        ps_ny_avg=ps_ny_avg,
+        ps_ny_avg_years=ps_ny_avg_years,
+        pb_ny_avg=pb_ny_avg,
+        pb_ny_avg_years=pb_ny_avg_years,
+        ev_ebitda_ny_avg=ev_ebitda_ny_avg,
+        ev_ebitda_ny_avg_years=ev_ebitda_ny_avg_years,
         current=current,
         fcf_margin_ttm=fcf_margin_ttm,
         roic_ttm=roic_ttm,

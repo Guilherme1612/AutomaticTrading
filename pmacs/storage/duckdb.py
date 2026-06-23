@@ -248,6 +248,18 @@ class DuckDBAdapter:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_api_usage_persona ON api_usage(persona)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_performance_cycle ON persona_performance(cycle_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_performance_persona ON persona_performance(persona)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rolling_metrics_name ON rolling_metrics(metric_name)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_api_usage_called ON api_usage(called_at)"
+        )
 
         # Audit event — tables initialized (Architecture.md §1.8)
         log_debug(

@@ -5,6 +5,7 @@ Also contains sanitize_evidence() — Layer 1 prompt-injection defense (Agents.m
 from __future__ import annotations
 
 import re
+import threading
 import time
 from typing import Any
 
@@ -60,7 +61,7 @@ def sanitize_evidence(
 
 
 class TokenBucket:
-    """Token bucket rate limiter."""
+    """Thread-safe token bucket rate limiter."""
 
     def __init__(self, rate: float, capacity: int | None = None):
         """
@@ -72,15 +73,17 @@ class TokenBucket:
         self.capacity = capacity or int(rate * 2)
         self._tokens = float(self.capacity)
         self._last_refill = time.monotonic()
+        self._lock = threading.Lock()
 
     def acquire(self, tokens: int = 1, timeout: float = 30.0) -> bool:
         """Wait until tokens are available. Returns True if acquired."""
         deadline = time.monotonic() + timeout
         while True:
-            self._refill()
-            if self._tokens >= tokens:
-                self._tokens -= tokens
-                return True
+            with self._lock:
+                self._refill()
+                if self._tokens >= tokens:
+                    self._tokens -= tokens
+                    return True
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.1)

@@ -309,9 +309,16 @@ class CycleOrchestrator:
         self._symbol_holdings.clear()
 
         with CycleLock(self._lock_path):
-            # Register signal handlers for graceful shutdown (S5-2)
-            old_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
-            old_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+            # Register signal handlers for graceful shutdown (S5-2).
+            # signal.signal() only works in the main thread; when the orchestrator
+            # is invoked via FastAPI's run_in_executor we silently skip registration
+            # — the kill switch + periodic check-in already cover graceful stop.
+            import threading as _threading
+            if _threading.current_thread() is _threading.main_thread():
+                old_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
+                old_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+            else:
+                old_sigterm, old_sigint = None, None
 
             try:
                 # Step 0 — Initiate cycle
@@ -412,9 +419,12 @@ class CycleOrchestrator:
                 raise
 
             finally:
-                # Restore original signal handlers (S5-2)
-                signal.signal(signal.SIGTERM, old_sigterm)
-                signal.signal(signal.SIGINT, old_sigint)
+                # Restore original signal handlers (S5-2). Only registered when
+                # we ran in the main thread — otherwise these are None.
+                if old_sigterm is not None:
+                    signal.signal(signal.SIGTERM, old_sigterm)
+                if old_sigint is not None:
+                    signal.signal(signal.SIGINT, old_sigint)
 
     # -- Signal handler (S5-2) --
 
@@ -2322,14 +2332,20 @@ class CycleOrchestrator:
                 break
 
         if crucible_state == "ABORT":
-            transition(holding, HoldingState.ABORTED_RISK,
+            # Crucible abort can be triggered by LLM failure (parse/validation
+            # exhaustion) or by high-severity attack surfacing. From
+            # PHASE2_CRUCIBLE, the only valid terminal states are
+            # APPROVED_PENDING and ABORTED_LLM. Risk-based aborts (high
+            # severity) flow through ABORTED_LLM here; the per-state
+            # risk-driven paths use the ABORTED_RISK state from PHASE3+ only.
+            transition(holding, HoldingState.ABORTED_LLM,
                 f"crucible_abort:severity={crucible_severity:.2f},iterations={crucible_iterations}", cycle_id, op)
             log_debug("SYMBOL_ABORTED_CRUCIBLE",
                 payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
                          "crucible_severity": crucible_severity, "crucible_state": crucible_state,
                          "crucible_iterations": crucible_iterations,
                          "elapsed_s": time.monotonic() - crucible_start},
-                level="WARN", error_code="ABORTED_CRUCIBLE", cycle_id=cycle_id,
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}")
             self._upsert_holding(holding, cycle_id)
             self._symbol_holdings.pop(ticker, None)
@@ -3080,7 +3096,27 @@ class CycleOrchestrator:
                 "progress": f"{symbols_processed + 1}/{len(self._queue)}",
             })
             prev_op = op_seq
-            op_seq = self._run_symbol(cycle_id, item, op_seq)
+            try:
+                op_seq = self._run_symbol(cycle_id, item, op_seq)
+            except Exception as exc:
+                # A single symbol failure must not abort the whole cycle —
+                # the operator wants the rest of the universe to still be
+                # processed. Log it loudly, skip the symbol, keep going.
+                log_debug(
+                    "CYCLE_INTERRUPTED",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": item.ticker,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "scope": "single_symbol",
+                    },
+                    level="ERROR",
+                    error_code="CYCLE_INTERRUPTED",
+                    cycle_id=cycle_id,
+                    msg=f"Symbol {item.ticker} raised {type(exc).__name__} in run_symbol; continuing cycle",
+                )
+                op_seq = prev_op + 1
             symbols_processed += 1
 
             # Detect if symbol aborted early (op_seq advanced by 2-3 vs ~15 for full pipeline)

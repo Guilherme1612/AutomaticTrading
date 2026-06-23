@@ -12,11 +12,41 @@ from pmacs.nervous.sse_publisher import publish_system_event
 from pmacs.schemas.billing import BudgetCheckResult
 
 
-# Default caps (configurable via Settings)
+# Default caps (configurable via Settings → risk.toml [billing])
 DEFAULT_CYCLE_SOFT_CAP = 1.00
 DEFAULT_DAILY_HARD_CAP = 2.00
 DEFAULT_MONTHLY_HARD_CAP = 30.00
 RUNAWAY_MULTIPLIER = 1.5
+
+
+def _load_billing_caps_from_risk_toml() -> tuple[float, float, float]:
+    """Read operator-configured caps from config/risk.toml [billing].
+
+    Falls back to the module-level defaults if the file is missing or malformed.
+    The cycle soft cap is a single-tier gate — Settings UI writes the daily +
+    monthly cap, and we expose a sensible default for the per-cycle soft cap.
+    """
+    try:
+        from pathlib import Path
+        import tomllib
+
+        candidates = [
+            Path("config") / "risk.toml",
+            Path(__file__).resolve().parent.parent.parent / "config" / "risk.toml",
+        ]
+        for path in candidates:
+            if path.exists():
+                with open(path, "rb") as f:
+                    data = tomllib.load(f)
+                billing = data.get("billing", {}) or {}
+                daily = float(billing.get("daily_cap_usd", DEFAULT_DAILY_HARD_CAP))
+                monthly = float(billing.get("monthly_cap_usd", DEFAULT_MONTHLY_HARD_CAP))
+                # Allow operator to override the per-cycle soft cap too
+                cycle = float(billing.get("cycle_soft_cap_usd", DEFAULT_CYCLE_SOFT_CAP))
+                return daily, monthly, cycle
+    except Exception:
+        pass
+    return DEFAULT_DAILY_HARD_CAP, DEFAULT_MONTHLY_HARD_CAP, DEFAULT_CYCLE_SOFT_CAP
 
 
 def check_per_cycle_soft_cap(
@@ -187,14 +217,25 @@ def check_runaway(
 def enforce_budgets(
     sqlite_conn,
     estimated_call_cost: float,
-    daily_cap: float = DEFAULT_DAILY_HARD_CAP,
-    monthly_cap: float = DEFAULT_MONTHLY_HARD_CAP,
-    cycle_soft_cap: float = DEFAULT_CYCLE_SOFT_CAP,
+    daily_cap: float | None = None,
+    monthly_cap: float | None = None,
+    cycle_soft_cap: float | None = None,
 ) -> BudgetCheckResult:
     """Run all three budget checks in order (cheapest to most expensive).
 
     Returns the first failing check, or allowed=True if all pass.
+
+    Caps default to the operator-configured values from risk.toml [billing].
+    Pass an explicit value to override for a single call.
     """
+    cfg_daily, cfg_monthly, cfg_cycle = _load_billing_caps_from_risk_toml()
+    if daily_cap is None:
+        daily_cap = cfg_daily
+    if monthly_cap is None:
+        monthly_cap = cfg_monthly
+    if cycle_soft_cap is None:
+        cycle_soft_cap = cfg_cycle
+
     # Per-cycle soft cap (operator confirmation gate)
     result = check_per_cycle_soft_cap(sqlite_conn, estimated_call_cost, cycle_soft_cap)
     if not result.allowed:

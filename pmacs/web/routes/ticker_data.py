@@ -286,25 +286,6 @@ def _num(value):
         return None
 
 
-# Sanity bound for valuation multiples. yfinance returns `forwardPE` as a raw
-# price/EPS ratio — when forward EPS is near zero or negative (NBIS, OUST,
-# TEM, CRWV all hit this), the value explodes to triple digits or deep
-# negatives. We need a cap that lets genuine extreme valuations through
-# (NBIS is currently 762× — that's the *real* forward multiple for a name
-# with epsForward ≈ $0.36 and price $275; suppressing it as "noise" hides
-# exactly the signal the operator needs) but still catches true yfinance
-# division-by-near-zero artifacts (|fwdPE| > 10,000× is essentially always
-# epsForward rounding to ±0.0001 or similar). 5,000× is the working cap.
-_FWD_PE_SANITY_MAX_ABS = 5000.0
-
-# When yfinance's TTM EPS (or revenue) diverges from the most-recent annual
-# figure by more than this ratio, the TTM stitching is unreliable and any
-# multiple derived from it (P/E, P/S, EV/EBITDA, P/FCF) is suppressed.
-# Threshold is set wide enough to allow normal seasonal variation in mature
-# names (typically <2×) but tight enough to catch the yfinance bug where a
-# quarterly loss / one-time gain gets projected into a fake TTM.
-_TTM_DIVERGENCE_THRESHOLD = 3.0
-
 # In-process cache for period-end closes fetched from Polygon. Historical
 # closes are objective market data (identical regardless of when queried) so
 # caching for an hour is safe and dramatically cuts load time when Polygon
@@ -312,13 +293,19 @@ _TTM_DIVERGENCE_THRESHOLD = 3.0
 _PERIOD_PRICE_CACHE: dict[tuple[str, tuple[str, ...]], tuple[float, dict[str, float]]] = {}
 _PERIOD_PRICE_TTL_SECS = 3600.0  # 1h for hits, 60s for failures (see _fetch_period_prices)
 
+# Threshold for the (informational-only, no longer suppressive) TTM-vs-FY
+# divergence log line. A TTM/FY ratio above this is a flag the operator may
+# want to read, not a trigger to blank the value.
+_TTM_DIVERGENCE_THRESHOLD = 3.0
+
 
 def _ttm_divergence_ratio(ttm_value: float | None, annual_value: float | None) -> float | None:
     """Return |ttm/annual| when both are positive; None when either is missing
     or non-positive (can't compute a meaningful ratio through a zero or sign flip).
 
-    Used to detect yfinance TTM-stitching bugs: a 6× ratio between TTM and the
-    most-recent fiscal-year value means the TTM is unreliable.
+    Used (informational only, no longer for suppression) to surface yfinance
+    TTM-stitching bugs: a 6× ratio between TTM and the most-recent fiscal-year
+    value means the TTM may be unreliable.
     """
     if ttm_value is None or annual_value is None:
         return None
@@ -328,26 +315,6 @@ def _ttm_divergence_ratio(ttm_value: float | None, annual_value: float | None) -
         # a divergence signal; caller decides what to do with that.
         return None
     return abs(ttm_value / annual_value)
-
-
-def _sanitize_multiple(value, *, label: str, max_abs: float = _FWD_PE_SANITY_MAX_ABS):
-    """Coerce to float; return None when |value| exceeds the sane bound.
-
-    Used to suppress valuation multiples that are mathematically computable
-    but operationally meaningless — e.g. Fwd P/E of -1006 because forward
-    EPS rounded to a near-zero negative. Setting the value to None lets the
-    template's existing `is none` branches render an em-dash.
-    """
-    n = _num(value)
-    if n is None:
-        return None
-    if abs(n) > max_abs:
-        _log.info(
-            "suppressing %s=%s (|value|>%s; forward EPS near zero yields unreliable ratio)",
-            label, n, max_abs,
-        )
-        return None
-    return n
 
 
 def _evidence_by_id(ticker: str) -> dict:
@@ -483,43 +450,33 @@ def _extract(ticker: str, ev: dict) -> dict:
     )
     price_by_period = _fetch_period_prices(ticker, periods)
 
-    # Sanity-check yfinance TTM-based multiples against the most-recent annual
-    # value. yfinance's TTM stitching is unreliable for recently-IPO'd or
-    # rapidly-reversing tickers (NBIS is the canonical example: TTM EPS
-    # $2.58 vs. annual FY2025 EPS $0.40 → yfinance reports P/E = 108 when the
-    # real FY-based P/E is closer to 700). When TTM and most-recent-annual
-    # diverge sharply, suppress the multiple so the template renders an em-dash
-    # rather than a confidently-wrong number.
+    # Pass through yfinance's TTM-based multiples verbatim — the operator
+    # wants accurate data, not suppressed numbers. The TTM-vs-FY divergence
+    # is logged so the operator can see *why* a TTM multiple may be noisy,
+    # but the value itself is always shown.
     most_recent_eps = _num(eps_series[0]["v"]) if eps_series else None
     most_recent_revenue = _num(revenue_series[0]["v"]) if revenue_series else None
     ttm_eps = _num(metrics.get("epsTTM"))
     ttm_revenue = _num(metrics.get("revenueTTM"))
     eps_ttm_divergence = _ttm_divergence_ratio(ttm_eps, most_recent_eps)
     rev_ttm_divergence = _ttm_divergence_ratio(ttm_revenue, most_recent_revenue)
-    eps_ttm_unreliable = eps_ttm_divergence is not None and eps_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD
-    rev_ttm_unreliable = rev_ttm_divergence is not None and rev_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD
+    if eps_ttm_divergence is not None and eps_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD:
+        _log.info(
+            "TTM EPS diverges from FY EPS by %.1fx for %s (TTM=%s, FY=%s) — yfinance TTM stitching may be unreliable; rendering raw value",
+            eps_ttm_divergence, ticker, ttm_eps, most_recent_eps,
+        )
+    if rev_ttm_divergence is not None and rev_ttm_divergence > _TTM_DIVERGENCE_THRESHOLD:
+        _log.info(
+            "TTM revenue diverges from FY revenue by %.1fx for %s (TTM=%s, FY=%s) — yfinance TTM stitching may be unreliable; rendering raw value",
+            rev_ttm_divergence, ticker, ttm_revenue, most_recent_revenue,
+        )
 
-    # Current point-in-time multiples (passthrough to engine for echo/context).
-    # Fwd P/E is magnitude-sanitized because yfinance can return extreme ratios
-    # when forward EPS is near zero or negative; the engine has its own
-    # per-year-multiple guards but no current-multiples guard.
-    pe_value = _sanitize_multiple(metrics.get("peNormalizedAnnual"), label="peNormalizedAnnual")
-    if eps_ttm_unreliable and pe_value is not None:
-        _log.info(
-            "suppressing peNormalizedAnnual=%s for %s (TTM EPS=%s vs FY EPS=%s diverge by %.1fx; yfinance TTM stitching unreliable)",
-            pe_value, ticker, ttm_eps, most_recent_eps, eps_ttm_divergence,
-        )
-        pe_value = None
+    # Current point-in-time multiples — passthrough to engine.
+    pe_value = _num(metrics.get("peNormalizedAnnual"))
     ps_value = _num(metrics.get("psAnnual"))
-    if rev_ttm_unreliable and ps_value is not None:
-        _log.info(
-            "suppressing psAnnual=%s for %s (TTM revenue=%s vs FY revenue=%s diverge by %.1fx; yfinance TTM stitching unreliable)",
-            ps_value, ticker, ttm_revenue, most_recent_revenue, rev_ttm_divergence,
-        )
-        ps_value = None
     current_multiples = {
         "pe": pe_value,
-        "forward_pe": _sanitize_multiple(metrics.get("forwardPE"), label="forwardPE"),
+        "forward_pe": _num(metrics.get("forwardPE")),
         "ps": ps_value,
         "pb": _num(metrics.get("pbAnnual")),
         "ev_ebitda": _num(metrics.get("evToEbitdaTTM")),
@@ -630,19 +587,16 @@ def _display_groups(ticker: str, ev: dict, derived: object, sector: str = "") ->
     def row(label, value, unit="", state="value"):
         return {"label": label, "value": value, "unit": unit, "state": state}
 
-    # Valuation multiples in the raw grid should mirror the divergence-suppressed
-    # values the main summary cards render — otherwise operators see P/E "—"
-    # in the summary and 106.69 in raw for the same ticker (NBIS canonical),
-    # which is confusing. The engine's derived.current has the suppressed
-    # values (None when the TTM-divergence check fires); the template renders
-    # the em-dash via the `r.value is none` branch, which is the right answer
-    # for the raw grid too.
-    cur_pe = getattr(getattr(derived, "current", None), "pe", None)
-    cur_fpe = getattr(getattr(derived, "current", None), "forward_pe", None)
-    cur_ps = getattr(getattr(derived, "current", None), "ps", None)
-    cur_pb = getattr(getattr(derived, "current", None), "pb", None)
-    cur_ev = getattr(getattr(derived, "current", None), "ev_ebitda", None)
-    cur_peg = getattr(getattr(derived, "current", None), "peg", None)
+    # Valuation multiples in the raw grid: operator wants accurate raw data,
+    # so read straight from the stored evidence (yfinance passthrough). The
+    # main summary cards render the same yfinance values via derived.current
+    # so both views always agree on the number (no divergence suppression).
+    cur_pe = m.get("peNormalizedAnnual")
+    cur_fpe = m.get("forwardPE")
+    cur_ps = m.get("psAnnual")
+    cur_pb = m.get("pbAnnual")
+    cur_ev = m.get("evToEbitdaTTM")
+    cur_peg = m.get("pegTTM")
 
     # Technical info is rendered in its own dedicated section (with RSI colour
     # coding and 52w distance), so we omit it from the raw-fundamentals grid.

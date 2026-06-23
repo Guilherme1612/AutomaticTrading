@@ -289,9 +289,13 @@ def _num(value):
 # Sanity bound for valuation multiples. yfinance returns `forwardPE` as a raw
 # price/EPS ratio — when forward EPS is near zero or negative (NBIS, OUST,
 # TEM, CRWV all hit this), the value explodes to triple digits or deep
-# negatives. 200× is the cap used throughout this codebase as the "no longer
-# meaningful" band (tone_class('multiple') already implicitly assumes this).
-_FWD_PE_SANITY_MAX_ABS = 200.0
+# negatives. We need a cap that lets genuine extreme valuations through
+# (NBIS is currently 762× — that's the *real* forward multiple for a name
+# with epsForward ≈ $0.36 and price $275; suppressing it as "noise" hides
+# exactly the signal the operator needs) but still catches true yfinance
+# division-by-near-zero artifacts (|fwdPE| > 10,000× is essentially always
+# epsForward rounding to ±0.0001 or similar). 5,000× is the working cap.
+_FWD_PE_SANITY_MAX_ABS = 5000.0
 
 # When yfinance's TTM EPS (or revenue) diverges from the most-recent annual
 # figure by more than this ratio, the TTM stitching is unreliable and any

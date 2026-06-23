@@ -338,47 +338,74 @@ async def set_inference_model(req: InferenceModelRequest):
     return JSONResponse({"ok": True, "provider": req.provider, "model": effective})
 
 
-@router.post("/api/settings/inference/test")
-async def test_inference_connection():
-    """Test the active LLM provider with a minimal prompt."""
-    state = _get_inference_state()
-    active = state["active"]
+def _classify_cloud_response(resp) -> tuple[str, str]:
+    """Classify a cloud provider HTTP response into (status, message).
 
+    status ∈ working | invalid_key | no_budget | not_working. Distinguishes a
+    valid-but-out-of-budget key (403/429 with a billing keyword — the provider IS
+    set up, just can't spend right now) from a genuinely invalid/forbidden key
+    (401 / bare 403). The body text is matched for keywords but never echoed
+    verbatim — only a sanitized message is returned (Architecture.md §16).
+    """
+    if resp.status_code == 200:
+        return "working", "connection successful"
+    if resp.status_code == 401:
+        return "invalid_key", "API key rejected (401)"
+    if resp.status_code in (402, 403, 429):
+        body = (resp.text or "").lower()[:400]
+        budget_keywords = (
+            "limit", "quota", "credit", "billing", "exceeded",
+            "insufficient", "payment", "balance", "spend", "funds",
+        )
+        if any(k in body for k in budget_keywords):
+            return "no_budget", f"key valid but no budget (HTTP {resp.status_code})"
+        if resp.status_code == 403:
+            return "invalid_key", "forbidden (403)"
+        return "not_working", f"HTTP {resp.status_code}"
+    return "not_working", f"HTTP {resp.status_code}"
+
+
+async def _test_provider(backend_id: str, backend: dict) -> dict:
+    """Test one inference backend with a minimal call. Returns {status, message}.
+
+    status ∈ working | invalid_key | no_budget | no_key | not_working.
+    Sanitized — the API key never appears in the returned message.
+
+    Local backends (llama_server / ollama) are pinged at their health/tags
+    endpoint; "working" means the process is up. Cloud backends make a minimal
+    chat completion so the response code reflects whether the key + model are
+    genuinely usable — keychain existence alone is NOT enough (a stale key still
+    "exists" but returns 401).
+    """
     import httpx
-    backend = _load_registry()["backends"].get(active, {})
-    api_key_ref = backend.get("api_key_ref", "")
-    is_local = not bool(api_key_ref)
 
-    if active == "llama_server":
-        url = "http://127.0.0.1:8080/health"
+    api_key_ref = backend.get("api_key_ref", "")
+
+    if backend_id == "llama_server":
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
+                resp = await client.get("http://127.0.0.1:8080/health")
                 if resp.status_code == 200:
-                    return JSONResponse({"ok": True, "message": "llama-server healthy"})
-                return JSONResponse({"ok": False, "error": f"HTTP {resp.status_code}"}, status_code=502)
-        except Exception as exc:
-            import logging
-            logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
-            return JSONResponse({"ok": False, "error": "Connection test failed"}, status_code=502)
+                    return {"status": "working", "message": "llama-server healthy"}
+                return {"status": "not_working", "message": f"HTTP {resp.status_code}"}
+        except Exception:
+            return {"status": "not_working", "message": "llama-server not running"}
 
-    if active == "ollama":
-        # Ollama is local — test via its /api/tags endpoint
+    if backend_id == "ollama":
         url = backend.get("url", "http://127.0.0.1:11434")
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{url}/api/tags")
                 if resp.status_code == 200:
-                    return JSONResponse({"ok": True, "message": "Ollama connected"})
-                return JSONResponse({"ok": False, "error": f"HTTP {resp.status_code}"}, status_code=502)
-        except Exception as exc:
-            import logging
-            logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
-            return JSONResponse({"ok": False, "error": "Ollama not reachable — is it running?"}, status_code=502)
+                    return {"status": "working", "message": "Ollama connected"}
+                return {"status": "not_working", "message": f"HTTP {resp.status_code}"}
+        except Exception:
+            return {"status": "not_working", "message": "Ollama not running"}
 
-    # Cloud provider test
+    # Cloud provider
     base_url = backend.get("base_url", "").rstrip("/")
-    model = backend.get("default_model", "gpt-4o")
+    model = backend.get("default_model", "")
+    structured_output = backend.get("structured_output", "")
 
     api_key = ""
     if api_key_ref:
@@ -387,11 +414,12 @@ async def test_inference_connection():
             api_key = keyring.get_password("pmacs.credentials", api_key_ref) or ""
         except Exception:
             pass
-
     if not api_key:
-        return JSONResponse({"ok": False, "error": "API key not found in keychain"}, status_code=403)
-
-    structured_output = backend.get("structured_output", "")
+        return {"status": "no_key", "message": "no API key in keychain"}
+    if not model:
+        return {"status": "not_working", "message": "no model configured"}
+    if structured_output not in ("json_schema", "tool_use"):
+        return {"status": "not_working", "message": f"unknown output type: {structured_output}"}
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -410,8 +438,7 @@ async def test_inference_connection():
                         "Content-Type": "application/json",
                     },
                 )
-            elif structured_output == "tool_use":
-                # Anthropic
+            else:  # tool_use — Anthropic
                 resp = await client.post(
                     f"{base_url}/v1/messages",
                     json={
@@ -425,23 +452,59 @@ async def test_inference_connection():
                         "Content-Type": "application/json",
                     },
                 )
-            else:
-                return JSONResponse({"ok": False, "error": f"Unknown output type: {structured_output}"}, status_code=400)
-
-            if resp.status_code == 200:
-                return JSONResponse({"ok": True, "message": f"{active} connection successful"})
-            return JSONResponse(
-                {"ok": False, "error": f"Provider returned HTTP {resp.status_code}"},
-                status_code=502,
-            )
+            status, message = _classify_cloud_response(resp)
+            return {"status": status, "message": message}
     except Exception as exc:
-        # Sanitize error message to prevent API key leakage (Architecture.md §16)
+        # Sanitize — never leak the key (Architecture.md §16)
         err_msg = str(exc)
-        for secret_keyword in ("key", "token", "bearer", "authorization", "api_key", "apikey"):
-            if secret_keyword.lower() in err_msg.lower():
-                err_msg = "Connection failed — check provider settings and API key"
+        for kw in ("key", "token", "bearer", "authorization", "api_key", "apikey"):
+            if kw in err_msg.lower():
+                err_msg = "connection failed — check provider settings and API key"
                 break
-        return JSONResponse({"ok": False, "error": err_msg}, status_code=502)
+        return {"status": "not_working", "message": err_msg}
+
+
+@router.post("/api/settings/inference/test")
+async def test_inference_connection():
+    """Test the active LLM provider with a minimal prompt."""
+    state = _get_inference_state()
+    active = state["active"]
+    backend = _load_registry()["backends"].get(active, {})
+    res = await _test_provider(active, backend)
+    if res["status"] == "working":
+        return JSONResponse({"ok": True, "message": res["message"], "status": res["status"]})
+    return JSONResponse(
+        {"ok": False, "error": res["message"], "status": res["status"]},
+        status_code=502,
+    )
+
+
+@router.post("/api/settings/inference/test-all")
+async def test_all_inference():
+    """Test every configured backend in parallel; return per-provider status.
+
+    Used by the Settings page to render a real per-provider 'Working' badge
+    instead of just 'Key set' (keychain existence ≠ key works — a stale key
+    still exists in the keychain but returns 401). Returns {results: {id:
+    {status, message}}} where status ∈ working | invalid_key | no_budget |
+    no_key | not_working.
+    """
+    import asyncio
+
+    registry = _load_registry()
+    backends = registry.get("backends", {})
+    ids = list(backends.keys())
+    gathered = await asyncio.gather(
+        *[_test_provider(bid, backends[bid]) for bid in ids],
+        return_exceptions=True,
+    )
+    results: dict[str, dict] = {}
+    for bid, res in zip(ids, gathered):
+        if isinstance(res, Exception):
+            results[bid] = {"status": "not_working", "message": "test error"}
+        else:
+            results[bid] = res
+    return JSONResponse({"ok": True, "results": results})
 
 
 # ---------------------------------------------------------------------------

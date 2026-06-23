@@ -167,7 +167,8 @@
                         <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
                         <span class="text-xs text-text-muted font-mono ml-2">{{ provider.model or 'No model' }}</span>
                     </div>
-                    <span class="text-[10px] font-mono text-text-muted px-1.5 py-0.5 rounded-md bg-surface-sunken/50 shrink-0">Local</span>
+                    <span class="text-[10px] font-mono text-text-muted px-1.5 py-0.5 rounded-md bg-surface-sunken/50 shrink-0 badge-status"
+                          data-provider-id="{{ provider.id }}">Local</span>
                 </label>
                 {% endfor %}
             </div>
@@ -203,8 +204,9 @@
                         <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
                         <span class="text-xs text-text-muted font-mono ml-2">{{ provider.model or 'No model' }}</span>
                     </div>
-                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0
-                          {{ 'bg-positive-soft text-positive' if provider.has_api_key else 'bg-negative-soft text-negative' }}">
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 badge-status bg-surface-sunken/50 text-text-muted"
+                          data-provider-id="{{ provider.id }}"
+                          title="Click 'Test all' to verify connectivity — 'Key set' only means a keychain entry exists, not that the key works">
                         {{ 'Key set' if provider.has_api_key else 'No key' }}
                     </span>
                 </label>
@@ -246,6 +248,10 @@
             </div>
             <div class="flex items-center gap-2">
                 <span id="inference-test-result" class="text-xs text-text-muted"></span>
+                <button type="button" onclick="testAllProviders()" id="inference-test-all-btn"
+                        class="px-3 py-1.5 text-xs border border-border-strong text-text-secondary rounded-xl hover:bg-surface-sunken transition-colors font-medium">
+                    Test all
+                </button>
                 <button type="button" onclick="testConnection()" id="inference-test-btn"
                         class="px-3 py-1.5 text-xs border border-accent text-accent rounded-xl hover:bg-accent-soft transition-colors font-medium">
                     Test
@@ -930,6 +936,54 @@ var localProviders = {{ inference.local_providers | tojson }};
 var cloudProviders = {{ inference.cloud_providers | tojson }};
 var allProviders = localProviders.concat(cloudProviders);
 
+// Per-provider live test status, keyed by provider id. Populated by
+// testAllProviders() (called once on page load + via the 'Test all' button).
+// A keychain entry existing (has_api_key) is NOT enough — a stale key still
+// 'exists' but returns 401. The badge must reflect an actual connectivity test.
+var providerStatus = {};  // {id: "working" | "invalid_key" | "no_budget" | "no_key" | "not_working"}
+
+var STATUS_BADGE = {
+    working:      {label: 'Working',      cls: 'bg-positive-soft text-positive'},
+    invalid_key:  {label: 'Invalid key', cls: 'bg-negative-soft text-negative'},
+    no_budget:    {label: 'No budget',   cls: 'bg-warning-soft text-warning'},
+    no_key:       {label: 'No key',      cls: 'bg-surface-sunken/50 text-text-muted'},
+    not_working:  {label: 'Not working', cls: 'bg-negative-soft text-negative'}
+};
+
+function setProviderBadge(providerId, status) {
+    providerStatus[providerId] = status;
+    var badge = document.querySelector('.badge-status[data-provider-id="' + providerId + '"]');
+    if (!badge) return;
+    var info = STATUS_BADGE[status];
+    if (info) {
+        badge.textContent = info.label;
+        badge.className = 'text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 badge-status ' + info.cls;
+    }
+}
+
+function testAllProviders() {
+    var btn = document.getElementById('inference-test-all-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+    // Mark every provider's badge as 'checking' while the test runs
+    allProviders.forEach(function(p) {
+        var badge = document.querySelector('.badge-status[data-provider-id="' + p.id + '"]');
+        if (badge) {
+            badge.textContent = '…';
+            badge.className = 'text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 badge-status bg-surface-sunken/50 text-text-muted';
+        }
+    });
+    fetch('/api/settings/inference/test-all', {method: 'POST'})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok || !data.results) { if (btn) { btn.disabled = false; btn.textContent = 'Test all'; } return; }
+            Object.keys(data.results).forEach(function(id) {
+                setProviderBadge(id, data.results[id].status);
+            });
+        })
+        .catch(function() { /* leave … badges; operator can retry */ })
+        .finally(function() { if (btn) { btn.disabled = false; btn.textContent = 'Test all'; } });
+}
+
 // Sync a single provider row's "Key set"/"No key" badge + model text from allProviders,
 // and refresh the API-key field placeholder for the currently-selected provider.
 // The backend already persists model + api_key per-provider (model_registry.json +
@@ -954,11 +1008,16 @@ function syncProviderUI(providerId) {
     if (radio) {
         var label = radio.closest('label');
         if (label) {
-            var badge = label.querySelector(':scope > span');
-            if (badge) {
-                badge.textContent = p.has_api_key ? 'Key set' : 'No key';
-                badge.className = 'text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 ' +
-                    (p.has_api_key ? 'bg-positive-soft text-positive' : 'bg-negative-soft text-negative');
+            // Preserve the tested status across switches; only fall back to the
+            // muted default ('Key set'/'No key') if no test has run yet.
+            if (providerStatus[providerId]) {
+                setProviderBadge(providerId, providerStatus[providerId]);
+            } else {
+                var badge = label.querySelector('.badge-status');
+                if (badge) {
+                    badge.textContent = p.has_api_key ? 'Key set' : 'No key';
+                    badge.className = 'text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 badge-status bg-surface-sunken/50 text-text-muted';
+                }
             }
             var modelSpan = label.querySelector('span.ml-2');
             if (modelSpan) modelSpan.textContent = p.model || 'No model';
@@ -1080,6 +1139,11 @@ function testConnection() {
         .catch(function(err) { result.textContent = 'Failed'; result.className = 'text-xs text-negative'; })
         .finally(function() { btn.disabled = false; btn.textContent = 'Test'; });
 }
+
+// On page load, probe every provider so badges show real 'Working' / 'Invalid key'
+// / 'No budget' instead of the unverified 'Key set' default. This makes a stale
+// key (401) visibly distinct from a real, working one.
+testAllProviders();
 </script>
 
 <script>

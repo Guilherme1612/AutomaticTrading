@@ -146,6 +146,7 @@ SYSTEM_EVENT_TYPES: frozenset[str] = frozenset({
     "BUDGET_STATE_UPDATE_FAILED",
     "RECONCILIATION_DELTA",
     "RECONCILIATION_CALL_NOT_FOUND",
+    "RECONCILIATION_FAILED",
     "PERSONA_QUALITY_REGRESSION",
     # Billing cost events (not always cycle-scoped)
     "COST_CAP_BREACHED",

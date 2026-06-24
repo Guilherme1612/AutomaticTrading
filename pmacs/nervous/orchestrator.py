@@ -168,6 +168,18 @@ class CycleOrchestrator:
         self._queue: list[Any] = []
         self._universe_tickers: list[str] = []
 
+        # Unification (Task #8): operator-initiated cycle options.
+        # _skip_kill_switch — set per-run_cycle by the operator routes (SOLO/cycle
+        # start) so an explicit operator research run proceeds even if the kill
+        # switch is ENGAGED. Automated callers (boot_detector/daemon) never set it.
+        # Budget enforcement is independent of the kill switch and still runs per
+        # LLM call. Non-Negotiable #5 preserved: we never auto-disengage the kill
+        # switch; the operator opts in per-run, automated paths stay gated.
+        self._skip_kill_switch: bool = False
+        # _requested_tickers — when non-None, overrides universe composition so a
+        # single-ticker SOLO run cycles exactly that ticker (no universe scan).
+        self._requested_tickers: list[str] | None = None
+
         # Paper ledger (created lazily or injected for testing)
         self._ledger: Any | None = None
 
@@ -264,7 +276,14 @@ class CycleOrchestrator:
 
     # -- Public API --
 
-    def run_cycle(self, trigger: str) -> str:
+    def run_cycle(
+        self,
+        trigger: str,
+        *,
+        tickers: list[str] | None = None,
+        cycle_id: str | None = None,
+        skip_kill_switch: bool = False,
+    ) -> str:
         """Main entry point. Acquires lock, runs steps 0-30, returns cycle_id.
 
         Steps:
@@ -287,16 +306,25 @@ class CycleOrchestrator:
 
         Args:
             trigger: What triggered this cycle (e.g. 'TIMER', 'OPERATOR').
-
-        Returns:
-            The cycle_id of the completed cycle.
+            tickers: Optional explicit ticker list. When provided, overrides
+                universe composition (step 8) so the cycle processes exactly
+                these tickers — used by SOLO single-ticker research runs. None
+                means compose the queue from the universe as usual.
+            cycle_id: Optional pre-generated cycle_id. When provided, the caller
+                already knows the id (so it can return it to the client before
+                this call returns); initiate_cycle uses it instead of uuid4().
+            skip_kill_switch: When True, skips the four kill-switch gates
+                (initiate_cycle, _step_kill_switch, per-symbol pre/post). Set ONLY
+                by operator-initiated routes (SOLO/cycle start) for explicit
+                research runs; automated callers must leave it False. Budget
+                enforcement is independent and still runs per LLM call.
 
         Raises:
             CycleLockError: If another cycle is already running.
             KillSwitchEngagedError: If kill switch is engaged.
             ClockDriftError: If NTP drift exceeds threshold.
         """
-        cycle_id: str = ""
+        cycle_id: str = cycle_id or ""
 
         # Initialize cycle metrics (S6-1)
         self._cycle_metrics: dict[str, Any] = {
@@ -313,6 +341,9 @@ class CycleOrchestrator:
         self._kill_switch_engaged_mid_cycle = False
         self._symbol_holdings.clear()
         self._macro_regime_dp_cached = None  # Rec1: reset per-cycle macro DP cache
+        # Unification (Task #8): apply per-run operator options.
+        self._skip_kill_switch = skip_kill_switch
+        self._requested_tickers = list(tickers) if tickers else None
 
         with CycleLock(self._lock_path):
             # Register signal handlers for graceful shutdown (S5-2).
@@ -328,7 +359,10 @@ class CycleOrchestrator:
 
             try:
                 # Step 0 — Initiate cycle
-                cycle_id = initiate_cycle(trigger, self._db_path, self._audit_path)
+                cycle_id = initiate_cycle(
+                    trigger, self._db_path, self._audit_path,
+                    cycle_id=cycle_id, skip_kill_switch=self._skip_kill_switch,
+                )
                 self._publish_sse("cycle", "cycle.open", {
                     "cycle_id": cycle_id,
                     "trigger": trigger,
@@ -580,8 +614,12 @@ class CycleOrchestrator:
             )
 
     def _step_kill_switch(self, cycle_id: str) -> None:
-        """Step 4: Check kill switch. Abort if engaged."""
-        if is_engaged(self._db_path):
+        """Step 4: Check kill switch. Abort if engaged.
+
+        Skipped when ``self._skip_kill_switch`` is set (operator-initiated
+        research run that explicitly opts past an engaged kill switch).
+        """
+        if not self._skip_kill_switch and is_engaged(self._db_path):
             log_debug(
                 "CYCLE_ABORTED_KILL_SWITCH",
                 payload={"cycle_id": cycle_id},
@@ -831,8 +869,31 @@ class CycleOrchestrator:
         )
 
     def _step_universe_sync(self, cycle_id: str) -> None:
-        """Step 8: Get current universe and check for halted/delisted."""
+        """Step 8: Get current universe and check for halted/delisted.
+
+        When ``self._requested_tickers`` is set (operator-initiated SOLO run),
+        the universe is overridden with exactly those tickers — no DB scan, no
+        gatekeeper universe filtering downstream acts on anything else.
+        """
         from pmacs.data.universe import get_universe
+
+        if self._requested_tickers is not None:
+            self._universe_tickers = list(self._requested_tickers)
+            self._universe_priority = {}
+            log_debug(
+                "CYCLE_UNIVERSE_SYNC",
+                payload={
+                    "cycle_id": cycle_id,
+                    "universe_size": len(self._universe_tickers),
+                    "halted_count": 0,
+                    "requested": True,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Universe overridden by operator request: "
+                    f"{len(self._universe_tickers)} ticker(s)",
+            )
+            return
 
         try:
             conn = _sql_connect(self._db_path)
@@ -3186,7 +3247,7 @@ class CycleOrchestrator:
                 )
                 break
 
-            if is_engaged(self._db_path):
+            if not self._skip_kill_switch and is_engaged(self._db_path):
                 self._kill_switch_engaged_mid_cycle = True
                 log_debug(
                     "CYCLE_SYMBOL_SKIP_KILL_SWITCH",
@@ -3247,7 +3308,7 @@ class CycleOrchestrator:
                 )
                 break
 
-            if is_engaged(self._db_path):
+            if not self._skip_kill_switch and is_engaged(self._db_path):
                 self._kill_switch_engaged_mid_cycle = True
                 log_debug(
                     "CYCLE_SYMBOL_LOOP_KILL_SWITCH",
@@ -4995,16 +5056,30 @@ class CycleOrchestrator:
 # -- Module-level functions (backward compat) --
 
 
-def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) -> str:
+def initiate_cycle(
+    trigger: str,
+    db_path: Path,
+    audit_path: Path | None = None,
+    *,
+    cycle_id: str | None = None,
+    skip_kill_switch: bool = False,
+) -> str:
     """Open a new cycle.
 
-    Checks kill switch first -- raises KillSwitchEngagedError if engaged.
-    Creates cycle_id (UUID4), inserts into SQLite, emits SSE and audit events.
+    Checks kill switch first -- raises KillSwitchEngagedError if engaged
+    (unless ``skip_kill_switch`` is set, for operator-initiated research runs).
+    Creates cycle_id (UUID4, or the caller-provided id), inserts into SQLite,
+    emits SSE and audit events.
 
     Args:
         trigger: What triggered this cycle (e.g. 'TIMER', 'OPERATOR').
         db_path: Path to the SQLite database.
         audit_path: Optional path to the audit log file.
+        cycle_id: Optional pre-generated cycle_id. When provided, used instead of
+            a fresh uuid4 — lets the operator route return the id to the client
+            before this (background) call returns.
+        skip_kill_switch: When True, skip the kill-switch gate. Set ONLY by
+            operator-initiated routes; automated callers must leave it False.
 
     Returns:
         The newly created cycle_id.
@@ -5013,7 +5088,7 @@ def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) 
         KillSwitchEngagedError: If the kill switch is currently engaged.
     """
     # Kill switch gate -- must check BEFORE any state mutation
-    if is_engaged(db_path):
+    if not skip_kill_switch and is_engaged(db_path):
         log_debug(
             "CYCLE_OPEN_BLOCKED_KILL_SWITCH",
             payload={"trigger": trigger},
@@ -5023,7 +5098,7 @@ def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) 
         )
         raise KillSwitchEngagedError("Cannot initiate cycle: kill switch is engaged")
 
-    cycle_id = str(uuid4())
+    cycle_id = cycle_id or str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
     mode = _current_mode(db_path)
 

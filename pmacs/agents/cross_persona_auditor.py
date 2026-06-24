@@ -60,6 +60,37 @@ class CrossPersonaAuditorRunner(PersonaRunner):
         from pmacs.schemas.personas import AuditorOutput
         return AuditorOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """CrossPersonaAuditor drift fixes (deepseek-v4-flash on openrouter).
+
+        - ``flags[i].description`` may exceed max_length; truncated.
+        - ``flags[i].cycle_id`` may be emitted as int by the LLM; coerce to str.
+        - Top-level ``summary`` (max_length=600) may exceed; truncated.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        # Coerce flags[i].cycle_id to str if int
+        flags = parsed.get("flags", [])
+        if isinstance(flags, list):
+            for i, f in enumerate(flags):
+                if isinstance(f, dict) and "cycle_id" in f:
+                    if not isinstance(f["cycle_id"], str):
+                        old_val = f["cycle_id"]
+                        f["cycle_id"] = str(f["cycle_id"])
+                        all_fixes.append({
+                            "field": f"flags[{i}].cycle_id",
+                            "type": "type_coerced",
+                            "before": type(old_val).__name__,
+                            "after": "str",
+                        })
+
+        parsed, fixes = self._truncate_string_fields(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.cross_persona_auditor import CrossPersonaAuditorSanity
         return CrossPersonaAuditorSanity()

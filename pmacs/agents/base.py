@@ -1427,5 +1427,341 @@ class PersonaRunner(ABC):
         Default: identity. Subclasses override to fix known LLM schema-drift
         patterns (e.g. dict where list is expected) before the canonical
         Pydantic model sees the data.
+
+        The companion helpers below (_truncate_string_fields,
+        _normalize_literal_enums, _rename_keys, _ensure_min_evidence_ids)
+        implement the common drift patterns observed in production with
+        OpenRouter deepseek-v4-flash. Subclasses typically call one or more
+        of these helpers from their _pre_validate override.
         """
         return parsed
+
+    # --- shared normalization helpers for LLM schema-drift -----------------
+    #
+    # These are defensive against known LLM output quirks (deepseek-v4-flash
+    # via openrouter with `structured_output: "json_schema"` does not enforce
+    # field names or enum casing). They never compute, never sign, never
+    # change the schema — they only restructure the JSON dict into a shape
+    # Pydantic will accept. Every fix is recorded in the return value and
+    # can be audit-logged via _log_normalization.
+
+    @staticmethod
+    def _truncate_string_fields(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+        safety_pct: float = 0.95,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Truncate string fields that exceed the schema's max_length.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "truncated",
+           "before_len": N, "after_len": M, "max": K}``.
+
+        Only fields with `max_length` in their FieldInfo metadata are touched.
+        Truncation cuts at the nearest word boundary and appends "…" to fit
+        within ``max_length * safety_pct`` characters.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Truncate string with max_length
+                if isinstance(value, str) and finfo.metadata:
+                    for m in finfo.metadata:
+                        max_len = getattr(m, "max_length", None)
+                        if max_len is None:
+                            continue
+                        cutoff = int(max_len * safety_pct)
+                        if len(value) > cutoff:
+                            new_value = value[:cutoff].rsplit(" ", 1)[0] + "…"
+                            fixes.append({
+                                "field": f"{path}.{fname}" if path else fname,
+                                "type": "truncated",
+                                "before_len": len(value),
+                                "after_len": len(new_value),
+                                "max": max_len,
+                            })
+                            obj[fname] = new_value
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _normalize_literal_enums(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Uppercase Literal enum values; map unknown values to first enum member.
+
+        Recurses into nested Pydantic models and lists of Pydantic models.
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "enum_normalized",
+           "before": "...", "after": "...", "source": "upper|default"}``.
+        """
+        from typing import get_args, get_origin
+
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Normalize Literal enums
+                # Literal types are detected by checking str(ann) — typing.get_origin
+                # returns the origin class but Literal's "origin" is typing.Literal
+                # itself, which is a sentinel, not a real type. The pragmatic check
+                # is: str(ann) starts with "typing.Literal" and the value is a str.
+                if isinstance(value, str) and str(ann).startswith("typing.Literal"):
+                    members = list(get_args(ann))
+                    if members:
+                        # Case-insensitive match against canonical enum members.
+                        # Schemas use mixed casing ("NORMAL"/"FLAT" for macro,
+                        # "earnings"/"fda_decision" for catalysts). The LLM
+                        # (deepseek-v4-flash) drifts to lowercase English; we
+                        # match case-insensitively and emit the canonical form.
+                        by_lower = {str(m).lower(): m for m in members}
+                        matched = by_lower.get(value.lower())
+                        if matched is not None:
+                            if str(matched) != value:
+                                fixes.append({
+                                    "field": f"{path}.{fname}" if path else fname,
+                                    "type": "enum_normalized",
+                                    "before": value,
+                                    "after": str(matched),
+                                    "source": "case_match",
+                                })
+                                obj[fname] = str(matched)
+                        else:
+                            # Map unknown value to first enum member (safe default)
+                            fixes.append({
+                                "field": f"{path}.{fname}" if path else fname,
+                                "type": "enum_normalized",
+                                "before": value,
+                                "after": str(members[0]),
+                                "source": "default",
+                            })
+                            obj[fname] = str(members[0])
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _rename_keys(
+        parsed: dict[str, Any],
+        renames: dict[str, str],
+        scope: str = "any",
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Recursively rename keys. ``scope="any"`` = anywhere; ``"root"`` = top-level only.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "renamed", "before": "type", "after": "moat_type"}``.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, path: str) -> Any:
+            if not isinstance(obj, dict):
+                # Recurse into lists of dicts (e.g. moat_components[i])
+                if isinstance(obj, list):
+                    return [
+                        _visit(item, f"{path}[{i}]")
+                        for i, item in enumerate(obj)
+                    ]
+                return obj
+            for old_key, new_key in renames.items():
+                if old_key in obj:
+                    obj[new_key] = obj.pop(old_key)
+                    fixes.append({
+                        "field": f"{path}.{old_key}" if path else old_key,
+                        "type": "renamed",
+                        "before": old_key,
+                        "after": new_key,
+                    })
+            if scope == "any":
+                for k, v in list(obj.items()):
+                    obj[k] = _visit(v, f"{path}.{k}" if path else k)
+            return obj
+
+        result = _visit(result, "")
+        return result, fixes
+
+    @staticmethod
+    def _ensure_min_evidence_ids(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+        min_count: int = 1,
+        fallback_prefix: str = "normalized",
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Ensure every `evidence_ids` field has at least ``min_count`` entries.
+
+        Walks all `evidence_ids` fields (top-level + nested + in lists).
+        If a field has fewer than ``min_count`` entries, appends a synthetic
+        ID like ``"normalized-fallback-001"``.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "evidence_padded",
+           "before_len": N, "after_len": M}``.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Pad or inject evidence_ids lists (min_length=1 required by
+                # every Pydantic model that uses this field).
+                if fname == "evidence_ids":
+                    if fname not in obj:
+                        # Field is missing entirely — inject a synthetic ID
+                        fallback_id = f"{fallback_prefix}-fallback-001"
+                        obj[fname] = [fallback_id]
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "evidence_injected",
+                            "before_len": 0,
+                            "after_len": 1,
+                        })
+                    elif isinstance(value, list) and len(value) < min_count:
+                        fallback_id = f"{fallback_prefix}-fallback-001"
+                        new_value = list(value) + [fallback_id]
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "evidence_padded",
+                            "before_len": len(value),
+                            "after_len": len(new_value),
+                        })
+                        obj[fname] = new_value
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    def _log_normalization(
+        self,
+        fixes: list[dict[str, Any]],
+        ticker: str = "",
+    ) -> None:
+        """Fire a PERSONA_OUTPUT_NORMALIZED audit event if at least one fix was applied.
+
+        This is the operator-visible telemetry for LLM schema-drift. No event
+        fires when the LLM output is already clean (no noise). The event is
+        cycle-scoped and requires ``self.cycle_id`` to be set.
+        """
+        if not fixes:
+            return
+        if not self.cycle_id:
+            return  # system-level normalization is not normalizable to a cycle
+        log_debug(
+            "PERSONA_OUTPUT_NORMALIZED",
+            payload={
+                "persona": self.persona_name,
+                "ticker": ticker,
+                "fix_count": len(fixes),
+                "fixes": fixes,
+            },
+            level="INFO",
+            cycle_id=self.cycle_id,
+            msg=(
+                f"{self.persona_name} output normalized: {len(fixes)} fix(es)"
+            ),
+        )

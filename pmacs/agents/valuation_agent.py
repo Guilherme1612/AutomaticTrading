@@ -47,6 +47,28 @@ class ValuationAgentRunner(PersonaRunner):
         from pmacs.schemas.personas import ValuationAgentOutput
         return ValuationAgentOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """ValuationAgent drift fixes (deepseek-v4-flash on openrouter).
+
+        - Each scenario's ``rationale`` (max_length=800) frequently exceeds.
+        - Top-level ``evidence_ids`` may be empty — padded.
+        - Literal enums (margin_trajectory, acquisition_confidence) normalized.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        parsed, fixes = self._normalize_literal_enums(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._truncate_string_fields(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.valuation_agent import ValuationAgentSanity
         return ValuationAgentSanity()

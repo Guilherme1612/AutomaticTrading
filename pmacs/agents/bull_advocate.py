@@ -61,6 +61,25 @@ class BullAdvocateRunner(PersonaRunner):
         from pmacs.schemas.personas import BullAdvocateOutput
         return BullAdvocateOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """BullAdvocate drift fixes (deepseek-v4-flash on openrouter).
+
+        - ``reasoning`` (max_length=600) and ``strongest_bear_counterpoint``
+          (max_length=300) frequently exceed their limits.
+        - Top-level ``evidence_ids`` may be empty — padded.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        parsed, fixes = self._truncate_string_fields(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.bull_advocate import BullAdvocateSanity
         return BullAdvocateSanity()

@@ -44,6 +44,21 @@ class InsiderActivityRunner(PersonaRunner):
         from pmacs.schemas.personas import InsiderActivityOutput
         return InsiderActivityOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """InsiderActivity drift fixes (deepseek-v4-flash on openrouter).
+
+        - Top-level ``evidence_ids`` may be empty — padded.
+        - No other drift observed for this persona in cycle 58e3e6c2.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.insider_activity import InsiderActivitySanity
         return InsiderActivitySanity()

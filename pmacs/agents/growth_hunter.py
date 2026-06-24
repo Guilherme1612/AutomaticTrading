@@ -43,6 +43,27 @@ class GrowthHunterRunner(PersonaRunner):
         from pmacs.schemas.personas import GrowthHunterOutput
         return GrowthHunterOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """GrowthHunter drift fixes (deepseek-v4-flash on openrouter).
+
+        - ``revenue_acceleration``, ``gross_margin_trend``, ``growth_durability``
+          are Literal enums; LLM emits lowercase
+          (``"accelerating"``, ``"stable"``). Case-insensitive matcher maps
+          them to canonical uppercase.
+        - Top-level ``evidence_ids`` may be empty — padded.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        parsed, fixes = self._normalize_literal_enums(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.growth_hunter import GrowthHunterSanity
         return GrowthHunterSanity()

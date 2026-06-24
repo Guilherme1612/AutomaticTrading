@@ -255,7 +255,27 @@ def enforce_budgets(
 
 
 def _get_period_total(sqlite_conn, period: str) -> float:
-    """Get current total cost for a budget period."""
+    """Get current total cost for a budget period.
+
+    Lazily rolls over stale daily/monthly periods BEFORE reading, so the cap
+    always applies to the CURRENT period's spend — not spend accumulated across
+    days/months because the scheduled roller never ran. ``period_roller.check_and_roll``
+    has no scheduler/caller in the codebase (its docstring claims "called by
+    orchestrator at cycle end" but the wiring was never added), so without this
+    lazy rollover a stale "today" bucket accumulates multi-day spend and trips the
+    daily cap as a false breach (root cause of the 2026-06-24 CYCLE_BLOCKED_BUDGET_DAILY
+    at $2.04 — ~8 days of ~$0.25/day real spend piled into one never-rolled bucket).
+
+    Idempotent: ``check_and_roll`` is a no-op once period_start matches the
+    current day/month, so calling it on every read is cheap. Rollover failure is
+    swallowed so a cap check never crashes — worst case it reads a stale total
+    (the pre-fix behavior) instead of blocking.
+    """
+    try:
+        from pmacs.billing.period_roller import check_and_roll
+        check_and_roll(sqlite_conn)
+    except Exception:
+        pass
     row = sqlite_conn.execute(
         "SELECT total_cost_usd FROM budget_state WHERE period = ?",
         [period],

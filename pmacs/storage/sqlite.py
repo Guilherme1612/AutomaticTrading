@@ -444,18 +444,27 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             [month_start, now],
         )
     else:
-        # Refresh "today" period_start if it's stale (from a previous day)
-        conn.execute(
-            "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
-            "WHERE period = 'today' AND period_start != ?",
-            [today, now, today],
-        )
-        # Refresh "this_month" period_start if stale
-        conn.execute(
-            "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
-            "WHERE period = 'this_month' AND period_start != ?",
-            [month_start, now, month_start],
-        )
+        # Roll over stale daily/monthly periods — ARCHIVE the accumulated spend
+        # to budget_history before resetting (period_roller.check_and_roll), rather
+        # than silently wiping total_cost_usd to 0. Previously this reset spend
+        # without archiving, losing the record every time the app restarted on a
+        # new day. No-op when period_start already matches the current day/month.
+        try:
+            from pmacs.billing.period_roller import check_and_roll
+            check_and_roll(conn)
+        except Exception:
+            # Fallback to the original behavior if the roller is unavailable —
+            # never let a rollover failure block DB initialization.
+            conn.execute(
+                "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
+                "WHERE period = 'today' AND period_start != ?",
+                [today, now, today],
+            )
+            conn.execute(
+                "UPDATE budget_state SET period_start = ?, total_cost_usd = 0.0, updated_at = ? "
+                "WHERE period = 'this_month' AND period_start != ?",
+                [month_start, now, month_start],
+            )
 
     # memos migrations — memo quality scoring columns
     if not _column_exists(conn, "memos", "memo_score"):

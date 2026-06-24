@@ -163,7 +163,6 @@ async def universe_page(request: Request):
             name="universe.html",
             context={
                 "page": "universe",
-                "mode": "SHADOW + PAPER",
                 "tickers": tickers,
                 "groups": ["All", "Watchlist", "Portfolio", "Sectors"],
             },
@@ -174,7 +173,6 @@ async def universe_page(request: Request):
             name="universe.html",
             context={
                 "page": "universe",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("universe", exc),
             },
         )

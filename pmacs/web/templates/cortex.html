@@ -110,7 +110,7 @@
     <div class="card card-elevated {{ 'card-accent-green' if ns.all_healthy else 'card-accent-amber' }} reveal" data-stagger>
         <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if ns.all_healthy else 'bg-amber-500' }}"></span>
+                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if ns.all_healthy else 'bg-warning' }}"></span>
                 <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Cross-DB Integrity</h3>
             </div>
             {% if ns.all_healthy %}
@@ -136,7 +136,7 @@
     <div class="card card-elevated card-accent-blue reveal" data-stagger>
         <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <span class="w-2 h-2 rounded-full bg-accent"></span>
                 <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Process Status</h3>
             </div>
             <span class="text-xs text-text-muted font-mono bg-surface-sunken/50 px-2 py-0.5 rounded-lg">{{ processes | selectattr('status', '==', 'running') | list | length }}/{{ processes | length }}</span>
@@ -168,7 +168,7 @@
     <!-- (2,1) Disk / Clock / Network panel with gauge arcs -->
     <div class="card card-elevated card-accent-blue reveal" data-stagger>
         <div class="flex items-center gap-2 mb-4">
-            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+            <span class="w-2 h-2 rounded-full bg-accent"></span>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Disk / Clock / Network</h3>
         </div>
 
@@ -285,7 +285,7 @@
     <div class="card card-elevated {{ 'card-accent-green' if model_integrity.hash_verified else 'card-accent-amber' }} reveal" data-stagger>
         <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if model_integrity.hash_verified else 'bg-amber-500' }}"></span>
+                <span class="w-2 h-2 rounded-full {{ 'bg-positive' if model_integrity.hash_verified else 'bg-warning' }}"></span>
                 <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Model Integrity</h3>
             </div>
             {% if model_integrity.hash_verified %}

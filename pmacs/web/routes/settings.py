@@ -172,7 +172,6 @@ async def settings_page(request: Request):
             name="settings.html",
             context={
                 "page": "settings",
-                "mode": "SHADOW + PAPER",
                 "config": config,
                 "mutation_candidates": mutation_candidates,
                 "recent_mutations": recent_mutations,
@@ -195,7 +194,6 @@ async def settings_page(request: Request):
             name="settings.html",
             context={
                 "page": "settings",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("settings", exc),
             },
         )

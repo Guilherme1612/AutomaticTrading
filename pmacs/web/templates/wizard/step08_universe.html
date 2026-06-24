@@ -30,7 +30,7 @@
                 <label for="add_tickers" class="text-xs text-text-secondary block mb-1">Add custom tickers (comma-separated)</label>
                 <input type="text" name="add_tickers" id="add_tickers"
                        placeholder="e.g., AMD, NFLX, CRM"
-                       class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                       class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-accent focus:ring-1 focus:ring-accent-ring outline-none"
                        autocomplete="off" spellcheck="false">
             </div>
 
@@ -59,7 +59,7 @@
 
         <div class="flex justify-end">
             <button type="submit"
-                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                    class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             {% if universe_result and universe_result.get("all_ok") %}Next{% else %}Validate &amp; Continue{% endif %}
             </button>
         </div>

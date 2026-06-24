@@ -8,7 +8,7 @@
     <script src="/static/vendor/htmx.min.js"></script>
     <script src="/static/vendor/d3.min.js" defer></script>
     <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <style>
         /* Light mode tokens — Source.md §13.1 + extended design system */
         :root {
@@ -24,8 +24,10 @@
             --text-secondary: #334155;
             --text-muted: #475569;
             --accent: #2563eb;
+            --accent-text: #2563eb;
             --positive: #166534;
             --negative: #b91c1c;
+            --negative-text: #b91c1c;
             --warning: #92400e;
             --strong-buy: #166534;
             --crucible: #7e22ce;
@@ -70,16 +72,18 @@
             --text-primary: #f1f5f9;
             --text-secondary: #cbd5e1;
             --text-muted: #94a3b8;
-            --accent: #60a5fa;
+            --accent: #2563eb;
+            --accent-text: #60a5fa;
             --positive: #4ade80;
-            --negative: #f87171;
+            --negative: #b91c1c;
+            --negative-text: #f87171;
             --warning: #fbbf24;
             --strong-buy: #16a34a;
             --crucible: #c084fc;
-            --accent-soft: rgba(96,165,250,0.12);
-            --accent-ring: rgba(96,165,250,0.3);
+            --accent-soft: rgba(37,99,235,0.12);
+            --accent-ring: rgba(37,99,235,0.3);
             --positive-soft: rgba(74,222,128,0.12);
-            --negative-soft: rgba(248,113,113,0.12);
+            --negative-soft: rgba(185,28,28,0.12);
             --warning-soft: rgba(251,191,36,0.14);
             --crucible-soft: rgba(192,132,252,0.12);
             --viz-blue: #60a5fa;
@@ -119,7 +123,7 @@
     <!-- Top bar: glassmorphic -->
     <header class="fixed top-0 left-0 right-0 h-14 border-b border-border-subtle flex items-center px-4 lg:px-6 z-40" role="banner">
         <!-- Hamburger (mobile only) -->
-        <button type="button" onclick="toggleMobileSidebar()" class="lg:hidden mr-3 p-2 rounded-xl text-text-muted hover:text-text-primary hover:bg-surface-sunken transition-colors flex-shrink-0" aria-label="Toggle navigation">
+        <button type="button" onclick="toggleMobileSidebar()" class="lg:hidden mr-3 p-2 rounded-xl text-text-muted hover:text-text-primary hover:bg-surface-sunken transition-colors flex-shrink-0" aria-label="Toggle navigation" data-responsive-hidden="desktop">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
             </svg>
@@ -148,7 +152,8 @@
         <button id="theme-toggle"
                 onclick="(function(){var t=localStorage.getItem('pmacs-theme')==='dark'?'light':'dark';localStorage.setItem('pmacs-theme',t);document.documentElement.classList.toggle('dark',t==='dark');document.getElementById('theme-toggle').textContent=t==='dark'?'☀':'🌙';})()"
                 class="mr-2 px-3 py-1.5 text-sm rounded-xl bg-surface-sunken hover:bg-border-subtle transition-colors text-text-muted"
-                title="Toggle dark/light mode">
+                title="Toggle dark/light mode"
+                data-responsive-hidden="mobile-small">
             🌙
         </button>
         <button type="button" id="kill-switch-btn"
@@ -227,7 +232,7 @@
     </main>
 
     <!-- Cmd-K command palette -->
-    <div id="cmd-k" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" role="dialog" aria-label="Command palette" aria-modal="true">
+    <div id="cmd-k" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" role="dialog" aria-label="Command palette" aria-modal="true" inert>
         <div class="w-full max-w-lg rounded-2xl border border-border-subtle overflow-hidden" style="box-shadow: 0 24px 80px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.08);">
             <div class="bg-surface-glass backdrop-blur-xl">
                 <div class="flex items-center gap-3 px-5 py-4 border-b border-border-subtle">
@@ -246,7 +251,7 @@
     </div>
 
     <!-- Keyboard shortcut overlay -->
-    <div id="shortcut-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-label="Keyboard shortcuts" aria-modal="true">
+    <div id="shortcut-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-label="Keyboard shortcuts" aria-modal="true" inert>
         <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-2xl border border-border-subtle p-8">
             <div class="flex items-center justify-between mb-8">
                 <h3 class="text-lg font-semibold text-text-primary">Keyboard Shortcuts</h3>
@@ -302,7 +307,7 @@
     </div>
 
     <!-- Blocking modal -->
-    <div id="blocking-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="alertdialog" aria-modal="true">
+    <div id="blocking-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="alertdialog" aria-modal="true" inert>
         <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-md border border-negative/30 p-8">
             <h3 id="blocking-modal-title" class="text-lg font-semibold text-negative mb-3"></h3>
             <p id="blocking-modal-message" class="text-sm text-text-secondary mb-6 leading-relaxed"></p>
@@ -311,7 +316,7 @@
     </div>
 
     <!-- Typed-confirm modal (Source.md §13.2 — destructive operator-confirmed actions) -->
-    <div id="confirm-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div id="confirm-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" inert>
         <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-md border border-border-subtle p-8">
             <h3 id="confirm-modal-title" class="text-lg font-semibold text-text-primary mb-2"></h3>
             <p id="confirm-modal-description" class="text-sm text-text-secondary mb-3 leading-relaxed"></p>
@@ -348,7 +353,7 @@
         <span id="sse-status" class="text-[9px] font-mono text-text-muted">Connecting…</span>
     </div>
 
-    <script src="/static/app.js?v=8"></script>
+    <script src="/static/app.js?v=9"></script>
     <script src="/static/pmacs-anim.js?v=4"></script>
     <script>
         (function() {

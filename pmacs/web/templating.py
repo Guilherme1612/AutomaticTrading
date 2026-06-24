@@ -6,6 +6,29 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
+def _current_mode_context(request) -> dict:
+    """Inject the real operating mode into every rendered page.
+
+    The header badge in base.html relies on ``mode``. Several routes used to
+    hardcode ``SHADOW + PAPER`` or omit the variable entirely, leaving the badge
+    empty or stale. This processor reads the latest mode_history row once per
+    request and falls back to the install default when the DB is unavailable.
+    """
+    try:
+        from pmacs.web.config import get_config
+        from pmacs.web import data as _data_layer
+
+        cfg = get_config()
+        db = _data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            mode = _data_layer.get_current_mode(db)
+        finally:
+            db.close()
+    except Exception:
+        mode = "SHADOW + PAPER"
+    return {"mode": mode}
+
+
 def _format_xy_poly(point):
     """Render an ``{"x", "y", ...}`` point as an SVG polyline coordinate pair.
 
@@ -22,4 +45,4 @@ _jinja_env = Environment(
     autoescape=select_autoescape(["html", "htm"]),
 )
 _jinja_env.filters["format_xy_poly"] = _format_xy_poly
-templates = Jinja2Templates(env=_jinja_env)
+templates = Jinja2Templates(env=_jinja_env, context_processors=[_current_mode_context])

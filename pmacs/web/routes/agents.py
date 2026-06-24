@@ -153,7 +153,6 @@ async def agents_page(request: Request):
             name="agents.html",
             context={
                 "page": "agents",
-                "mode": "SHADOW + PAPER",
                 "personas": enriched_personas,
                 "queue": queue,
                 "current_ticker": current_ticker,
@@ -176,7 +175,6 @@ async def agents_page(request: Request):
             name="agents.html",
             context={
                 "page": "agents",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("agents", exc),
             },
         )

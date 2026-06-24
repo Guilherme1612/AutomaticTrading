@@ -84,6 +84,20 @@ body::before {
     color: var(--text-muted);
 }
 
+/* Lighter text variants for dark-mode WCAG AA on dark surfaces */
+.dark .text-accent {
+    color: var(--accent-text);
+}
+
+.dark .text-negative {
+    color: var(--negative-text);
+}
+
+/* KPI card violet tint (Source.md §13.1 data-viz palette) */
+.border-kpi-violet {
+    border-color: color-mix(in srgb, var(--viz-violet) 10%, transparent);
+}
+
 /* ─── Reduced Motion (Source.md §13.7) ─────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
@@ -283,7 +297,7 @@ body::before {
 
 .ticker-autocomplete-input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 16px rgba(37,99,235,0.08);
+    box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 16px var(--accent-soft);
 }
 
 .ticker-autocomplete-dropdown {
@@ -791,7 +805,7 @@ header {
 .card-stat.card-accent-blue::after  { background: radial-gradient(circle, var(--accent-soft), transparent); }
 .card-stat.card-accent-green::after { background: radial-gradient(circle, var(--positive-soft), transparent); }
 .card-stat.card-accent-red::after   { background: radial-gradient(circle, var(--negative-soft), transparent); }
-.card-stat.card-accent-amber::after { background: radial-gradient(circle, rgba(245,158,11,0.12), transparent); }
+.card-stat.card-accent-amber::after { background: radial-gradient(circle, var(--warning-soft), transparent); }
 
 /* Interactive card with smooth lift */
 .card-interactive {
@@ -1479,15 +1493,15 @@ textarea:focus-visible {
 
 /* Subtle lift on running state */
 [data-persona].card-accent-blue {
-    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.08),
-                0 0 0 1px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 2px 12px var(--accent-soft),
+                0 0 0 1px var(--accent-soft);
 }
 
 /* Completion glow pulse */
 @keyframes complete-glow {
-    0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.2); }
-    50% { box-shadow: 0 0 16px 4px rgba(34, 197, 94, 0.12); }
-    100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive) 20%, transparent); }
+    50% { box-shadow: 0 0 16px 4px color-mix(in srgb, var(--positive) 12%, transparent); }
+    100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 .persona-complete-glow {
@@ -1510,11 +1524,11 @@ textarea:focus-visible {
 }
 
 [data-pipeline-step]:has(.bg-accent.anim-breathing) {
-    background-color: rgba(59, 130, 246, 0.04);
+    background-color: var(--accent-soft);
 }
 
 [data-pipeline-step]:has(.bg-positive) {
-    background-color: rgba(34, 197, 94, 0.03);
+    background-color: var(--positive-soft);
 }
 
 /* Result card entrance */

@@ -10,7 +10,7 @@
         <div class="bg-surface-elevated border border-border rounded-lg p-6 mb-6 space-y-5">
 
             <!-- Local llama-server -->
-            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="llama_server">
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-accent transition-colors provider-card" data-provider="llama_server">
                 <input type="radio" name="provider" value="llama_server"
                        class="mt-1 accent-blue-500 provider-radio"
                        checked
@@ -22,7 +22,7 @@
             </label>
 
             <!-- Anthropic API -->
-            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="anthropic">
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-accent transition-colors provider-card" data-provider="anthropic">
                 <input type="radio" name="provider" value="anthropic"
                        class="mt-1 accent-blue-500 provider-radio"
                        onchange="toggleProviderFields()">
@@ -33,7 +33,7 @@
             </label>
 
             <!-- OpenAI API -->
-            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="openai">
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-accent transition-colors provider-card" data-provider="openai">
                 <input type="radio" name="provider" value="openai"
                        class="mt-1 accent-blue-500 provider-radio"
                        onchange="toggleProviderFields()">
@@ -44,7 +44,7 @@
             </label>
 
             <!-- OpenRouter API -->
-            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-blue-500/50 transition-colors provider-card" data-provider="openrouter">
+            <label class="flex items-start gap-3 p-4 border border-border rounded-lg cursor-pointer hover:border-accent transition-colors provider-card" data-provider="openrouter">
                 <input type="radio" name="provider" value="openrouter"
                        class="mt-1 accent-blue-500 provider-radio"
                        onchange="toggleProviderFields()">
@@ -62,7 +62,7 @@
                     <p class="text-xs text-text-muted mb-2">e.g. gpt-4o, claude-sonnet-4-20250514, openai/gpt-4o, google/gemini-2.0-flash</p>
                     <input type="text" name="api_model" id="api_model"
                            placeholder="gpt-4o"
-                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-accent focus:ring-1 focus:ring-accent-ring outline-none">
                 </div>
 
                 <!-- API Key -->
@@ -71,7 +71,7 @@
                     <p class="text-xs text-text-muted mb-2">Stored securely in system keychain. Never logged or exposed.</p>
                     <input type="password" name="api_key" id="api_key"
                            placeholder="sk-..."
-                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-accent focus:ring-1 focus:ring-accent-ring outline-none"
                            autocomplete="off">
                 </div>
 
@@ -81,7 +81,7 @@
                     <p class="text-xs text-text-muted mb-2">Override API endpoint. Leave empty for provider default.</p>
                     <input type="text" name="base_url" id="base_url"
                            placeholder="https://api.openai.com/v1"
-                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                           class="w-full px-3 py-2 text-sm bg-surface border border-border rounded text-text-primary font-mono focus:border-accent focus:ring-1 focus:ring-accent-ring outline-none">
                 </div>
             </div>
 
@@ -101,7 +101,7 @@
 
         <div class="flex justify-end">
             <button type="submit"
-                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                    class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
                 Next
             </button>
         </div>

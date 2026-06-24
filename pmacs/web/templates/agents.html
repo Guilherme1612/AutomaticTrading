@@ -85,7 +85,7 @@
 <div id="result-cards-section" class="hidden mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="w-2 h-2 rounded-full bg-positive"></span>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Completed</h3>
             <span id="result-cards-counter" class="px-2 py-0.5 text-[10px] font-mono bg-surface-sunken rounded-lg text-text-muted"></span>
         </div>
@@ -427,7 +427,7 @@
             {% set total = [vc.STRONG_BUY + vc.BUY + vc.HOLD + vc.SKIP, 1]|max %}
             <div class="bg-positive transition-all duration-500" style="width: {{ (vc.STRONG_BUY / total * 100)|int }}%" title="{{ vc.STRONG_BUY }} STRONG_BUY"></div>
             <div class="bg-accent transition-all duration-500" style="width: {{ (vc.BUY / total * 100)|int }}%" title="{{ vc.BUY }} BUY"></div>
-            <div class="bg-amber-400 transition-all duration-500" style="width: {{ (vc.HOLD / total * 100)|int }}%" title="{{ vc.HOLD }} HOLD"></div>
+            <div class="bg-warning transition-all duration-500" style="width: {{ (vc.HOLD / total * 100)|int }}%" title="{{ vc.HOLD }} HOLD"></div>
             <div class="bg-negative transition-all duration-500" style="width: {{ (vc.SKIP / total * 100)|int }}%" title="{{ vc.SKIP }} SKIP"></div>
         </div>
         <div class="flex justify-between mt-1.5">
@@ -440,7 +440,7 @@
                 <span class="text-[10px] font-mono text-text-muted">BUY {{ vc.BUY }}</span>
             </div>
             <div class="flex items-center gap-1">
-                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span class="w-2 h-2 rounded-full bg-warning"></span>
                 <span class="text-[10px] font-mono text-text-muted">HOLD {{ vc.HOLD }}</span>
             </div>
             <div class="flex items-center gap-1">
@@ -487,7 +487,7 @@
 <!-- Bottom section: decision summary -->
 <div class="card card-elevated reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+        <span class="w-2 h-2 rounded-full bg-positive"></span>
         <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision Summary</h3>
     </div>
     <div id="decision-summary-content">
@@ -992,7 +992,7 @@ function _updateReadyPanelActive(ticker) {
     var panel = document.getElementById("current-ticker-panel");
     if (tickerEl) { tickerEl.textContent = ticker; tickerEl.classList.remove("hidden"); }
     if (btn) btn.classList.add("hidden");
-    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-blue-500 anim-breathing";
+    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-accent anim-breathing";
     if (heading) heading.textContent = "Current Ticker";
     if (panel) panel.classList.add("card-accent-blue");
 }
@@ -1007,7 +1007,7 @@ function _resetReadyPanel() {
     var lastTicker = tickerEl ? tickerEl.textContent.trim() : "";
     if (lastTicker) {
         // Keep the ticker visible but change styling to "last analyzed" state
-        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-green-500";
+        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-positive";
         if (heading) heading.textContent = "Last Analyzed";
         if (tickerEl) tickerEl.className = "font-mono text-2xl font-bold text-text-secondary truncate max-w-xs";
         if (btn) { btn.classList.remove("hidden"); btn.textContent = "Re-analyze"; }

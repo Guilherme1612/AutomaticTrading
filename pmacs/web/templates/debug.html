@@ -14,12 +14,12 @@
 <!-- Filter bar -->
 <div class="card card-elevated p-4 mb-8 reveal">
     <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-3 sm:gap-4">
+        <div class="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
             <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-accent anim-breathing"></span>
                 <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Event Stream</h3>
             </div>
-            <div class="flex gap-1.5 bg-surface-sunken/50 rounded-xl p-0.5 overflow-x-auto" tabindex="0" style="-webkit-overflow-scrolling:touch">
+            <div class="flex gap-1.5 bg-surface-sunken/50 rounded-xl p-0.5 overflow-x-auto min-w-0" tabindex="0" style="-webkit-overflow-scrolling:touch">
                 {% for chip in filter_chips %}
                 <button type="button" class="px-3 py-1.5 text-xs rounded-xl font-mono transition-colors whitespace-nowrap
                                {{ 'bg-accent-soft text-accent font-medium' if loop.first else 'text-text-secondary hover:bg-surface-sunken' }}"
@@ -32,9 +32,8 @@
         <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <input type="text" placeholder="Search events..."
                    data-page-search
-                   class="px-3 py-1.5 text-xs bg-surface-elevated/70 border border-border rounded-lg text-text-primary placeholder:text-text-muted/80 focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors"
-                   oninput="searchEvents(this.value)"
-                   class="px-3 py-1.5 text-sm border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors">
+                   class="px-3 py-1.5 text-sm bg-surface-elevated/70 border border-border rounded-xl text-text-primary placeholder:text-text-muted/80 focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors"
+                   oninput="searchEvents(this.value)">
             <span id="event-count" class="text-xs text-text-muted font-mono">{{ (events or recent_events) | length }} events{% if not events and recent_events %} (historical){% endif %}</span>
             <button type="button" class="px-4 py-1.5 text-sm border border-border rounded-xl hover:bg-surface-sunken transition-colors font-medium"
                     onclick="clearEvents()">

@@ -213,7 +213,6 @@ async def pipeline_page(request: Request):
             name="pipeline.html",
             context={
                 "page": "pipeline",
-                "mode": "SHADOW + PAPER",
                 "columns": columns,
                 "queue_size": len(queue),
                 "cycles_today": len(decisions),
@@ -230,7 +229,6 @@ async def pipeline_page(request: Request):
             name="pipeline.html",
             context={
                 "page": "pipeline",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("pipeline", exc),
             },
         )

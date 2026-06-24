@@ -796,7 +796,7 @@ function resetProgress() {
     <div class="space-y-3 mb-5">
         {% for candidate in mutation_candidates %}
         {% if candidate.status == 'PROPOSED' %}
-        <div class="p-4 rounded-xl border border-purple-500/20 bg-crucible-soft">
+        <div class="p-4 rounded-xl border border-crucible/20 bg-crucible-soft">
             <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-2">
                     <span class="text-sm font-mono font-semibold text-text-primary">{{ candidate.dimension }}</span>
@@ -839,7 +839,7 @@ function resetProgress() {
                 {% if mut.status == 'active' %}
                 <span class="text-[10px] px-1.5 py-0.5 rounded-md bg-positive-soft text-positive font-medium">Active</span>
                 <button type="button" data-candidate-id="{{ mut.candidate_id }}" onclick="rollbackMutation(this.dataset.candidateId)"
-                        class="px-2 py-0.5 text-[10px] border border-red-200 text-negative rounded-lg hover:bg-negative-soft transition-colors font-medium">Rollback</button>
+                        class="px-2 py-0.5 text-[10px] border border-negative/30 text-negative rounded-lg hover:bg-negative-soft transition-colors font-medium">Rollback</button>
                 {% elif mut.status == 'rolled_back' %}
                 <span class="text-[10px] px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted font-medium">Rolled back</span>
                 {% endif %}
@@ -1143,7 +1143,17 @@ function testConnection() {
 // On page load, probe every provider so badges show real 'Working' / 'Invalid key'
 // / 'No budget' instead of the unverified 'Key set' default. This makes a stale
 // key (401) visibly distinct from a real, working one.
-testAllProviders();
+// Defer until the CSRF cookie is committed; in headless / fast environments the
+// inline script can run before the Set-Cookie header has been applied.
+function _runTestAllWhenReady() {
+    var token = (typeof getCsrfToken === 'function') ? getCsrfToken() : null;
+    if (!token) {
+        setTimeout(_runTestAllWhenReady, 200);
+        return;
+    }
+    testAllProviders();
+}
+_runTestAllWhenReady();
 </script>
 
 <script>

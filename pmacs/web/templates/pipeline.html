@@ -142,8 +142,8 @@
             {# -- Column header -- #}
             <div class="flex items-center justify-between mb-3 px-1">
                 <div class="flex items-center gap-1.5">
-                    <span class="text-{{ col_colors.get(col.verdict, 'text-primary') }}">{{ col_icons.get(col.verdict, '')|safe }}</span>
-                    <h4 class="text-[11px] font-bold uppercase tracking-widest text-{{ col_colors.get(col.verdict, 'text-primary') }}">
+                    <span class="text-text-primary">{{ col_icons.get(col.verdict, '')|safe }}</span>
+                    <h4 class="text-[11px] font-bold uppercase tracking-widest text-text-primary">
                         {{ col.verdict | replace('_', ' ') }}
                     </h4>
                 </div>

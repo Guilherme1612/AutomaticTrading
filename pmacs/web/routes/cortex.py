@@ -53,7 +53,6 @@ async def cortex_page(request: Request):
             name="cortex.html",
             context={
                 "page": "cortex",
-                "mode": current_mode,
                 "audit_chain": cortex_data["audit_chain"],
                 "cross_db": cortex_data["cross_db"],
                 "processes": cortex_data["processes"],
@@ -71,7 +70,6 @@ async def cortex_page(request: Request):
             name="cortex.html",
             context={
                 "page": "cortex",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("cortex", exc),
             },
         )

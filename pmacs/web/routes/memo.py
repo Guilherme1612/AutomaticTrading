@@ -155,7 +155,6 @@ async def memo_page(request: Request, ticker: str):
                 name="memo.html",
                 context={
                     "page": "memo",
-                    "mode": current_mode,
                     "ticker": ticker,
                     "not_analyzed": True,
                 },
@@ -237,7 +236,6 @@ async def memo_page(request: Request, ticker: str):
             name="memo.html",
             context={
                 "page": "memo",
-                "mode": "SHADOW + PAPER",
                 "ticker": ticker,
                 "error": data_layer.build_error_context("memo", exc),
             },

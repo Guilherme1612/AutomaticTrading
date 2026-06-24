@@ -379,7 +379,7 @@
 {% macro kpi_card(label, value, kind="nrr", note="", approx=false) -%}
     {%- set has_value = value is not none -%}
     {%- set tone = tone_class(value, kind) -%}
-    <div class="rounded-xl bg-surface-sunken/40 p-4 border border-violet-500/10">
+    <div class="rounded-xl bg-surface-sunken/40 p-4 border border-kpi-violet">
         <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">{{ label }}</div>
         <div class="flex items-baseline gap-2">
             <div class="text-2xl font-bold tabular-nums {{ tone if has_value else 'text-text-muted' }}">
@@ -498,7 +498,7 @@
 {%- if sk.rule_of_40 is not none -%}{%- set _ = disclosed.append('rule40') -%}{%- endif -%}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="saas-heading">
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+        <span class="w-2 h-2 rounded-full bg-viz-violet"></span>
         <h2 id="saas-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">SaaS / subscription KPIs</h2>
         <span class="text-[10px] text-text-muted ml-auto">Extracted from stored evidence text</span>
     </div>
@@ -657,7 +657,7 @@
 {%- endif -%}
 <section class="card card-elevated mb-6 reveal" aria-labelledby="tech-heading">
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 id="tech-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Technical</h2>
         <span class="text-[10px] text-text-muted ml-auto">Price, moving averages, momentum &amp; 52-week positioning</span>
     </div>

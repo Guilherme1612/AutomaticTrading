@@ -136,7 +136,6 @@ def _gather_dashboard_context(cfg) -> dict:
         portfolio_value = initial_capital + unrealized_pnl
 
     return {
-        "mode": current_mode,
         "portfolio_value": portfolio_value,
         "day_change_pct": risk_metrics.get("day_change_pct", 0.0),
         "positions": positions,
@@ -197,7 +196,6 @@ async def dashboard_page(request: Request):
             name="dashboard.html",
             context={
                 "page": "dashboard",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("dashboard", exc),
             },
         )

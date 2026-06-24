@@ -86,27 +86,27 @@ var PMACS_SANKEY = (function () {
 
             if (isComplete) {
                 var resultColor = getResultColor(isResult);
-                stageEl.className += " border-green-300 bg-green-50";
+                stageEl.className += " border-positive bg-positive-soft";
                 if (prefersReducedMotion) {
                     stageEl.style.opacity = "1";
                 }
             } else if (isPending) {
-                stageEl.className += " border-blue-300 bg-blue-50 animate-pulse";
+                stageEl.className += " border-accent bg-accent-soft animate-pulse";
             } else {
-                stageEl.className += " border-zinc-200 bg-zinc-50";
+                stageEl.className += " border-border bg-surface-sunken";
             }
 
             // Stage badge
             var badge = document.createElement("div");
             badge.className = "w-8 h-8 rounded-full flex items-center justify-center text-sm font-mono font-semibold ";
             if (isComplete) {
-                badge.className += "bg-green-600 text-white";
+                badge.className += "bg-positive text-white";
                 badge.textContent = "\u2713";
             } else if (isPending) {
-                badge.className += "bg-blue-600 text-white";
+                badge.className += "bg-accent text-white";
                 badge.textContent = stage.icon;
             } else {
-                badge.className += "bg-zinc-300 text-zinc-600";
+                badge.className += "bg-surface-sunken text-text-secondary";
                 badge.textContent = stage.icon;
             }
             badge.setAttribute("aria-label", stage.label + (isComplete ? " (complete)" : isPending ? " (running)" : " (pending)"));
@@ -132,7 +132,7 @@ var PMACS_SANKEY = (function () {
             // Arrow between stages
             if (idx < stages.length - 1) {
                 var arrow = document.createElement("div");
-                arrow.className = "text-zinc-400 text-lg flex-shrink-0";
+                arrow.className = "text-text-muted text-lg flex-shrink-0";
                 arrow.setAttribute("aria-hidden", "true");
                 arrow.textContent = "\u2192";
                 wrapper.appendChild(arrow);
@@ -157,13 +157,13 @@ var PMACS_SANKEY = (function () {
     }
 
     function getResultColor(result) {
-        if (!result) return "text-zinc-500";
+        if (!result) return "text-text-muted";
         var r = result.toUpperCase();
-        if (r.indexOf("STRONG_BUY") >= 0 || r.indexOf("BUY") >= 0) return "text-green-600";
-        if (r.indexOf("HOLD") >= 0) return "text-amber-500";
-        if (r.indexOf("SKIP") >= 0) return "text-red-500";
-        if (r.indexOf("ABORT") >= 0) return "text-red-600";
-        return "text-zinc-500";
+        if (r.indexOf("STRONG_BUY") >= 0 || r.indexOf("BUY") >= 0) return "text-positive";
+        if (r.indexOf("HOLD") >= 0) return "text-warning";
+        if (r.indexOf("SKIP") >= 0) return "text-negative";
+        if (r.indexOf("ABORT") >= 0) return "text-negative";
+        return "text-text-muted";
     }
 
     // ─── Network View (D3 Sankey) ────────────────────────────────────────────
@@ -178,12 +178,12 @@ var PMACS_SANKEY = (function () {
         container.innerHTML = "";
 
         if (typeof d3 === "undefined") {
-            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-zinc-400">D3 library not loaded</div>';
+            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-text-muted">D3 library not loaded</div>';
             return;
         }
 
         if (!data || !data.evidence_sources || data.evidence_sources.length === 0) {
-            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-zinc-400">No cycle data available. Run a cycle to see the Sankey diagram.</div>';
+            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-text-muted">No cycle data available. Run a cycle to see the Sankey diagram.</div>';
             return;
         }
 
@@ -251,7 +251,7 @@ var PMACS_SANKEY = (function () {
         }
 
         if (nodes.length === 0 || links.length === 0) {
-            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-zinc-400">Insufficient data for Sankey diagram</div>';
+            container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-text-muted">Insufficient data for Sankey diagram</div>';
             return;
         }
 
@@ -407,14 +407,14 @@ var PMACS_SANKEY = (function () {
 
         // Per-persona outputs
         var personaHeader = document.createElement("div");
-        personaHeader.className = "text-zinc-500 mb-1";
+        personaHeader.className = "text-text-muted mb-1";
         personaHeader.textContent = "Per-persona outputs:";
         wrapper.appendChild(personaHeader);
 
         var personaData = (data && data.personas) || [];
         if (personaData.length === 0) {
             var empty = document.createElement("div");
-            empty.className = "text-zinc-400 ml-2";
+            empty.className = "text-text-muted ml-2";
             empty.id = "math-personas";
             empty.textContent = "Waiting for persona outputs...";
             wrapper.appendChild(empty);
@@ -424,23 +424,23 @@ var PMACS_SANKEY = (function () {
                 row.className = "ml-2 flex items-center gap-3 py-1";
 
                 var name = document.createElement("span");
-                name.className = "text-zinc-700 w-32 truncate";
+                name.className = "text-text-primary w-32 truncate";
                 name.textContent = p.name;
 
                 var pUp = document.createElement("span");
-                pUp.className = "text-green-600 w-12";
+                pUp.className = "text-positive w-12";
                 pUp.textContent = "\u2191" + (p.p_up !== undefined ? p.p_up.toFixed(2) : "\u2014");
 
                 var pFlat = document.createElement("span");
-                pFlat.className = "text-zinc-400 w-12";
+                pFlat.className = "text-text-muted w-12";
                 pFlat.textContent = "\u2192" + (p.p_flat !== undefined ? p.p_flat.toFixed(2) : "\u2014");
 
                 var pDown = document.createElement("span");
-                pDown.className = "text-red-500 w-12";
+                pDown.className = "text-negative w-12";
                 pDown.textContent = "\u2193" + (p.p_down !== undefined ? p.p_down.toFixed(2) : "\u2014");
 
                 var weight = document.createElement("span");
-                weight.className = "text-blue-600 w-16";
+                weight.className = "text-accent w-16";
                 weight.textContent = "w=" + (p.weight !== undefined ? p.weight.toFixed(3) : "\u2014");
 
                 row.appendChild(name);
@@ -454,7 +454,7 @@ var PMACS_SANKEY = (function () {
 
         // Arbitration formula
         var arbHeader = document.createElement("div");
-        arbHeader.className = "text-zinc-500 mt-3 border-t border-zinc-200 pt-2";
+        arbHeader.className = "text-text-muted mt-3 border-t border-border pt-2";
         arbHeader.textContent = "Arbitration:";
         wrapper.appendChild(arbHeader);
 
@@ -466,31 +466,31 @@ var PMACS_SANKEY = (function () {
             var arb = data.arbitration_result;
 
             var step1 = document.createElement("div");
-            step1.className = "text-zinc-600";
+            step1.className = "text-text-secondary";
             step1.textContent = "Step 1: Weighted probability aggregation";
             arbFormula.appendChild(step1);
 
             var step1Calc = document.createElement("div");
-            step1Calc.className = "ml-3 text-zinc-500";
+            step1Calc.className = "ml-3 text-text-muted";
             step1Calc.textContent = "p_up = \u03A3(w_i \u00D7 p_up_i) / \u03A3(w_i)";
             arbFormula.appendChild(step1Calc);
 
             if (arb.p_up !== undefined) {
                 var step1Result = document.createElement("div");
-                step1Result.className = "ml-3 text-green-600";
+                step1Result.className = "ml-3 text-positive";
                 step1Result.textContent = "= " + arb.p_up.toFixed(4);
                 arbFormula.appendChild(step1Result);
             }
 
             if (arb.p_down !== undefined) {
                 var stepDown = document.createElement("div");
-                stepDown.className = "ml-3 text-red-500";
+                stepDown.className = "ml-3 text-negative";
                 stepDown.textContent = "p_down = " + arb.p_down.toFixed(4);
                 arbFormula.appendChild(stepDown);
             }
         } else {
             var noArb = document.createElement("div");
-            noArb.className = "text-zinc-400";
+            noArb.className = "text-text-muted";
             noArb.textContent = "p_up = \u03A3(w_i \u00D7 p_up_i) / \u03A3(w_i)";
             arbFormula.appendChild(noArb);
         }
@@ -499,17 +499,17 @@ var PMACS_SANKEY = (function () {
 
         // Conviction
         var convHeader = document.createElement("div");
-        convHeader.className = "text-zinc-500 mt-2 border-t border-zinc-200 pt-2";
+        convHeader.className = "text-text-muted mt-2 border-t border-border pt-2";
         convHeader.textContent = "Conviction:";
         wrapper.appendChild(convHeader);
 
         var convFormula = document.createElement("div");
-        convFormula.className = "ml-2 text-zinc-400";
+        convFormula.className = "ml-2 text-text-muted";
         convFormula.id = "math-conviction";
 
         if (data && data.arbitration_result && data.arbitration_result.conviction !== undefined) {
             convFormula.textContent = "conviction = " + data.arbitration_result.conviction.toFixed(3);
-            convFormula.className = "ml-2 text-blue-600";
+            convFormula.className = "ml-2 text-accent";
         } else {
             convFormula.textContent = "conviction = f(arbitrated, evidence_strength, crucible_severity)";
         }
@@ -539,8 +539,8 @@ var PMACS_SANKEY = (function () {
         chips.forEach(function (chip) {
             var isActive = chip.getAttribute("data-sankey-view") === viewName;
             chip.className = isActive
-                ? "px-2.5 py-1 text-xs rounded bg-blue-50 text-blue-600 border border-blue-200"
-                : "px-2.5 py-1 text-xs rounded bg-zinc-100 text-zinc-500 hover:bg-zinc-200";
+                ? "px-2.5 py-1 text-xs rounded bg-accent-soft text-accent border border-accent/20"
+                : "px-2.5 py-1 text-xs rounded bg-surface-sunken text-text-muted hover:bg-border";
             chip.setAttribute("aria-pressed", isActive ? "true" : "false");
         });
 

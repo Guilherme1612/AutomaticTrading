@@ -18,6 +18,17 @@ function escapeHtml(str) {
         .replace(/'/g, "&#x27;");
 }
 
+function setModalHidden(el, hidden) {
+    if (!el) return;
+    if (hidden) {
+        el.classList.add("hidden");
+        el.inert = true;
+    } else {
+        el.classList.remove("hidden");
+        el.inert = false;
+    }
+}
+
 // ─── Relative Time ──────────────────────────────────────────────────────────
 
 /**
@@ -141,18 +152,44 @@ function _pollHealth() {
         .catch(function () { /* strip stays on last known state */ });
 }
 
+/**
+ * Mark responsive-only controls as aria-hidden + tabindex=-1 when CSS hides them,
+ * so they are not focusable on viewports where they are not displayed.
+ */
+function initResponsiveInert() {
+    document.querySelectorAll("[data-responsive-hidden]").forEach(function (el) {
+        var style = window.getComputedStyle(el);
+        var isHidden = style.display === "none" || style.visibility === "hidden";
+        if (isHidden) {
+            el.setAttribute("aria-hidden", "true");
+            el.setAttribute("tabindex", "-1");
+        } else {
+            el.removeAttribute("aria-hidden");
+            el.removeAttribute("tabindex");
+        }
+    });
+}
+
+var _responsiveInertTimer = null;
+window.addEventListener("resize", function () {
+    clearTimeout(_responsiveInertTimer);
+    _responsiveInertTimer = setTimeout(initResponsiveInert, 150);
+});
+
 document.addEventListener("DOMContentLoaded", function () {
     initTimeAgo();
     setInterval(initTimeAgo, 60000);
     updateNavActive();
     _pollHealth();
     setInterval(_pollHealth, 30000);
+    initResponsiveInert();
 });
 // Re-run after HTMX content swaps (hx-boost navigation skips DOMContentLoaded)
 document.addEventListener("htmx:afterSettle", function () {
     initTimeAgo();
     updateNavActive();
     _pollHealth();
+    initResponsiveInert();
 });
 
 // ─── CSRF Token (Architecture.md §18) ─────────────────────────────────────────
@@ -350,16 +387,16 @@ function showToast(message, type, duration) {
     }
 
     var colorMap = {
-        info: "bg-blue-600",
-        success: "bg-green-600",
-        warning: "bg-amber-500",
-        error: "bg-red-600",
-        critical: "bg-red-700",
+        info: "bg-accent text-white",
+        success: "bg-accent text-white",
+        warning: "bg-warning text-text-primary",
+        error: "bg-negative text-white",
+        critical: "bg-negative text-white",
     };
 
     var toast = document.createElement("div");
     toast.className =
-        "toast-enter px-4 py-3 rounded-lg shadow-lg text-white text-sm flex items-center gap-2 " +
+        "toast-enter px-4 py-3 rounded-lg shadow-lg text-sm flex items-center gap-2 " +
         (colorMap[type] || colorMap.info);
     toast.setAttribute("role", "status");
 
@@ -371,7 +408,7 @@ function showToast(message, type, duration) {
     if (duration === 0) {
         var dismiss = document.createElement("button");
         dismiss.textContent = "✕";
-        dismiss.className = "ml-2 text-white/70 hover:text-white text-sm";
+        dismiss.className = "ml-2 text-current/70 hover:text-current text-sm";
         dismiss.setAttribute("aria-label", "Dismiss");
         dismiss.onclick = function () {
             removeToast(toast);
@@ -415,15 +452,15 @@ function showBlockingModal(title, message, buttons) {
         var button = document.createElement("button");
         button.textContent = btn.label;
         button.type = "button";
-        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-red-600 text-white hover:bg-red-700" : "bg-surface-sunken text-text-primary hover:bg-border");
+        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-negative text-white hover:bg-negative/90" : "bg-surface-sunken text-text-primary hover:bg-border");
         button.onclick = function () {
-            modal.classList.add("hidden");
+            setModalHidden(modal, true);
             if (btn.action) btn.action();
         };
         actionsDiv.appendChild(button);
     });
 
-    modal.classList.remove("hidden");
+    setModalHidden(modal, false);
 }
 
 // ─── Notification Policy (Source.md §13.5 event→surface mapping) ────────────
@@ -589,7 +626,7 @@ function toggleCmdK() {
     var el = document.getElementById("cmd-k");
     if (!el) return;
     var isHidden = el.classList.contains("hidden");
-    el.classList.toggle("hidden");
+    setModalHidden(el, !isHidden);
     if (isHidden) {
         var input = document.getElementById("cmd-k-input");
         if (input) {
@@ -603,7 +640,7 @@ function toggleCmdK() {
 
 function closeCmdK() {
     var el = document.getElementById("cmd-k");
-    if (el) el.classList.add("hidden");
+    if (el) setModalHidden(el, true);
 }
 
 function renderCmdKResults(query) {
@@ -660,10 +697,10 @@ function renderCmdKResults(query) {
 
         li.innerHTML =
             '<span class="text-xs font-mono mr-3 px-1.5 py-0.5 rounded ' +
-            (item.category === "page" ? "bg-blue-50 text-blue-500" : "") +
-            (item.category === "action" ? "bg-green-50 text-green-600" : "") +
-            (item.category === "ticker" ? "bg-amber-50 text-amber-600" : "") +
-            (item.category === "audit" ? "bg-purple-50 text-purple-600" : "") +
+            (item.category === "page" ? "bg-accent-soft text-accent" : "") +
+            (item.category === "action" ? "bg-positive-soft text-positive" : "") +
+            (item.category === "ticker" ? "bg-warning-soft text-warning" : "") +
+            (item.category === "audit" ? "bg-crucible-soft text-crucible" : "") +
             '">' + (categoryLabel[item.category] || "") + '</span>' +
             '<span class="flex-1">' + escapeHtml(item.name) + '</span>';
 
@@ -856,7 +893,7 @@ function fetchCycleComparison() {
         }).catch(function(err) {
             resultDiv.textContent = "";
             var errP = document.createElement("p");
-            errP.className = "text-sm text-red-600";
+            errP.className = "text-sm text-negative";
             errP.textContent = "Comparison failed: " + err.message;
             resultDiv.appendChild(errP);
         });
@@ -880,7 +917,8 @@ function promoteAllP1Global() {
 }
 
 function showShortcuts() {
-    document.getElementById("shortcut-overlay").classList.remove("hidden");
+    var el = document.getElementById("shortcut-overlay");
+    if (el) setModalHidden(el, false);
 }
 
 // ─── Keyboard Shortcuts (Source.md §13.6) ───────────────────────────────────
@@ -931,7 +969,8 @@ document.addEventListener("keydown", function (e) {
     // Cmd-/: show keyboard shortcut overlay
     if (isCmd && e.key === "/") {
         e.preventDefault();
-        document.getElementById("shortcut-overlay").classList.toggle("hidden");
+        var el = document.getElementById("shortcut-overlay");
+        if (el) setModalHidden(el, !el.classList.contains("hidden"));
         return;
     }
 
@@ -951,7 +990,7 @@ document.addEventListener("keydown", function (e) {
         }
         closeCmdK();
         var _shortcutOverlay = document.getElementById("shortcut-overlay");
-        if (_shortcutOverlay) _shortcutOverlay.classList.add("hidden");
+        if (_shortcutOverlay) setModalHidden(_shortcutOverlay, true);
         // blocking-modal: Don't close with Esc (requires explicit acknowledgment)
         return;
     }
@@ -1016,7 +1055,7 @@ document.addEventListener("click", function (e) {
     }
     var overlay = document.getElementById("shortcut-overlay");
     if (overlay && e.target === overlay) {
-        overlay.classList.add("hidden");
+        setModalHidden(overlay, true);
     }
 });
 
@@ -1041,7 +1080,7 @@ function handleKillSwitch() {
                     }).then(function () {
                         var btn = document.getElementById("kill-switch-btn");
                         if (btn) {
-                            btn.classList.add("bg-red-600");
+                            btn.classList.add("bg-negative");
                             btn.classList.remove("bg-surface-sunken");
                         }
                         showToast("Kill switch ENGAGED. To disengage: Cortex page.", "error", 0);
@@ -1098,7 +1137,7 @@ function _showTypedConfirm(opts) {
 
     function onInput() { confirmBtn.disabled = input.value.trim() !== symbol; }
     function close() {
-        modal.classList.add("hidden");
+        setModalHidden(modal, true);
         input.removeEventListener("input", onInput);
         input.removeEventListener("keydown", onKey);
         confirmBtn.removeEventListener("click", onConfirm);
@@ -1114,7 +1153,7 @@ function _showTypedConfirm(opts) {
     input.addEventListener("keydown", onKey);
     confirmBtn.addEventListener("click", onConfirm);
     cancelBtn.addEventListener("click", close);
-    modal.classList.remove("hidden");
+    setModalHidden(modal, false);
     setTimeout(function () { input.focus(); }, 50);
 }
 
@@ -1593,7 +1632,7 @@ onSSE("cycle", function (data) {
 function refreshSparkline(metric) {
     var container = document.querySelector('[data-sparkline-metric="' + metric + '"]');
     if (!container) return;
-    var activeBtn = document.querySelector(".sparkline-window-btn.bg-blue-50");
+    var activeBtn = document.querySelector(".sparkline-window-btn.bg-accent-soft");
     var windowParam = activeBtn ? (activeBtn.getAttribute("data-window") || "1W") : "1W";
     fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(windowParam))
         .then(function (resp) {
@@ -1641,7 +1680,7 @@ function renderSparklineSVG(points) {
         '<polyline class="sparkline-line" points="' + pts.join(" ") + '"/>' +
         '</svg>' +
         '<div class="sparkline-point absolute w-1.5 h-1.5 rounded-full' +
-        (trend === 'positive' ? ' bg-green-600' : ' bg-red-500') +
+        (trend === 'positive' ? ' bg-positive' : ' bg-negative') +
         '" style="left:100%;top:' + lastY + 'px;transform:translate(-50%,-50%)"></div>' +
         '</div>';
 }
@@ -1659,13 +1698,13 @@ function refreshAllSparklines(window, clickedBtn) {
     var container = document.getElementById("sparkline-window-btns");
     if (container) {
         container.querySelectorAll(".sparkline-window-btn").forEach(function (btn) {
-            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.remove("bg-accent-soft", "text-accent");
             btn.classList.add("text-text-muted");
         });
     }
     if (clickedBtn) {
         clickedBtn.classList.remove("text-text-muted");
-        clickedBtn.classList.add("bg-blue-50", "text-blue-600");
+        clickedBtn.classList.add("bg-accent-soft", "text-accent");
     }
 
     // Fetch all sparkline metrics in parallel
@@ -1895,11 +1934,11 @@ document.addEventListener("htmx:afterSwap", function (event) {
         navLinks.forEach(function (link) {
             var href = link.getAttribute("href");
             if (href === currentPath) {
-                link.classList.add("bg-blue-50", "text-blue-600", "font-medium");
-                link.style.borderLeft = "2px solid #2563eb";
+                link.classList.add("bg-accent-soft", "text-accent", "font-medium");
+                link.style.borderLeft = "2px solid var(--accent)";
                 link.setAttribute("aria-current", "page");
             } else {
-                link.classList.remove("bg-blue-50", "text-blue-600", "font-medium");
+                link.classList.remove("bg-accent-soft", "text-accent", "font-medium");
                 link.style.borderLeft = "";
                 link.removeAttribute("aria-current");
             }
@@ -1926,10 +1965,10 @@ document.addEventListener("htmx:afterRequest", function (event) {
         if (!container) return;
         var buttons = container.querySelectorAll(".sparkline-window-btn");
         buttons.forEach(function (btn) {
-            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.remove("bg-accent-soft", "text-accent");
             btn.classList.add("text-text-muted");
         });
         elt.classList.remove("text-text-muted");
-        elt.classList.add("bg-blue-50", "text-blue-600");
+        elt.classList.add("bg-accent-soft", "text-accent");
     }
 });

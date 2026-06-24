@@ -103,7 +103,7 @@
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="w-2 h-2 rounded-full bg-positive"></span>
             <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Fair Value Estimate</h2>
         </div>
         {% if memo.memo_score is defined and memo.memo_score is not none %}
@@ -150,7 +150,7 @@
 {% if memo.business_model or memo.revenue_model or memo.key_acquisitions or memo.company_vision %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Business Model & Strategy</h2>
     </div>
     <div class="space-y-4">
@@ -186,7 +186,7 @@
 {% set fs = memo.financial_snapshot %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        <span class="w-2 h-2 rounded-full bg-positive"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Financial Snapshot</h2>
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
@@ -276,7 +276,7 @@
 {% if memo.industry_kpis and memo.industry_kpis|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+        <span class="w-2 h-2 rounded-full bg-crucible"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Industry KPIs</h2>
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -318,7 +318,7 @@
 {% if memo.growth_drivers and memo.growth_drivers|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+        <span class="w-2 h-2 rounded-full bg-positive"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Growth Drivers</h2>
     </div>
     <div class="space-y-3">
@@ -347,7 +347,7 @@
 {% set cp = memo.competitive_position %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-purple-500"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Competitive Position</h2>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -393,7 +393,7 @@
 {% if memo.risk_factors and memo.risk_factors|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-red-500"></span>
+        <span class="w-2 h-2 rounded-full bg-negative"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Risk Analysis</h2>
     </div>
     <div class="space-y-3">
@@ -450,7 +450,7 @@
 {% if memo.bear_case_response %}
 <div class="card card-elevated card-accent-amber mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+        <span class="w-2 h-2 rounded-full bg-warning"></span>
         <h2 class="text-xs font-semibold text-crucible uppercase tracking-widest">Bear Case Response</h2>
     </div>
     <p class="text-sm text-text-secondary leading-relaxed">{{ memo.bear_case_response }}</p>
@@ -463,7 +463,7 @@
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+            <span class="w-2 h-2 rounded-full bg-crucible"></span>
             <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Bull / Bear Debate</h2>
         </div>
         {% if bbd.advocate_lean %}
@@ -505,7 +505,7 @@
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-teal-500"></span>
+            <span class="w-2 h-2 rounded-full bg-positive"></span>
             <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Reverse-DCF Anchor</h2>
         </div>
         {% if rdcf.valuation_lean %}
@@ -556,7 +556,7 @@
 {% if sp and sp.expected_price_usd is not none %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-cyan-500"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Scenario-Weighted Expected Price</h2>
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -592,14 +592,14 @@
 {% if memo.what_would_change_my_mind and memo.what_would_change_my_mind|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+        <span class="w-2 h-2 rounded-full bg-negative"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">What Would Change My Mind</h2>
     </div>
     <p class="text-xs text-text-muted mb-3 leading-relaxed">Pre-registered, falsifiable triggers that would invalidate or reverse this thesis.</p>
     <ul class="space-y-2">
         {% for trigger in memo.what_would_change_my_mind %}
         <li class="text-sm text-text-secondary flex items-start gap-2">
-            <span class="mt-1.5 w-1.5 h-1.5 bg-rose-500 rounded-full shrink-0"></span>
+            <span class="mt-1.5 w-1.5 h-1.5 bg-negative rounded-full shrink-0"></span>
             {{ trigger }}
         </li>
         {% endfor %}
@@ -611,7 +611,7 @@
 {% if memo.catalyst_calendar and memo.catalyst_calendar|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Catalyst Calendar</h2>
     </div>
     <div class="space-y-3">
@@ -645,7 +645,7 @@
 {% if ns_shown.agents|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-purple-500"></span>
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Agent Insights ({{ ns_shown.agents|length }})</h2>
     </div>
 
@@ -762,7 +762,7 @@
 {% if ticker_decisions and ticker_decisions|length > 0 %}
 <div class="card card-elevated mb-8 reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+        <span class="w-2 h-2 rounded-full bg-warning"></span>
         <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision History</h2>
     </div>
     <div class="space-y-2">

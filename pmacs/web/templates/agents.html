@@ -129,7 +129,27 @@
     'short_interest': {'icon': 'arrow-down', 'color': 'rose'},
     'forensics': {'icon': 'search', 'color': 'cyan'},
     'crucible': {'icon': 'fire', 'color': 'purple'},
-    'gatekeeper': {'icon': 'lock', 'color': 'slate'}
+    'gatekeeper': {'icon': 'lock', 'color': 'slate'},
+    'bull_advocate': {'icon': 'trending', 'color': 'amber'},
+    'bear_advocate': {'icon': 'arrow-down', 'color': 'orange'},
+    'cross_persona_auditor': {'icon': 'search', 'color': 'violet'},
+    'valuation_agent': {'icon': 'globe', 'color': 'emerald'},
+    'memo_writer': {'icon': 'bolt', 'color': 'slate'},
+    'simulation': {'icon': 'shield', 'color': 'blue'},
+    'episodic_context': {'icon': 'eye', 'color': 'cyan'}
+} %}
+{# Idle-state hint per agent — non-signal personas show their role instead of
+   the generic "waiting for cycle" so the full roster is self-explanatory. #}
+{% set agent_idle_text = {
+    'gatekeeper': 'Runs after all agents finish',
+    'crucible': 'Runs after arbitration',
+    'bull_advocate': 'Runs in wave-2 debate',
+    'bear_advocate': 'Runs in wave-2 debate',
+    'cross_persona_auditor': 'Runs in wave-2 debate',
+    'valuation_agent': 'Runs after arbitration (memo-only)',
+    'memo_writer': 'Runs after decision',
+    'simulation': 'Deterministic fallback only',
+    'episodic_context': 'Pre-cycle context build'
 } %}
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
     {% for persona in personas %}
@@ -242,7 +262,7 @@
                 <div class="persona-progress mb-1.5">
                     <div class="persona-progress-fill" style="width: 0%" data-progress-bar></div>
                 </div>
-                <p class="text-[11px] text-text-muted" data-status-text>{{ 'Runs after all agents finish' if persona.id == 'gatekeeper' else 'Idle — waiting for cycle' }}</p>
+                <p class="text-[11px] text-text-muted" data-status-text>{{ agent_idle_text.get(persona.id, 'Idle — waiting for cycle') }}</p>
             {% endif %}
             </div>
 

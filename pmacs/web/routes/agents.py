@@ -21,6 +21,16 @@ PERSONAS = [
     {"id": "forensics", "name": "Forensics", "role": "Accounting quality"},
     {"id": "crucible", "name": "Crucible", "role": "Adversarial testing"},
     {"id": "gatekeeper", "name": "Gatekeeper", "role": "Final gate check"},
+    # Wave-2 debate + audit layer (Agents.md §11b-§11d)
+    {"id": "bull_advocate", "name": "Bull Advocate", "role": "Bull-case debate"},
+    {"id": "bear_advocate", "name": "Bear Advocate", "role": "Bear-case debate"},
+    {"id": "cross_persona_auditor", "name": "Cross-Persona Auditor", "role": "Reasoning-flaw check"},
+    # Post-arbitration forward valuation (Agents.md §13b) — memo-only, no conviction
+    {"id": "valuation_agent", "name": "Valuation Agent", "role": "Forward valuation"},
+    # Final synthesis + deterministic infrastructure (Agents.md §12, §17)
+    {"id": "memo_writer", "name": "Memo Writer", "role": "Decision memo"},
+    {"id": "simulation", "name": "Simulation", "role": "Deterministic fallback"},
+    {"id": "episodic_context", "name": "Episodic Context", "role": "Memory injection"},
 ]
 
 

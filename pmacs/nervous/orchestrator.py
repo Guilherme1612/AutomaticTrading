@@ -153,6 +153,11 @@ class CycleOrchestrator:
         # Pre-cycle pipeline state (populated by _run_pre_cycle)
         self._fx_rate: Any | None = None
         self._macro_regime_result: Any | None = None
+        # Rec1 (agent sweep): MacroRegime is cycle-level, not ticker-specific.
+        # The first ticker's real-evidence macro DP is cached here and reused for
+        # every subsequent ticker, eliminating N-1 redundant LLM calls per cycle.
+        # Distinct from _macro_regime_result (the step-6 evidence=[] brief label).
+        self._macro_regime_dp_cached: Any | None = None
         self._last_crucible_attacks: list[Any] = []
         # Wave-2 debate + audit state (Agents.md §11b-§11d)
         self._last_auditor_flags: list[Any] = []
@@ -307,6 +312,7 @@ class CycleOrchestrator:
         self._shutdown_requested = False
         self._kill_switch_engaged_mid_cycle = False
         self._symbol_holdings.clear()
+        self._macro_regime_dp_cached = None  # Rec1: reset per-cycle macro DP cache
 
         with CycleLock(self._lock_path):
             # Register signal handlers for graceful shutdown (S5-2).
@@ -3596,6 +3602,17 @@ class CycleOrchestrator:
             ],
         }
 
+        # Rec1: MacroRegime is cycle-level — after the first ticker produces a
+        # real-evidence macro DP, reuse it for subsequent tickers instead of
+        # re-calling the LLM N more times (Architecture.md §12.2 lists MacroRegime
+        # as one persona; per-ticker re-runs differ only by LLM sampling noise on
+        # identical FRED/FOMC/POLYGON/ECB data).
+        _reuse_macro = self._macro_regime_dp_cached is not None
+        if _reuse_macro:
+            slot_runners[0] = [
+                r for r in slot_runners[0] if r.persona_name != "macro_regime"
+            ]
+
         def _run_slot(
             runners: list[Any],
         ) -> list[tuple[str, Any]]:
@@ -3606,6 +3623,49 @@ class CycleOrchestrator:
                     persona_evidence = filter_evidence_for_persona(
                         evidence, runner.persona_name,
                     )
+                    # Rec2: Deterministic pre-check for insider_activity/short_interest.
+                    # When their primary data source (FORM4/FINRA) produced no evidence,
+                    # the LLM call would only emit INSUFFICIENT_DATA — which arbitration
+                    # zeroes out anyway (confidence=0.0 → skipped, _step_13e_arbitration).
+                    # Skip the token-burning call and synthesize the dataless DP directly.
+                    if runner.persona_name in ("insider_activity", "short_interest"):
+                        from pmacs.schemas.data import DataSource as _DS
+                        _primary = (
+                            _DS.FORM4 if runner.persona_name == "insider_activity"
+                            else _DS.FINRA
+                        )
+                        _has_primary = any(
+                            getattr(_ev, "source", None) == _primary
+                            for _pkt in persona_evidence
+                            for _ev in getattr(_pkt, "evidence", [])
+                        )
+                        if not _has_primary:
+                            _fallback_eid = next(
+                                (_ev.id for _pkt in persona_evidence
+                                 for _ev in getattr(_pkt, "evidence", [])),
+                                f"{runner.persona_name}-no-data-{ticker}",
+                            )
+                            _synth = self._synthesize_dataless_persona(
+                                runner.persona_name, ticker, cycle_id, [_fallback_eid],
+                            )
+                            results.append((runner.persona_name, _synth))
+                            self._publish_sse("agent", "agent.complete", {
+                                "cycle_id": cycle_id, "ticker": ticker,
+                                "persona": runner.persona_name,
+                            })
+                            log_debug(
+                                "PERSONA_DATALESS_SKIP",
+                                payload={
+                                    "cycle_id": cycle_id, "ticker": ticker,
+                                    "persona": runner.persona_name,
+                                    "reason": "primary_source_absent",
+                                    "source": _primary.value,
+                                },
+                                level="INFO", cycle_id=cycle_id,
+                                msg=f"{runner.persona_name} skipped for {ticker} "
+                                    f"(no {_primary.value} data) — synthesized dataless DP",
+                            )
+                            continue
                     self._publish_sse("agent", "agent.running", {
                         "cycle_id": cycle_id, "ticker": ticker,
                         "persona": runner.persona_name,
@@ -3685,6 +3745,18 @@ class CycleOrchestrator:
                         msg=f"Slot {slot_id} raised {type(exc).__name__} for {ticker}",
                     )
 
+        # Rec1: inject the cached macro DP for subsequent tickers (the runner was
+        # stripped from slot 0 above), or cache the first ticker's real-evidence
+        # macro DP for reuse. A failed first-ticker macro call leaves the cache
+        # empty so the next ticker retries normally.
+        if _reuse_macro and self._macro_regime_dp_cached is not None:
+            results["macro_regime"] = self._macro_regime_dp_cached
+            self._publish_sse("agent", "agent.complete", {
+                "cycle_id": cycle_id, "ticker": ticker, "persona": "macro_regime",
+            })
+        elif "macro_regime" in results and self._macro_regime_dp_cached is None:
+            self._macro_regime_dp_cached = results["macro_regime"]
+
         log_debug(
             "PERSONA_DISPATCH_COMPLETE",
             payload={
@@ -3704,6 +3776,49 @@ class CycleOrchestrator:
         )
 
         return results
+
+    @staticmethod
+    def _synthesize_dataless_persona(
+        persona_name: str, ticker: str, cycle_id: str, evidence_ids: list[str],
+    ) -> Any:
+        """Synthesize an INSUFFICIENT_DATA PersonaOutput without an LLM call (Rec2).
+
+        Used when insider_activity/short_interest have no FORM4/FINRA evidence —
+        the LLM would only emit INSUFFICIENT_DATA, which arbitration skips anyway
+        (confidence=0.0 via _extract_directional_probability, then dropped in
+        _step_13e_arbitration). Mirrors the dataless shape the personas produce
+        when their primary source is empty, so the /agents display and memo treat
+        it identically to a real dataless run.
+        """
+        import json
+        from pmacs.schemas.agents import PersonaOutput, PersonaName
+
+        if persona_name == "insider_activity":
+            payload = {
+                "ticker": ticker,
+                "transactions": [],
+                "signal": "INSUFFICIENT_DATA",
+                "signal_reasoning": f"No Form 4 insider transaction data available for {ticker}",
+                "p_up": 0.3, "p_flat": 0.4, "p_down": 0.3,
+                "evidence_ids": evidence_ids,
+            }
+        else:  # short_interest
+            payload = {
+                "ticker": ticker,
+                "short_pct_float": None,
+                "days_to_cover": None,
+                "short_change_pct": None,
+                "anomaly": "INSUFFICIENT_DATA",
+                "anomaly_reasoning": f"No FINRA short interest data available for {ticker}",
+                "p_up": 0.3, "p_flat": 0.4, "p_down": 0.3,
+                "evidence_ids": evidence_ids,
+            }
+        return PersonaOutput(
+            persona=PersonaName(persona_name),
+            ticker=ticker,
+            cycle_id=cycle_id,
+            raw_output=json.dumps(payload),
+        )
 
     @staticmethod
     def _extract_directional_probability(

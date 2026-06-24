@@ -3,36 +3,53 @@
    Expects: current_step (int, 1-11)
 #}
 <!DOCTYPE html>
-<html lang="en" class="h-full dark">
+<html lang="en" class="h-full">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PMACS Setup Wizard &mdash; Step {{ current_step }}</title>
-    <link rel="stylesheet" href="/static/dist/tailwind.css">
-    <script src="/static/vendor/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
-    <link rel="stylesheet" href="/static/style.css">
+    {% include "wizard/_head.html" %}
     <style>
-        :root {
-            --surface: #18181b;
-            --surface-elevated: #27272a;
-            --border: #3f3f46;
-            --text-primary: #f4f4f5;
-            --text-secondary: #d4d4d8;
-            --text-muted: #a1a1aa;
-            --accent: #60a5fa;
-            --positive: #4ade80;
-            --negative: #f87171;
-            --warning: #fbbf24;
+        .wizard-fade-in { animation: wizard-fade 200ms ease-out; }
+        @keyframes wizard-fade {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* Loading bar */
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: block; }
+        .htmx-request.htmx-indicator { display: block; }
+        @keyframes loading-slide {
+            0% { width: 0%; margin-left: 0; }
+            50% { width: 60%; margin-left: 20%; }
+            100% { width: 0%; margin-left: 100%; }
+        }
+        #wizard-loader .bar {
+            height: 100%;
+            background: var(--accent);
+            animation: loading-slide 1.5s ease-in-out infinite;
+            border-radius: 2px;
         }
     </style>
 </head>
 <body class="h-full bg-surface text-text-primary font-sans">
+    <!-- Global loading bar — persists throughout wizard -->
+    <div id="wizard-loader" class="htmx-indicator fixed top-0 left-0 right-0 z-50 h-1 bg-surface-overlay">
+        <div class="bar"></div>
+    </div>
+
     <div class="min-h-screen flex flex-col">
         {% include "wizard/_progress.html" %}
         <div class="flex-1 flex items-center justify-center" id="wizard-content">
             {% block wizard_step %}{% endblock %}
         </div>
     </div>
+
+    {# CSRF token for htmx POST requests #}
+    <script>
+    document.addEventListener("htmx:configRequest", function(event) {
+        var cookie = document.cookie.split("; ").find(function(c) { return c.startsWith("pmacs_csrf="); });
+        if (cookie) {
+            event.detail.headers["x-csrf-token"] = cookie.split("=")[1];
+        }
+    });
+    </script>
 </body>
 </html>

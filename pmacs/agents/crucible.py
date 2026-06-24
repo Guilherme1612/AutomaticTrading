@@ -11,6 +11,7 @@ spec_ref: Agents.md §12
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pmacs.agents.base import PersonaRunner
 from pmacs.schemas.data import EvidencePacket
@@ -38,6 +39,29 @@ class CrucibleRunner(PersonaRunner):
     def get_sanity_validator(self):
         from pmacs.agents.sanity.crucible import CrucibleSanity
         return CrucibleSanity()
+
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Normalize Crucible LLM output before Pydantic validation.
+
+        deepseek-v4-flash (via openrouter) emits ``attacks`` as a dict keyed by
+        attack axis letter (A/B/C/D — natural given the prompt structure).
+        The canonical schema and downstream consumers (sanity validator,
+        arbitration, conviction, memo writer, dashboard) all expect
+        ``list[CrucibleAttack]``. This hook converts dict→list while
+        preserving the alphabetical A→B→C→D order, and reconciles
+        ``attack_count`` if it disagrees with the new list length.
+
+        This is a defensive parser fix, NOT a schema change. Schema, sanity
+        validator, and GBNF grammar still declare list. The hook is the only
+        place that knows about the model-specific dict quirk.
+        """
+        attacks = parsed.get("attacks")
+        if isinstance(attacks, dict):
+            ordered = [attacks[k] for k in sorted(attacks.keys())]
+            parsed["attacks"] = ordered
+            if parsed.get("attack_count") != len(ordered):
+                parsed["attack_count"] = len(ordered)
+        return parsed
 
     def build_prompt(
         self,

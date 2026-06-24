@@ -207,6 +207,9 @@ class PersonaRunner(ABC):
                 # Try to extract JSON from the raw output (may have surrounding text)
                 json_str = self._extract_json(raw_output)
                 parsed = json.loads(json_str)
+                # Hook for persona-specific output normalization
+                # (e.g. dict→list schema-drift, model-specific quirks)
+                parsed = self._pre_validate(parsed)
                 model_instance = model_cls.model_validate(parsed)
                 parsed = model_instance.model_dump()
             except (json.JSONDecodeError, ValidationError) as exc:
@@ -1417,3 +1420,12 @@ class PersonaRunner(ABC):
         if start != -1 and end != -1 and end > start:
             return text[start : end + 1]
         return text
+
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Hook for persona-specific output normalization before Pydantic validation.
+
+        Default: identity. Subclasses override to fix known LLM schema-drift
+        patterns (e.g. dict where list is expected) before the canonical
+        Pydantic model sees the data.
+        """
+        return parsed

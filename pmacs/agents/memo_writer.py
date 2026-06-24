@@ -47,6 +47,7 @@ class MemoWriterRunner(PersonaRunner):
         reverse_dcf: object | None = None,
         forward_valuation: object | None = None,
         scenario_price: object | None = None,
+        data_quality_warnings: list[str] | None = None,
     ) -> None:
         """Inject the full analytical synthesis so the memo has real numbers.
 
@@ -55,6 +56,12 @@ class MemoWriterRunner(PersonaRunner):
         debate/audit/valuation context (Agents.md §11b-§11d, §16.9) is injected
         here so the memo surfaces the bull/bear debate, auditor findings, the
         reverse-DCF growth gap, and the scenario-weighted expected price.
+
+        ``data_quality_warnings`` is a list of strings (one per flagged metric)
+        collected from ``_data_quality_warning`` fields in the evidence packets
+        the analyst layer saw. Surfacing them here prevents the memo from citing
+        flagged-anomalous numbers as facts (e.g. ONDS netProfitMarginTTM=251.9%
+        which the source marked as "likely Finnhub data corruption").
         """
         lines: list[str] = []
 
@@ -215,6 +222,26 @@ class MemoWriterRunner(PersonaRunner):
             )
             if scenario_price.expected_return_pct is not None:
                 lines.append(f"  Expected return vs current: {scenario_price.expected_return_pct:+.1f}%")
+
+        # ── Data-quality warnings (post-cycle-1 audit Jun 24) ─────────────────
+        # Each warning identifies a metric the source itself flagged as anomalous
+        # (typically "likely Finnhub data corruption" or out-of-range values). The
+        # memo MUST NOT cite flagged metrics as facts. This is the memo-side
+        # counterpart to ``format_evidence_for_prompt`` which already warns the
+        # analyst personas — the analyst layer never reaches the operator, but the
+        # memo does, so we re-surface the warnings here.
+        if data_quality_warnings:
+            lines.append("\n## Data Quality Warnings (DO NOT cite as facts)")
+            lines.append(
+                "IMPORTANT: The following metrics in the evidence were flagged by "
+                "their source as anomalous or unreliable. Do NOT cite these flagged "
+                "values in THESIS, KEY EVIDENCE, financial_snapshot, or anywhere in "
+                "the memo. State the data-quality concern explicitly if relevant, "
+                "or cite an alternative source (EDGAR XBRL, Yahoo Finance), or omit "
+                "the figure entirely."
+            )
+            for w in data_quality_warnings[:10]:
+                lines.append(f"  - {w}")
 
         self._analytical_context = "\n".join(lines)
 

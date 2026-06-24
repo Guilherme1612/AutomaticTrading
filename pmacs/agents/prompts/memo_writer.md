@@ -151,6 +151,15 @@ they are typically more current than Finnhub — prefer Yahoo for absolute dolla
 figures (revenue, FCF) when values diverge. When cross-source validation flags
 divergence, explicitly note it in the memo and state which source you're using.
 
+DATA QUALITY FLAGS: If the analytical context contains a "Data Quality Warnings"
+section, those metrics were flagged by their source as anomalous or unreliable
+(typically "likely Finnhub data corruption" or out-of-range values). Do NOT cite
+flagged values as facts anywhere in the memo (THESIS, KEY EVIDENCE, financial
+snapshot, verdict_line). Either state the data-quality concern explicitly, cite
+an alternative source (EDGAR XBRL, Yahoo Finance), or omit the figure entirely.
+This rule exists because prior memos cited corrupted metrics (e.g. ONDS
+netProfitMarginTTM=251.9%) without flagging the data-quality warning.
+
 ## Output JSON Schema
 
 Respond with a single JSON object. Required fields:

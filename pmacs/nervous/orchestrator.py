@@ -2630,6 +2630,18 @@ class CycleOrchestrator:
                     pass
 
             memo_runner = MemoWriterRunner()
+            # Collect data-quality warnings from evidence packets so the memo
+            # does NOT cite flagged-anomalous metrics as facts (post-cycle-1
+            # audit: ONDS netProfitMarginTTM=251.9% was cited despite the
+            # source's own _data_quality_warning marking it as likely corruption).
+            data_quality_warnings: list[str] = []
+            for ep in evidence_packets or []:
+                data = getattr(ep, "data", {}) or {}
+                w = data.get("_data_quality_warning") if isinstance(data, dict) else None
+                if w:
+                    ticker = getattr(ep, "ticker", "?")
+                    ev_id = getattr(ep, "evidence_id", "?")
+                    data_quality_warnings.append(f"[{ticker}/{ev_id}] {w}")
             memo_runner.set_analytical_context(
                 arbitrated=arbitrated,
                 verdict=verdict,
@@ -2643,6 +2655,7 @@ class CycleOrchestrator:
                 reverse_dcf=getattr(self, "_last_reverse_dcf", None),
                 forward_valuation=getattr(self, "_last_forward_valuation", None),
                 scenario_price=getattr(self, "_last_scenario_price", None),
+                data_quality_warnings=data_quality_warnings,
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
             if memo_output is not None:

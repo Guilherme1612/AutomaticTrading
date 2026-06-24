@@ -373,6 +373,14 @@ class CycleOrchestrator:
                     "cycle_id": cycle_id,
                     "trigger": trigger,
                 })
+                # Task #8 Part D1 — emit the alias the dashboard JS already
+                # handles (demo path's event name) so no JS change is needed
+                # after the SOLO/cycle routes move onto run_cycle. The only SSE
+                # consumer is the browser; emitting both is zero-risk.
+                self._publish_sse("cycle", "cycle.opened", {
+                    "cycle_id": cycle_id,
+                    "trigger": trigger,
+                })
                 op_seq = 0
                 self._mark_op_complete(cycle_id, op_seq, "initiate_cycle")
 
@@ -432,6 +440,11 @@ class CycleOrchestrator:
                     self._finalize_cycle_metrics(cycle_id)
                     close_cycle(cycle_id, self._db_path, self._audit_path)
                     self._publish_sse("cycle", "cycle.close", {
+                        "cycle_id": cycle_id,
+                        "metrics": self._cycle_metrics,
+                    })
+                    # Task #8 Part D1 — dashboard JS alias (demo event name).
+                    self._publish_sse("cycle", "cycle.closed", {
                         "cycle_id": cycle_id,
                         "metrics": self._cycle_metrics,
                     })
@@ -2529,6 +2542,13 @@ class CycleOrchestrator:
             level="INFO", cycle_id=cycle_id,
             msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}, state={crucible_state}, iterations={crucible_iterations}")
         self._publish_sse("decision", "decision.crucible_complete", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "severity": round(crucible_severity, 4),
+            "iterations": crucible_iterations,
+            "state": crucible_state,
+        })
+        # Task #8 Part D1 — dashboard JS alias (demo event name).
+        self._publish_sse("decision", "crucible.complete", {
             "cycle_id": cycle_id, "ticker": ticker,
             "severity": round(crucible_severity, 4),
             "iterations": crucible_iterations,

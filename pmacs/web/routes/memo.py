@@ -182,20 +182,19 @@ async def memo_page(request: Request, ticker: str):
             except Exception:
                 pass
 
-        # Get agent results from in-memory store if available
-        agent_results = []
+        # Agent signals + crucible result — derived from the persisted memo_json
+        # (Part C injects agent_signals + crucible_* deterministically), not the
+        # demo path's in-memory globals (deleted in Part E). memo.html prefers
+        # these route vars but also falls back to memo.agent_signals/memo.crucible_*.
+        agent_results = memo.get("agent_signals") or []
         crucible_result = None
-        try:
-            from pmacs.web.routes.pipeline import (
-                _last_cycle_agent_results,
-                _last_cycle_crucible_results,
-            )
-            if ticker in _last_cycle_agent_results:
-                agent_results = _last_cycle_agent_results[ticker]
-            if ticker in _last_cycle_crucible_results:
-                crucible_result = _last_cycle_crucible_results[ticker]
-        except ImportError:
-            pass
+        if memo.get("crucible_severity") is not None:
+            crucible_result = {
+                "severity": memo.get("crucible_severity", 0.0),
+                "thesis_survives": memo.get("crucible_thesis_survives", True),
+                "summary": memo.get("crucible_summary", ""),
+                "attacks": memo.get("crucible_attacks", []),
+            }
 
         # Compute upside/downside
         fair_value = memo.get("fair_value") or (holding.get("price_target_usd") if holding else None)

@@ -45,54 +45,38 @@ async def agents_page(request: Request):
             queue = data_layer.get_queue_status(db)
             decisions = data_layer.get_recent_decisions(db, limit=10)
             holdings = data_layer.get_active_holdings(db)
-            try:
-                running_row = db.execute(
-                    "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' ORDER BY opened_at DESC LIMIT 1"
-                ).fetchone()
-            except sqlite3.OperationalError:
-                running_row = None
+            # Task #8 Part D — live cycle state + last memo snapshot from the DB,
+            # replacing the demo path's in-memory globals (deleted in Part E).
+            from pmacs.web.cycle_snapshot import running_cycle_state, ticker_snapshot
+            live = running_cycle_state(db)
+            snap = ticker_snapshot(db)
         finally:
             db.close()
 
-        is_cycle_running = running_row is not None
+        is_cycle_running = live["is_running"]
 
-        # Enrich personas with last cycle's agent results ONLY when a cycle is active
-        from pmacs.web.routes.pipeline import (
-            _last_cycle_agent_results,
-            _last_cycle_crucible_results,
-            _current_cycle_tickers,
-            _current_ticker_processing,
-        )
-
-        # Derive current/next ticker from the live cycle state, not the queue table
+        # Derive current/next ticker from the live cycle state (cycles + queue
+        # tables), not the deleted demo globals.
         last_analyzed_ticker = None  # shown when idle with prior results
-        if is_cycle_running and _current_ticker_processing:
-            current_ticker = _current_ticker_processing
-            idx = _current_cycle_tickers.index(_current_ticker_processing) if _current_ticker_processing in _current_cycle_tickers else -1
-            next_ticker = _current_cycle_tickers[idx + 1] if idx >= 0 and idx + 1 < len(_current_cycle_tickers) else None
+        if is_cycle_running and live["current_ticker"]:
+            current_ticker = live["current_ticker"] or None
+            next_ticker = live["next_ticker"] or None
         else:
-            # No cycle running — show last analyzed ticker for context
+            # No cycle running — show last analyzed ticker for context.
             current_ticker = None
             next_ticker = None
-            if _last_cycle_agent_results:
-                last_analyzed_ticker = list(_last_cycle_agent_results.keys())[-1]
+            if snap["ticker"]:
+                last_analyzed_ticker = snap["ticker"]
             elif decisions:
                 last_analyzed_ticker = decisions[0].get("ticker")
 
-        # Build lookup: persona_id → agent result for the active ticker ONLY.
-        # When no cycle is running, show clean idle state — no stale data.
-        last_ticker_results = {}
-        last_crucible = None
-
-        if is_cycle_running and _last_cycle_agent_results:
-            # Only show results when a cycle is actively running
-            if _current_ticker_processing and _current_ticker_processing in _last_cycle_agent_results:
-                last_key = _current_ticker_processing
-            else:
-                last_key = list(_last_cycle_agent_results.keys())[-1]
-            for r in _last_cycle_agent_results[last_key]:
-                last_ticker_results[r["persona"]] = r
-            last_crucible = _last_cycle_crucible_results.get(last_key)
+        # Build lookup: persona_id → agent result for the latest memo's ticker.
+        # The persisted memo_json (Part C) carries agent_signals + crucible_*,
+        # so this renders from the DB without the demo globals. During a running
+        # cycle the JS overwrites these cards live via SSE (agent.complete /
+        # decision.crucible_complete aliases from Part D1).
+        last_ticker_results = {r["persona"]: r for r in snap["results"]}
+        last_crucible = snap["crucible"] or None
 
         _persona_last_run: dict[str, str] = {}
 
@@ -201,13 +185,11 @@ async def agents_sankey_data(request: Request):
     Returns: personas (with p_up/p_down per agent), arbitration_result,
     crucible_result, stages (for Process timeline), is_running, available_tickers.
     """
-    from pmacs.web.routes.pipeline import (
-        _last_cycle_agent_results,
-        _last_cycle_crucible_results,
-        _last_cycle_arbitration,
-        _last_cycle_id,
-        _current_cycle_tickers,
-        _current_ticker_processing,
+    # Task #8 Part D — DB-backed snapshot replaces the demo path's live globals.
+    from pmacs.web.cycle_snapshot import (
+        recent_tickers,
+        running_cycle_state,
+        ticker_snapshot,
     )
 
     cfg = get_config()
@@ -215,26 +197,25 @@ async def agents_sankey_data(request: Request):
 
     db = data_layer.get_readonly_db(cfg.sqlite_path)
     try:
-        running_row = db.execute(
-            "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' ORDER BY opened_at DESC LIMIT 1"
-        ).fetchone()
-        is_running = running_row is not None
+        live = running_cycle_state(db)
+        # Prefer the requested ticker's latest memo; fall back to the most
+        # recent memo overall. available_tickers = tickers with persisted memos.
+        if requested_ticker:
+            snap = ticker_snapshot(db, requested_ticker)
+            if not snap["results"]:
+                # Requested ticker has no memo — fall back to the latest overall.
+                snap = ticker_snapshot(db)
+        else:
+            snap = ticker_snapshot(db)
+        available = recent_tickers(db, limit=50)
     finally:
         db.close()
 
-    # Pick the requested or most recent ticker that has agent results
-    last_ticker = None
-    last_results: list[dict] = []
-    last_crucible: dict = {}
-    last_arb: dict = {}
-    if _last_cycle_agent_results:
-        if requested_ticker and requested_ticker in _last_cycle_agent_results:
-            last_ticker = requested_ticker
-        else:
-            last_ticker = list(_last_cycle_agent_results.keys())[-1]
-        last_results = _last_cycle_agent_results[last_ticker]
-        last_crucible = _last_cycle_crucible_results.get(last_ticker, {})
-        last_arb = _last_cycle_arbitration.get(last_ticker, {})
+    is_running = live["is_running"]
+    last_ticker = snap["ticker"] or None
+    last_results: list[dict] = snap["results"]
+    last_crucible: dict = snap["crucible"]
+    last_arb: dict = snap["arb"]
 
     has_data = bool(last_results)
 
@@ -348,11 +329,11 @@ async def agents_sankey_data(request: Request):
     ]
 
     return JSONResponse(content={
-        "ticker": last_ticker or (_current_ticker_processing if is_running else "") or "",
-        "cycle_id": _last_cycle_id or "",
+        "ticker": last_ticker or (live["current_ticker"] if is_running else "") or "",
+        "cycle_id": live["cycle_id"] or "",
         "is_running": is_running,
-        "current_ticker_processing": _current_ticker_processing or "",
-        "cycle_tickers": list(_current_cycle_tickers),
+        "current_ticker_processing": live["current_ticker"] or "",
+        "cycle_tickers": live["cycle_tickers"],
         "evidence_sources": evidence_sources,
         "personas": persona_outputs,
         "arbitration_result": arb_out,
@@ -360,5 +341,5 @@ async def agents_sankey_data(request: Request):
         "weights": {},
         "flows": flows,
         "stages": stages,
-        "available_tickers": list(_last_cycle_agent_results.keys()) if _last_cycle_agent_results else [],
+        "available_tickers": available,
     })

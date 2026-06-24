@@ -947,10 +947,9 @@ async def reset_progress():
         finally:
             db.close()
 
-        # Clear in-memory caches so the UI reflects the reset immediately
-        from pmacs.web.routes.pipeline import _clear_cycle_caches
-        _clear_cycle_caches()
-
+        # No in-memory cycle caches to clear — the agents/memo/ticker pages now
+        # read persisted memos (Task #8 Part D), so deleting the memos/decisions/
+        # cycles rows above is sufficient for the UI to reflect the reset.
         log.info("Progress reset: holdings, decisions, memos, cycles cleared; portfolio reset to $5,000")
         return JSONResponse({"ok": True})
 

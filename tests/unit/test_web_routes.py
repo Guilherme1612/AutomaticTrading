@@ -107,6 +107,76 @@ class TestAgentsRoute:
             assert response.status_code == 200
 
 
+def _seed_memo(db_path: Path, ticker: str, memo: dict, cycle_id: str = "c1") -> None:
+    """Insert a structured memo (the Part C injected shape) for a ticker."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+            "memo_json, decided_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (cycle_id, ticker, "STRONG_BUY", 0.65, json.dumps(memo),
+             "2026-06-24T10:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_FULL_MEMO = {
+    "verdict_line": "STRONG_BUY — conviction 0.65",
+    "p_up": 0.62, "p_flat": 0.20, "p_down": 0.18, "conviction": 0.65,
+    "agent_signals": [
+        {"persona": "growth_hunter", "signal": "bullish", "direction": "bullish",
+         "p_up": 0.70, "p_flat": 0.20, "p_down": 0.10, "confidence": 0.60,
+         "analysis": "rev growth 48%", "evidence_cited": ["e1"]},
+        {"persona": "short_interest", "signal": "bearish", "direction": "bearish",
+         "p_up": 0.20, "p_flat": 0.30, "p_down": 0.50, "confidence": 0.40,
+         "analysis": "short 9.5%", "evidence_cited": ["e3"]},
+    ],
+    "crucible_severity": 0.35,
+    "crucible_attacks": [{"attack_type": "moat", "description": "thin moat"}],
+    "crucible_summary": "Thesis survives with minor concerns.",
+    "crucible_thesis_survives": True,
+}
+
+
+class TestDashboardDbBackedMemo:
+    """Task #8 Part D — agents/memo pages render the injected memo_json fields
+    from the persisted memos table (no demo-path live globals)."""
+
+    def test_agents_sankey_data_reads_persisted_memo(self):
+        cfg = get_config()
+        _seed_memo(cfg.sqlite_path, "AAPL", _FULL_MEMO)
+        with TestClient(app) as client:
+            resp = client.get("/agents/sankey-data?ticker=AAPL")
+        assert resp.status_code == 200
+        data = resp.json()
+        # The seeded memo's agent_signals surface as complete persona outputs.
+        gh = next(p for p in data["personas"] if p["id"] == "growth_hunter")
+        assert gh["status"] == "complete"
+        assert gh["p_up"] == 0.70
+        # Arbitration numbers reconstructed from the memo.
+        assert data["arbitration_result"]["p_up"] == 0.62
+        assert data["arbitration_result"]["conviction"] == 0.65
+        assert data["arbitration_result"]["verdict"] == "STRONG_BUY"
+        # Crucible reconstructed from the injected crucible_* fields.
+        assert data["crucible_result"]["severity"] == 0.35
+        assert data["crucible_result"]["thesis_survives"] is True
+        assert "AAPL" in data["available_tickers"]
+
+    def test_memo_page_renders_agent_signals_from_persisted_json(self):
+        cfg = get_config()
+        _seed_memo(cfg.sqlite_path, "MSFT", _FULL_MEMO)
+        # MSFT must be in the universe for the page to resolve (fixture adds it).
+        with TestClient(app) as client:
+            resp = client.get("/memo/MSFT")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # The Agent Signals card renders the persona name + its analysis text.
+        assert "Growth Hunter" in body
+        assert "rev growth 48%" in body
+
+
 class TestPipelineRoute:
     """Tests for the pipeline page route."""
 

@@ -714,11 +714,18 @@ def _workspace_context(ticker: str) -> dict:
     except Exception:
         pass
 
-    # In-memory per-persona results from the most recent cycle (pipeline.py).
+    # Per-persona results from the ticker's latest persisted memo (Part D).
+    # Replaces the demo path's in-memory globals (deleted in Part E). Part C
+    # injects agent_signals + crucible_* into memos.memo_json deterministically.
     try:
-        from pmacs.web.routes import pipeline as _pipeline
-        ctx["ws_agent_results"] = list(_pipeline._last_cycle_agent_results.get(ticker, []))
-        ctx["ws_crucible"] = _pipeline._last_cycle_crucible_results.get(ticker)
+        from pmacs.web.cycle_snapshot import ticker_snapshot
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            snap = ticker_snapshot(db, ticker)
+        finally:
+            db.close()
+        ctx["ws_agent_results"] = snap["results"]
+        ctx["ws_crucible"] = snap["crucible"] or None
     except Exception:
         pass
 

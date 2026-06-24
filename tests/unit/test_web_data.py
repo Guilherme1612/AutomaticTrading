@@ -270,6 +270,65 @@ class TestGetCortexStatus:
         result = get_cortex_status(db, heartbeat_dir, tmp_path / "nope.log")
         assert result["audit_chain"]["status"] == "OK"  # Empty file = ok
 
+    def test_kill_switch_reflects_engaged_state(self, db, heartbeat_dir, tmp_path):
+        """Regression: previously kill_switch.engaged was hardcoded False,
+        hiding real ENGAGED state from the operator. Must read the table."""
+        audit_path = tmp_path / "audit.log"
+        AuditWriter(audit_path).close()
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS kill_switch ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "state TEXT NOT NULL DEFAULT 'ARMED', reason TEXT, "
+            "trigger_name TEXT, engaged_at TEXT, "
+            "disengaged_at TEXT, updated_at TEXT NOT NULL)"
+        )
+        # Engage the kill switch via the same mechanism the cortex daemon uses.
+        db.execute(
+            "INSERT INTO kill_switch (id, state, reason, trigger_name, "
+            "engaged_at, updated_at) VALUES (1, 'ENGAGED', 'test breach', "
+            "'TEST', '2026-06-24T00:00:00', '2026-06-24T00:00:00') "
+            "ON CONFLICT(id) DO UPDATE SET state='ENGAGED', "
+            "reason='test breach', updated_at='2026-06-24T00:00:00'"
+        )
+        db.commit()
+        result = get_cortex_status(db, heartbeat_dir, audit_path)
+        assert result["kill_switch"]["engaged"] is True
+
+    def test_kill_switch_reflects_armed_state(self, db, heartbeat_dir, tmp_path):
+        """Counterpart: when ARMED, the dashboard shows Disengaged."""
+        audit_path = tmp_path / "audit.log"
+        AuditWriter(audit_path).close()
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS kill_switch ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "state TEXT NOT NULL DEFAULT 'ARMED', reason TEXT, "
+            "trigger_name TEXT, engaged_at TEXT, "
+            "disengaged_at TEXT, updated_at TEXT NOT NULL)"
+        )
+        db.execute(
+            "INSERT INTO kill_switch (id, state, reason, updated_at) "
+            "VALUES (1, 'ARMED', '', '2026-06-24T00:00:00') "
+            "ON CONFLICT(id) DO UPDATE SET state='ARMED', updated_at='2026-06-24T00:00:00'"
+        )
+        db.commit()
+        result = get_cortex_status(db, heartbeat_dir, audit_path)
+        assert result["kill_switch"]["engaged"] is False
+
+    def test_kill_switch_handles_missing_row(self, db, heartbeat_dir, tmp_path):
+        """If the kill_switch table is empty (fresh install), engaged=False."""
+        audit_path = tmp_path / "audit.log"
+        AuditWriter(audit_path).close()
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS kill_switch ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "state TEXT NOT NULL DEFAULT 'ARMED', reason TEXT, "
+            "trigger_name TEXT, engaged_at TEXT, "
+            "disengaged_at TEXT, updated_at TEXT NOT NULL)"
+        )
+        # No row inserted
+        result = get_cortex_status(db, heartbeat_dir, audit_path)
+        assert result["kill_switch"]["engaged"] is False
+
 
 class TestGetAgentCycleData:
     """Tests for get_agent_cycle_data."""

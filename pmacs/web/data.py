@@ -970,6 +970,23 @@ def get_cortex_status(
         except Exception:
             cross_db[store_name] = "error"
 
+    # Read the actual kill_switch row from SQLite — previously this was
+    # hardcoded to {"engaged": False}, causing the Cortex page to show
+    # "DISENGAGED" when the table state was ENGAGED. The orchestrator and
+    # daemon correctly read this table via pmacs.cortex.kill_switch.is_engaged;
+    # the dashboard must reflect the same source of truth so the operator
+    # can see the real state and use the typed-confirm UI to disengage.
+    kill_switch_engaged = False
+    try:
+        _ks_row = db.execute(
+            "SELECT state FROM kill_switch WHERE id = 1"
+        ).fetchone()
+        kill_switch_engaged = (
+            _ks_row is not None and _ks_row[0] == "ENGAGED"
+        )
+    except Exception:
+        kill_switch_engaged = False
+
     return {
         "audit_chain": {
             "status": "OK" if audit_ok else "Error",
@@ -983,7 +1000,7 @@ def get_cortex_status(
             "clock_skew_ms": 0,
             "network_ok": True,
         },
-        "kill_switch": {"engaged": False},
+        "kill_switch": {"engaged": kill_switch_engaged},
         "kill_switch_history": get_kill_switch_history(audit_path),
         "model_integrity": {"hash_verified": False, "model_path": "--"},
     }

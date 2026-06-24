@@ -973,22 +973,18 @@ class PersonaRunner(ABC):
     def _get_api_key(self, api_key_ref: str) -> str:
         """Retrieve API key from system keyring.
 
-        Tries the full ref first (e.g., pmacs.credentials.openrouter_api_key),
-        then falls back to the short name (e.g., openrouter_key) for keys
-        saved by the wizard.
+        Reads the canonical config-driven slot — the same string stored in
+        ``model_registry.json`` ``backends.<name>.api_key_ref`` (e.g.
+        ``pmacs.credentials.openrouter_api_key``). The wizard and Settings
+        both write to this slot. No short-name fallback: any key stored only
+        at the legacy ``openrouter_key`` slot will not be read — re-enter via
+        Settings or run the wizard again.
         """
         if not api_key_ref:
             return ""
         try:
             import keyring
-            key = keyring.get_password("pmacs.credentials", api_key_ref)
-            if key:
-                return key
-            # Fallback: try short name (wizard saves as "{provider}_key")
-            # e.g., "pmacs.credentials.openrouter_api_key" -> "openrouter_key"
-            short_name = api_key_ref.split(".")[-1].replace("_api_key", "_key")
-            key = keyring.get_password("pmacs.credentials", short_name)
-            return key or ""
+            return keyring.get_password("pmacs.credentials", api_key_ref) or ""
         except Exception:
             return ""
 

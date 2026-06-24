@@ -159,6 +159,12 @@ class CycleOrchestrator:
         # Distinct from _macro_regime_result (the step-6 evidence=[] brief label).
         self._macro_regime_dp_cached: Any | None = None
         self._last_crucible_attacks: list[Any] = []
+        # Crucible narrative fields stashed for memo injection (Task #8 Part C):
+        # the crucible LLM emits summary/thesis_survives alongside severity/attacks,
+        # but only attacks were previously stashed. Persist these so memo.html's
+        # Crucible card renders from memo_json without the demo path's live globals.
+        self._last_crucible_summary: str = ""
+        self._last_crucible_thesis_survives: bool = True
         # Wave-2 debate + audit state (Agents.md §11b-§11d)
         self._last_auditor_flags: list[Any] = []
         self._last_advocate_outputs: dict[str, Any] = {}
@@ -2365,6 +2371,12 @@ class CycleOrchestrator:
                 # Store attacks for downstream use (FIX-3: MemoWriter needs them)
                 crucible_attacks = crucible_data.get("attacks", [])
                 self._last_crucible_attacks = crucible_attacks
+                # Task #8 Part C: also stash the narrative fields so the persisted
+                # memo's Crucible card renders from memo_json (no live globals).
+                self._last_crucible_summary = str(crucible_data.get("summary", "") or "")
+                self._last_crucible_thesis_survives = bool(
+                    crucible_data.get("thesis_survives", True)
+                )
 
                 log_debug("CRUCIBLE_CYCLE_COMPLETE",
                     payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
@@ -2851,6 +2863,50 @@ class CycleOrchestrator:
                     memo_dict["bull_bear_debate"] = bbd
             except Exception:
                 pass
+            # Task #8 Part C — deterministic agent signals. Build from the
+            # arbitrated DirectionalProbability list so memo.html's Agent Signals
+            # card renders from persisted memo_json without the demo path's live
+            # globals. DirectionalProbability has no key_signal, so derive a short
+            # direction tag. Matches the demo's agent_signals shape (pipeline.py
+            # _generate_full_memo) so memo.html's per-signal reads are unchanged.
+            if "agent_signals" not in memo_dict:
+                _dps = getattr(arbitrated, "persona_outputs", None) or []
+                if _dps:
+                    _sigs: list[dict] = []
+                    for _dp in _dps:
+                        _p_up = float(getattr(_dp, "p_up", 0.0))
+                        _p_down = float(getattr(_dp, "p_down", 0.0))
+                        _dir = ("bullish" if _p_up > _p_down + 0.05
+                                else "bearish" if _p_down > _p_up + 0.05
+                                else "neutral")
+                        _pname = getattr(getattr(_dp, "persona", None), "value",
+                                         str(getattr(_dp, "persona", "")))
+                        _sigs.append({
+                            "persona": _pname,
+                            "signal": _dir,
+                            "direction": _dir,
+                            "p_up": round(_p_up, 4),
+                            "p_flat": round(float(getattr(_dp, "p_flat", 0.0)), 4),
+                            "p_down": round(_p_down, 4),
+                            "confidence": round(float(getattr(_dp, "confidence", 0.0)), 4),
+                            "analysis": (getattr(_dp, "reasoning", "") or "")[:500],
+                            "evidence_cited": list(getattr(_dp, "evidence_ids", []) or [])[:5],
+                        })
+                    memo_dict["agent_signals"] = _sigs
+            # Deterministic crucible narrative fields. memo.html's Crucible card
+            # reads memo.crucible_severity/attacks/summary and derives
+            # thesis_survives from severity (< 0.50). Inject from the stashed
+            # crucible result so the card renders from memo_json (no live globals).
+            if "crucible_severity" not in memo_dict:
+                memo_dict["crucible_severity"] = float(crucible_severity)
+            if "crucible_attacks" not in memo_dict:
+                memo_dict["crucible_attacks"] = list(self._last_crucible_attacks or [])[:5]
+            if "crucible_summary" not in memo_dict:
+                memo_dict["crucible_summary"] = self._last_crucible_summary or ""
+            if "crucible_thesis_survives" not in memo_dict:
+                memo_dict["crucible_thesis_survives"] = bool(
+                    getattr(self, "_last_crucible_thesis_survives", True)
+                )
             memo_json_str = _persist_j.dumps(memo_dict)
             raw_text = memo_dict.get("raw_text") or memo_json_str
             conn = _sql_connect(self._db_path)

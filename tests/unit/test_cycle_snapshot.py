@@ -151,9 +151,11 @@ class TestRunningCycleState:
 
     def test_running_cycle_with_in_flight_ticker(self, db):
         now = datetime.now(timezone.utc).isoformat()
+        # The orchestrator's in-progress state is OPEN (initiate_cycle inserts
+        # OPEN, close_cycle sets CLOSED); RUNNING was the demo path's state.
         db.execute(
             "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) "
-            "VALUES (?, ?, 'RUNNING', 'manual', 'PAPER')", ("CYC-2", now))
+            "VALUES (?, ?, 'OPEN', 'manual', 'PAPER')", ("CYC-2", now))
         # P3 (OUST) started but not done; P1 (AAPL) pending; P2 (MSFT) done.
         db.execute(
             "INSERT INTO queue (cycle_id, ticker, priority_band, pinned, enqueued_at, "
@@ -175,6 +177,21 @@ class TestRunningCycleState:
         assert st["current_ticker"] == "OUST"
         assert st["next_ticker"] == "AAPL"
         assert set(st["cycle_tickers"]) == {"MSFT", "OUST", "AAPL"}
+
+    def test_legacy_running_state_still_detected(self, db):
+        # Legacy demo-path cycles used state='RUNNING'; the IN clause keeps them
+        # detectable so a DB with old rows still shows in-flight state.
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) "
+            "VALUES (?, ?, 'RUNNING', 'manual', 'PAPER')", ("CYC-LEG", now))
+        db.execute(
+            "INSERT INTO queue (cycle_id, ticker, priority_band, pinned, enqueued_at) "
+            "VALUES (?, 'OUST', 1, 0, ?)", ("CYC-LEG", now))
+        db.commit()
+        st = running_cycle_state(db)
+        assert st["is_running"] is True
+        assert st["cycle_id"] == "CYC-LEG"
 
 
 class TestLatestMemo:

@@ -170,9 +170,13 @@ def running_cycle_state(db: sqlite3.Connection) -> dict[str, Any]:
     The in-flight ticker is the queue row with ``started_at`` set and
     ``completed_at`` NULL; the next is the first still-pending (started_at NULL)
     row in priority order.
+
+    A cycle is in flight when its state is ``OPEN`` (the orchestrator's
+    in-progress state; initiate_cycle inserts OPEN, close_cycle sets CLOSED) or
+    the legacy demo-path ``RUNNING`` state (kept for any rows still in the DB).
     """
     running = db.execute(
-        "SELECT cycle_id FROM cycles WHERE state = 'RUNNING' "
+        "SELECT cycle_id FROM cycles WHERE state IN ('OPEN', 'RUNNING') "
         "ORDER BY opened_at DESC LIMIT 1"
     ).fetchone()
     cycle_id = running[0] if running else ""

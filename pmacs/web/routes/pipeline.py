@@ -2723,40 +2723,78 @@ class CycleStartRequest(BaseModel):
     tickers: list[str] = []  # if non-empty, only these tickers are cycled
 
 
+def _launch_orchestrator_cycle(
+    cfg, trigger: str, cycle_id: str, tickers: list[str] | None, skip_kill_switch: bool
+) -> None:
+    """Build a CycleOrchestrator and run run_cycle in a worker thread (Task #8 Part B).
+
+    The single canonical cycle engine. ``run_cycle`` owns the cycles-row insert
+    (via initiate_cycle, which uses the provided ``cycle_id``), so the route does
+    NOT insert its own row. Returns immediately (the orchestrator is blocking).
+
+    Operator-initiated entry points (SOLO / cycle-start) pass ``skip_kill_switch=True``
+    so a research cycle proceeds even when the kill switch is ENGAGED — the flag
+    only skips the four is_engaged gates; it never disengages the kill switch
+    (Non-Negotiable #5), and budget enforcement still runs per LLM call. The gated
+    /api/cycle/orchestrator entry passes ``skip_kill_switch=False``.
+    """
+    import asyncio
+    from pathlib import Path
+
+    from pmacs.nervous.api import _publisher
+    from pmacs.nervous.orchestrator import CycleOrchestrator
+
+    lock_path = str(Path(cfg.sqlite_path).parent / "cycle_orchestrator.lock")
+    orch = CycleOrchestrator(
+        db_path=Path(cfg.sqlite_path),
+        audit_path=Path(cfg.audit_path) if getattr(cfg, "audit_path", None) else None,
+        sse_publisher=_publisher,
+        config={"lock_path": lock_path},
+    )
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        lambda: orch.run_cycle(
+            trigger, tickers=tickers, cycle_id=cycle_id, skip_kill_switch=skip_kill_switch,
+        ),
+    )
+
+
 @router.post("/api/cycle/start")
 async def cycle_start(req: CycleStartRequest):
     """Manually trigger a new analysis cycle (Source.md §15).
 
     Operator-confirmed: cycles consume API credits and place paper trades.
+    Runs the full spec-canonical pipeline via the orchestrator (the demo path is
+    retired in Task #8 Part E). The operator's explicit action bypasses the
+    kill-switch gate (Non-Negotiable #5: bypass is per-run opt-in, never an
+    auto-disengage; budget enforcement still applies).
     """
-    import asyncio
     from datetime import datetime, timezone
 
     cfg = get_config()
     try:
-        from pmacs.storage.sqlite import get_connection
-
         cycle_id = datetime.now(timezone.utc).strftime("CYCLE-%Y%m%dT%H%M%S")
-        db = get_connection(cfg.sqlite_path)
-        try:
-            db.execute(
-                "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?)",
-                (cycle_id, datetime.now(timezone.utc).isoformat(), "RUNNING", req.trigger, "PAPER"),
-            )
-            db.commit()
-            # Get tickers from universe
-            if req.tickers:
-                # Caller-specified subset (e.g. queue-only run)
-                tickers = [t.upper().strip() for t in req.tickers if t.strip()]
-            else:
-                rows = db.execute("SELECT ticker FROM universe WHERE COALESCE(halted, 0) = 0 AND COALESCE(delisted, 0) = 0 ORDER BY COALESCE(pinned_priority, 999) ASC, added_at ASC").fetchall()
-                tickers = [r[0] for r in rows] if rows else ["AAPL", "MSFT", "GOOGL"]
-        finally:
-            db.close()
+        # Resolve the ticker subset from the request or the universe table.
+        tickers: list[str] | None
+        if req.tickers:
+            tickers = [t.upper().strip() for t in req.tickers if t.strip()]
+        else:
+            from pmacs.storage.sqlite import get_connection
+            db = get_connection(cfg.sqlite_path)
+            try:
+                rows = db.execute(
+                    "SELECT ticker FROM universe WHERE COALESCE(halted, 0) = 0 "
+                    "AND COALESCE(delisted, 0) = 0 "
+                    "ORDER BY COALESCE(pinned_priority, 999) ASC, added_at ASC"
+                ).fetchall()
+            finally:
+                db.close()
+            tickers = [r[0] for r in rows] if rows else ["AAPL", "MSFT", "GOOGL"]
 
-        # Launch demo cycle in background
-        asyncio.create_task(_run_demo_cycle(cycle_id, tickers))
-
+        _launch_orchestrator_cycle(
+            cfg, req.trigger or "manual", cycle_id, tickers, skip_kill_switch=True,
+        )
         return JSONResponse({"ok": True, "cycle_id": cycle_id, "message": "Cycle " + cycle_id + " started"})
     except Exception as exc:
         import logging
@@ -2766,39 +2804,33 @@ async def cycle_start(req: CycleStartRequest):
 
 @router.post("/api/cycle/orchestrator")
 async def cycle_orchestrator(req: CycleStartRequest):
-    """Trigger a full cycle through the spec-canonical orchestrator (Source.md §15).
+    """Trigger a full GATED cycle through the spec-canonical orchestrator (Source.md §15).
 
-    This is the wave-2 path (Agents.md §11b-§11d, §16.9): runs 7 personas + bull/bear
-    advocates + cross-persona auditor, applies auditor arbitration weight caps, computes
-    reverse-DCF + scenario-weighted expected price, and persists a structured memo (with
-    bull_bear_debate / reverse_dcf / scenario_price / what_would_change_my_mind sections)
-    to the memos table that /memo/{ticker} renders. The orchestrator opens and closes its
-    own cycle row and streams SSE to the same /events dashboard as the demo cycle.
+    This is the one entry point where the operator can run a *kill-switch-gated*
+    full cycle: ``skip_kill_switch=False`` (default), so the cycle is blocked if
+    the kill switch is engaged. The wave-2 path (Agents.md §11b-§11d, §16.9) runs
+    7 personas + bull/bear advocates + cross-persona auditor, applies auditor
+    arbitration weight caps, computes reverse-DCF + scenario-weighted expected
+    price, and persists a structured memo to the memos table that /memo/{ticker}
+    renders. The orchestrator opens and closes its own cycle row and streams SSE.
 
     Runs synchronously in a worker thread (the orchestrator is blocking); returns
-    immediately. req.tickers is ignored on this path — the orchestrator composes its own
-    queue from the universe (Architecture.md §12). Operator-confirmed: consumes LLM/API
-    credits and may place paper trades.
+    immediately with the cycle_id. Operator-confirmed: consumes LLM/API credits and
+    may place paper trades.
     """
-    import asyncio
-    from pathlib import Path
+    from datetime import datetime, timezone
 
     cfg = get_config()
     try:
-        from pmacs.nervous.api import _publisher
-        from pmacs.nervous.orchestrator import CycleOrchestrator
-
-        lock_path = str(Path(cfg.sqlite_path).parent / "cycle_orchestrator.lock")
-        orch = CycleOrchestrator(
-            db_path=Path(cfg.sqlite_path),
-            audit_path=Path(cfg.audit_path) if getattr(cfg, "audit_path", None) else None,
-            sse_publisher=_publisher,
-            config={"lock_path": lock_path},
+        cycle_id = datetime.now(timezone.utc).strftime("ORCH-%Y%m%dT%H%M%S")
+        tickers = [t.upper().strip() for t in req.tickers if t.strip()] or None
+        _launch_orchestrator_cycle(
+            cfg, req.trigger or "OPERATOR", cycle_id, tickers, skip_kill_switch=False,
         )
-        trigger = (req.trigger if req.trigger else "OPERATOR")
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, lambda: orch.run_cycle(trigger))
-        return JSONResponse({"ok": True, "message": "Orchestrator cycle started (wave-2 path)"})
+        return JSONResponse({
+            "ok": True, "cycle_id": cycle_id,
+            "message": "Gated orchestrator cycle started (wave-2 path)",
+        })
     except Exception as exc:
         import logging
         logging.getLogger("pmacs.web").error("Orchestrator cycle start failed: %s", exc, exc_info=True)
@@ -2816,8 +2848,12 @@ async def solo_run(req: SoloRunRequest):
     No operator confirmation required — read-only data fetching and LLM analysis.
     Paper trades may still be created for BUY/STRONG_BUY verdicts.
     Results stream via SSE in real-time and persist in DB.
+
+    Runs the full spec-canonical pipeline via the orchestrator (Task #8 Part B);
+    the demo path is retired in Part E. The operator's explicit action bypasses
+    the kill-switch gate (per-run opt-in, never an auto-disengage; Non-Negotiable
+    #5). ``run_cycle`` owns the cycles-row insert, so the route does not.
     """
-    import asyncio
     from datetime import datetime, timezone
 
     ticker = req.ticker.upper().strip()
@@ -2828,20 +2864,9 @@ async def solo_run(req: SoloRunRequest):
     cycle_id = f"SOLO-{ticker}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
 
     try:
-        from pmacs.storage.sqlite import get_connection
-
-        db = get_connection(cfg.sqlite_path)
-        try:
-            db.execute(
-                "INSERT INTO cycles (cycle_id, opened_at, state, trigger, mode) VALUES (?, ?, ?, ?, ?)",
-                (cycle_id, datetime.now(timezone.utc).isoformat(), "RUNNING", "solo_research", "PAPER"),
-            )
-            db.commit()
-        finally:
-            db.close()
-
-        asyncio.create_task(_run_demo_cycle(cycle_id, [ticker]))
-
+        _launch_orchestrator_cycle(
+            cfg, "solo_research", cycle_id, [ticker], skip_kill_switch=True,
+        )
         return JSONResponse({"ok": True, "cycle_id": cycle_id, "ticker": ticker, "message": f"Solo analysis started for {ticker}"})
     except Exception as exc:
         import logging

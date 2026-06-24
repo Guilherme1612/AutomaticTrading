@@ -177,6 +177,78 @@ class TestDashboardDbBackedMemo:
         assert "rev growth 48%" in body
 
 
+class TestOperatorRoutesUseOrchestrator:
+    """Task #8 Part B — the operator routes run the single canonical engine.
+
+    /api/solo/run and /api/cycle/start are operator-initiated, so they bypass the
+    kill-switch gate (skip_kill_switch=True) — never an auto-disengage
+    (Non-Negotiable #5). /api/cycle/orchestrator stays gated (False). All three
+    pre-generate a cycle_id the route returns immediately, and run_cycle owns the
+    cycles-row insert (the route does NOT insert its own row).
+    """
+
+    def _capture(self, monkeypatch):
+        import pmacs.web.routes.pipeline as P
+        calls: list[dict] = []
+
+        def _fake(cfg, trigger, cycle_id, tickers, skip_kill_switch):
+            calls.append({
+                "trigger": trigger, "cycle_id": cycle_id,
+                "tickers": tickers, "skip_kill_switch": skip_kill_switch,
+            })
+
+        monkeypatch.setattr(P, "_launch_orchestrator_cycle", _fake)
+        return calls
+
+    def test_solo_run_bypasses_kill_switch_single_ticker(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/solo/run", json={"ticker": "oust"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["ticker"] == "OUST"
+        assert body["cycle_id"].startswith("SOLO-OUST-")
+        assert len(calls) == 1
+        c = calls[0]
+        assert c["skip_kill_switch"] is True
+        assert c["tickers"] == ["OUST"]
+        assert c["trigger"] == "solo_research"
+        assert c["cycle_id"] == body["cycle_id"]
+
+    def test_cycle_start_bypasses_kill_switch(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/cycle/start", json={"trigger": "manual",
+                                                        "tickers": ["AAPL", "MSFT"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cycle_id"].startswith("CYCLE-")
+        assert len(calls) == 1
+        assert calls[0]["skip_kill_switch"] is True
+        assert calls[0]["tickers"] == ["AAPL", "MSFT"]
+        assert calls[0]["cycle_id"] == body["cycle_id"]
+
+    def test_orchestrator_route_stays_gated(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/cycle/orchestrator", json={"tickers": ["NVDA"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cycle_id"].startswith("ORCH-")
+        assert len(calls) == 1
+        assert calls[0]["skip_kill_switch"] is False
+        assert calls[0]["tickers"] == ["NVDA"]
+        assert calls[0]["cycle_id"] == body["cycle_id"]
+
+    def test_solo_run_rejects_invalid_ticker(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/solo/run", json={"ticker": "123"})
+        assert resp.status_code == 400
+        assert calls == []
+
+
 class TestPipelineRoute:
     """Tests for the pipeline page route."""
 

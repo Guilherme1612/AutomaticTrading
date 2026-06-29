@@ -1,0 +1,120 @@
+# AGENT-1 PROPOSAL — NOT APPLIED
+# ============================================================================
+# Audit: /ticker/{ticker} workspace (pmacs/web/templates/ticker_detail.html,
+#        pmacs/web/static/style.css)
+# Date:  2026-06-29
+# Scope: BLOCKER F-001/F-002 + HIGH F-003..F-008 only. MED/LOW are listed in
+#        01-frontend-findings.md but not patched here — operator may extend.
+# Pre-condition: F-001 (per-tab id) is a prerequisite for F-002 (keyboard nav).
+# Pre-condition: F-005 (<div role="tablist">) must land before F-002's
+#                aria-controls references can resolve correctly.
+# Apply order: F-005 -> F-001 -> F-002 -> F-003 -> F-004 -> F-006 -> F-007 -> F-008
+# ============================================================================
+
+--- a/pmacs/web/templates/ticker_detail.html
++++ b/pmacs/web/templates/ticker_detail.html
+@@ -156,12 +156,15 @@
+ </div>
+- <nav class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
+-     <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
+-     <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo" aria-selected="false">Memo</button>
+-     <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas" aria-selected="false">Personas</button>
+-     <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage" aria-selected="false">Lineage</button>
+-     <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures" aria-selected="false">Failures</button>
+- </nav>
++ <div class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
++     <button type="button" role="tab" id="ws-tab-fundamentals" aria-controls="ws-fundamentals" tabindex="0" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
++     <button type="button" role="tab" id="ws-tab-memo"       aria-controls="ws-memo"       tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo"       aria-selected="false">Memo</button>
++     <button type="button" role="tab" id="ws-tab-personas"   aria-controls="ws-personas"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas"   aria-selected="false">Personas</button>
++     <button type="button" role="tab" id="ws-tab-lineage"    aria-controls="ws-lineage"    tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage"    aria-selected="false">Lineage</button>
++     <button type="button" role="tab" id="ws-tab-failures"   aria-controls="ws-failures"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures"   aria-selected="false">Failures</button>
++ </div>
+ {% endif %}
+ <div id="ws-fundamentals" class="ws-panel">
+@@ -804,7 +807,7 @@
+ </div>{# /ws-fundamentals #}
+
+ {# ── Memo tab (Source.md §16.6 + §16.9) — rendered from the persisted memo_json ── #}
+-<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
++<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-memo" tabindex="0">
+     {% if ws_memo %}
+     <div class="space-y-5">
+         {% if ws_memo.verdict_line %}
+@@ -875,7 +878,7 @@
+ </section>
+
+ {# ── Personas tab (Source.md §15.4 / §16.6 per-persona accordion) ── #}
+-<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
++<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-personas" tabindex="0">
+     {% if ws_agent_results|length > 0 %}
+     {% set _aff_by = {} %}
+     {% for a in ws_persona_affinity %}{% set _ = _aff_by.update({a.persona: a}) %}{% endfor %}
+@@ -913,7 +916,7 @@
+ </section>
+
+ {# ── Lineage tab (Source.md §16.6 position lineage + historical decisions) ── #}
+-<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
++<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-lineage" tabindex="0">
+     <div class="space-y-5">
+         {% if ws_holding %}
+         <div class="card card-elevated p-5 reveal">
+@@ -985,7 +988,7 @@
+ </section>
+
+ {# ── Failures tab (Source.md §16.6 failure history; Agents.md FDE taxonomy) ── #}
+-<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
++<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-failures" tabindex="0">
+     {% if ws_failures|length > 0 %}
+     <div class="space-y-3">
+         {% for f in ws_failures %}
+@@ -1011,11 +1014,33 @@
+ <script>
+ // Ticker workspace tab switching (Source.md §16.6). No framework — plain DOM,
+ // degrades to all-panels-visible if JS fails (panels default to .hidden except
+ // fundamentals, so without JS only fundamentals shows; with JS, tabs reveal).
+ (function () {
+     var tabs = document.querySelectorAll('[data-ws-tab]');
+     var panels = document.querySelectorAll('.ws-panel');
+     if (!tabs.length) return;
+     function activate(name) {
+         panels.forEach(function (p) {
+             p.classList.toggle('hidden', p.id !== 'ws-' + name);
+         });
+         tabs.forEach(function (b) {
+             var on = b.getAttribute('data-ws-tab') === name;
+             b.setAttribute('aria-selected', on ? 'true' : 'false');
+             b.setAttribute('tabindex', on ? '0' : '-1');
++            // F-004: active state is now CSS-driven via [aria-selected="true"]
++            // in style.css. No class-toggling here; kept for backwards-compat
++            // with any custom rule that targets .bg-accent-soft on a button.
+             b.classList.toggle('bg-accent-soft', on);
+             b.classList.toggle('text-accent', on);
+             b.classList.toggle('text-text-secondary', !on);
+         });
+         try { history.replaceState(null, '', '#' + name); } catch (e) {}
+     }
+     tabs.forEach(function (b) {
+-         b.addEventListener('click', function () { activate(b.getAttribute('data-ws-tab')); });
++         b.addEventListener('click', function () { activate(b.getAttribute('data-ws-tab')); });
++         // F-002: keyboard navigation (Arrow / Home / End) per WAI-ARIA tab pattern.
++         b.addEventListener('keydown', function (e) {
++             var ids = Array.prototype.map.call(tabs, function (t) { return t.getAttribute('data-ws-tab'); });
++             var i = ids.indexOf(b.getAttribute('data-ws-tab'));
++             var next = -1;
++             if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
++             else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
++             else if (e.key === 'Home') next = 0;
++             else if (e.key === 'End') next = tabs.length - 1;
++             if (next < 0) return;
++             e.preventDefault();
++             var target = tabs[next];
++             target.focus();
++             activate(target.getAttribute('data-ws-tab'));
++         });
+     });
+     // Deep link: /ticker/{ticker}#memo  -> open that tab.
+     var initial = (location.hash || '').replace('#', '');
+     if (initial && document.getElementById('ws-' + initial)) { activate(initial); }
+     else { activate('fundamentals'); }
+ })();
+ </script>

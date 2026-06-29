@@ -1837,6 +1837,32 @@ details.pm-details[open] > summary::after {
 .vp-hold       { background: var(--crucible-soft); color: var(--crucible); }
 .vp-skip       { background: var(--negative-soft); color: var(--negative); }
 
+/* Pipeline priority-band chips (P1=red, P2=amber, P3=blue, P4=zinc)
+   Mirror .vp-* pattern; applied to <select data-priority-band-select>
+   on each pipeline verdict card. Dark mode inherits via the existing
+   *-soft tokens (verified in the --negative-soft / --warning-soft /
+   --accent-soft / --surface-sunken tokens around line 1626).
+*/
+.pb-p1 { background: var(--negative-soft); color: var(--negative); border-color: var(--negative); }
+.pb-p2 { background: var(--warning-soft);  color: var(--warning);  border-color: var(--warning); }
+.pb-p3 { background: var(--accent-soft);   color: var(--accent);   border-color: var(--accent); }
+.pb-p4 { background: var(--surface-sunken); color: var(--text-secondary); border-color: var(--border); }
+
+/* Sticky width — P1 text "P1 · HIGHEST" is wider than P4 "P4 · BG".
+   Without min-width the card layout shifts when an operator changes
+   a band's chip. */
+select[data-priority-band-select] {
+    min-width: 6.5rem;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%, currentColor 60%, transparent 60%),
+                      linear-gradient(135deg, currentColor 40%, transparent 40%);
+    background-position: calc(100% - 0.85rem) 50%, calc(100% - 0.5rem) 50%;
+    background-size: 0.35rem 0.35rem;
+    background-repeat: no-repeat;
+    padding-right: 1.4rem;
+}
+
 /* Big metric number — animated count-up */
 .metric-number {
     font-family: var(--font-mono, ui-monospace, monospace);

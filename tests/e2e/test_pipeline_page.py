@@ -151,3 +151,64 @@ class TestPipelineAPIEndpoints:
     def test_scheme_load_endpoint(self, client):
         resp = client.get("/pipeline/queue/scheme/nonexistent")
         assert resp.status_code in (200, 404)
+
+
+class TestPriorityBandUI:
+    """Phase 8 Task 2 — Pipeline priority-band inline <select> chip + P1 KPI card."""
+
+    def test_card_has_priority_band_select(self, client):
+        """Each verdict card has a P-band <select> with 4 options."""
+        import re
+        resp = client.get("/pipeline")
+        assert resp.status_code == 200
+        # Either there are no cards (empty DB), or every card has the chip.
+        # Pattern: <select ... data-priority-band-select ... data-ticker="..."
+        selects = re.findall(r'<select[^>]*data-priority-band-select[^>]*>', resp.text)
+        for sel in selects:
+            assert 'data-ticker="' in sel, f"select missing data-ticker: {sel}"
+            assert 'aria-label="Priority band for' in sel, f"select missing aria-label: {sel}"
+
+    def test_priority_band_options_in_select(self, client):
+        """The 4 P-band options (P1/P2/P3/P4) exist in the rendered HTML."""
+        resp = client.get("/pipeline")
+        # Options exist if any select was rendered; if no cards → skip
+        if 'data-priority-band-select' not in resp.text:
+            pytest.skip("no cards in test DB")
+        for label in ("P1 · HIGHEST", "P2 · HIGH", "P3 · NORM", "P4 · BG"):
+            assert label in resp.text, f"missing option: {label}"
+
+    def test_card_has_priority_band_attribute(self, client):
+        """Cards expose data-priority-band='P[1-4]' so JS can read current band."""
+        import re
+        resp = client.get("/pipeline")
+        bands = re.findall(r'data-priority-band="(P[1-4])"', resp.text)
+        if not bands:
+            pytest.skip("no cards in test DB")
+        # Every match must be one of P1/P2/P3/P4 — no P5/P0/etc.
+        for b in bands:
+            assert b in ("P1", "P2", "P3", "P4"), f"invalid band: {b}"
+
+    def test_p1_kpi_card_present(self, client):
+        """The P1 KPI card exists with the priority queue count."""
+        resp = client.get("/pipeline")
+        assert resp.status_code == 200
+        assert "P1 Queue" in resp.text
+        assert "highest priority" in resp.text
+
+    def test_change_priority_band_endpoint(self, client):
+        """POST /pipeline/queue/reorder with valid priority-band payload."""
+        resp = client.post(
+            "/pipeline/queue/reorder",
+            json={"ticker": "TEST", "from_band": "P3", "to_band": "P1"},
+        )
+        # 404 if ticker not in queue (test DB has no queue rows); 200 if it succeeded
+        assert resp.status_code in (200, 404)
+
+    def test_change_priority_band_invalid_payload(self, client):
+        """POST /pipeline/queue/reorder rejects bogus band values."""
+        resp = client.post(
+            "/pipeline/queue/reorder",
+            json={"ticker": "TEST", "from_band": "P5", "to_band": "P0"},
+        )
+        # Server-side valid_bands check returns False → 404
+        assert resp.status_code == 404

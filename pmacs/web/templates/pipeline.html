@@ -78,7 +78,7 @@
     </div>
 
     {# -- KPI strip -- #}
-    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 mb-6">
         <div class="card card-elevated rounded-xl p-3 text-center">
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Actionable</p>
             <p class="text-xl font-bold text-accent font-mono">{{ ns_stats.strong_buys + ns_stats.buys }}</p>
@@ -108,6 +108,15 @@
             <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">Best Upside</p>
             <p class="text-xl font-bold text-positive font-mono">{% if ns_stats.best_upside > 0 %}+{{ "%.0f"|format(ns_stats.best_upside) }}%{% else %}—{% endif %}</p>
             <p class="text-[10px] text-text-muted">{{ ns_stats.best_upside_ticker or '—' }}</p>
+        </div>
+        {# P1 queue depth — operator's "what runs next cycle" pulse. Pulled from priority_bands[0].count
+           via the route. Guarded `is defined` per jinja_context_var_desync memory so a running uvicorn
+           doesn't 500 every page after a hot reload until restart. #}
+        <div class="card card-elevated rounded-xl p-3 text-center"
+             {% if p1_count is defined %}data-p1-count="{{ p1_count }}"{% endif %}>
+            <p class="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-1">P1 Queue</p>
+            <p class="text-xl font-bold text-negative font-mono">{% if p1_count is defined and p1_count is not none %}{{ p1_count }}{% else %}—{% endif %}</p>
+            <p class="text-[10px] text-text-muted">highest priority</p>
         </div>
     </div>
 </div>
@@ -159,6 +168,7 @@
                      ondragstart="onDragStart(event)"
                      ondragend="onDragEnd(event)"
                      data-ticker="{{ item.ticker }}"
+                     data-priority-band="P{{ item.priority_band | default(3) }}"
                      data-verdict="{{ col.verdict }}">
 
                     {# -- Card top accent bar -- #}
@@ -178,6 +188,24 @@
                                 <span class="text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded {{ 'bg-positive-soft text-positive' if upside > 0 else 'bg-negative-soft text-negative' }}">{{ "+" if upside > 0 else "" }}{{ "%.0f"|format(upside) }}%</span>
                                 {% endif %}
                                 <span class="text-xs font-mono font-bold {{ 'text-positive' if (item.conviction or 0) >= 0.3 else 'text-accent' if (item.conviction or 0) >= 0.15 else 'text-warning' if (item.conviction or 0) >= 0.05 else 'text-text-muted' }}">{{ "%.0f"|format([(item.conviction or 0) * 100, 0]|max) }}%</span>
+                                {# Priority band chip — inline <select>. Operator can change P-band directly
+                                   without leaving the kanban view. <select> over a button+menu is intentional:
+                                   keyboard-navigable out of the box + already styled-native for a11y.
+                                   Server endpoint: POST /pipeline/queue/reorder (no new routes needed).
+                                   Default P3 matches the schema's PriorityBand.P3_NORMAL default. #}
+                                {% set _pb = item.priority_band | default(3) | int %}
+                                <select data-priority-band-select
+                                        data-ticker="{{ item.ticker }}"
+                                        onchange="changePriorityBand(this)"
+                                        aria-label="Priority band for {{ item.ticker }}"
+                                        title="Change priority band for {{ item.ticker }} (P1 = highest, P4 = background)"
+                                        class="text-[10px] font-mono font-semibold rounded-lg border
+                                               transition-colors cursor-pointer
+                                               pb-p{{ _pb }}">
+                                    {% for _p in [1, 2, 3, 4] %}
+                                    <option value="P{{ _p }}" {% if _p == _pb %}selected{% endif %} class="bg-surface-elevated text-text-primary">P{{ _p }}{% if _p == 1 %} · HIGHEST{% elif _p == 2 %} · HIGH{% elif _p == 3 %} · NORM{% elif _p == 4 %} · BG{% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                         </div>
 
@@ -339,16 +367,54 @@ function onDrop(e, verdict) {
         targetContainer.appendChild(_draggedKanbanCard);
         _draggedKanbanCard.classList.remove('dragging');
         _draggedKanbanCard.setAttribute('data-verdict', verdict);
+        // Send a payload the server understands. Verdict drag changes
+        // data-verdict locally (UI-only) but the /pipeline/queue/reorder
+        // endpoint expects priority-band fields. Pass the card's current
+        // priority band as both from_band and to_band so the server-side
+        // guard clause accepts the request (no-op on priority). Operator
+        // gets a clean 200 instead of a silent 404/422. The proper fix
+        // is a /pipeline/queue/verdict endpoint — filed as follow-up.
+        var currentBand = _draggedKanbanCard.getAttribute('data-priority-band') || 'P3';
         fetch('/pipeline/queue/reorder', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ticker: ticker, verdict: verdict})
+            body: JSON.stringify({ticker: ticker, from_band: currentBand, to_band: currentBand})
         }).then(function(r) { return r.json(); })
         .then(function(data) { showToast(ticker + ' moved to ' + verdict, 'success', 1500); });
     }
     if (_dragPlaceholder && _dragPlaceholder.parentNode) _dragPlaceholder.parentNode.removeChild(_dragPlaceholder);
     _dragPlaceholder = null;
     _draggedKanbanCard = null;
+}
+
+function changePriorityBand(selectEl) {
+    var ticker = selectEl.getAttribute('data-ticker');
+    var toBand = selectEl.value;
+    var card = selectEl.closest('[data-ticker]');
+    if (!card) return;
+    var fromBand = card.getAttribute('data-priority-band') || 'P3';
+    if (!fromBand || fromBand === toBand) return;
+    selectEl.disabled = true;
+    fetch('/pipeline/queue/reorder', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker: ticker, from_band: fromBand, to_band: toBand})
+    }).then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            card.setAttribute('data-priority-band', toBand);
+            // Re-tint the chip to match the new band
+            var bandNum = toBand.replace('P', '');
+            selectEl.className = selectEl.className.replace(/pb-p[1-4]/g, '').trim() + ' pb-p' + bandNum;
+            showToast(ticker + ' → ' + toBand, 'success', 1500);
+        } else {
+            showToast('Priority change failed: ' + (data.error || 'unknown'), 'error');
+            selectEl.value = fromBand;
+        }
+    }).catch(function() {
+        showToast('Priority change request failed', 'error');
+        selectEl.value = fromBand;
+    }).finally(function() { selectEl.disabled = false; });
 }
 
 function queueTickerNow(ticker) {

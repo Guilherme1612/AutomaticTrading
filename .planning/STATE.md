@@ -47,3 +47,4 @@ None.
 | 2026-05-13 | Phase 10: Broker integration, paper adapter, first-run wizard | Executed |
 | 2026-05-13 | Phase 11: Sparklines, a11y, profiling, error boundaries, operator workflows | Executed |
 | 2026-05-13 | Review fixes: XSS, kill switch stub, event key alignment, portfolio tautology | All resolved |
+| 2026-06-29 | Link ticker symbol + name on /universe table; wrap hero tickers on /agents | 4a452df |

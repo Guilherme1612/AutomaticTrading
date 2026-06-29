@@ -43,6 +43,28 @@ class MacroRegimeRunner(PersonaRunner):
         from pmacs.schemas.personas import MacroRegimeOutput
         return MacroRegimeOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """MacroRegime drift fixes (deepseek-v4-flash on openrouter).
+
+        - ``yield_curve_signal`` and ``vix_regime`` are Literal enums; the
+          LLM emits lowercase (``"flat"``, ``"elevated"``) or unknown
+          (``"NO_DATA"``, ``"UNCERTAIN"``). Case-insensitive enum matcher
+          maps them to canonical uppercase; unknowns fall back to first
+          enum member (NORMAL / LOW — safest defaults).
+        - Top-level ``evidence_ids`` may be empty — padded.
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        parsed, fixes = self._normalize_literal_enums(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.macro_regime import MacroRegimeSanity
         return MacroRegimeSanity()

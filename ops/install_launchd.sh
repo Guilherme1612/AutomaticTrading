@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install all 8 PMACS launchd services from launchd/ directory.
+# Install all 7 PMACS launchd services from launchd/ directory.
 # Loads them with launchctl. Checks for existing services first.
 # Includes uninstall option.
 # Spec ref: Architecture.md §4 (process topology)
@@ -24,7 +24,10 @@ ACTION="${1:-install}"
 
 PMACS_HOME="/usr/local/var/pmacs"
 
-# The 8 PMACS processes (Architecture.md §4)
+# The 7 PMACS processes (Architecture.md §4). The combined web + write API
+# server (dashboard UI + nervous orchestration/SSE) is a single process served
+# by com.pmacs.nervous (uvicorn pmacs.web.app:app on :8000). See Architecture.md
+# §2.2 ADR — the dashboard is no longer a separate process/plist.
 EXPECTED_PLISTS=(
     "com.pmacs.inference.plist"
     "com.pmacs.cortex.plist"
@@ -33,13 +36,12 @@ EXPECTED_PLISTS=(
     "com.pmacs.nervous.plist"
     "com.pmacs.stoploss.plist"
     "com.pmacs.mutation.plist"
-    "com.pmacs.dashboard.plist"
 )
 
 usage() {
     echo "Usage: sudo $0 [install|uninstall|status]"
     echo ""
-    echo "  install    Load all 8 PMACS launchd plists (default)"
+    echo "  install    Load all 7 PMACS launchd plists (default)"
     echo "  uninstall  Unload and remove all PMACS launchd plists"
     echo "  status     Show current status of all PMACS services"
     exit "${1:-0}"

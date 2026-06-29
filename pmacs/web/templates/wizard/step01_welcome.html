@@ -1,26 +1,8 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full dark">
+<html lang="en" class="h-full">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PMACS Setup Wizard</title>
-    <link rel="stylesheet" href="/static/dist/tailwind.css">
-    <script src="/static/vendor/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
-    <link rel="stylesheet" href="/static/style.css">
+    {% include "wizard/_head.html" %}
     <style>
-        :root {
-            --surface: #18181b;
-            --surface-elevated: #27272a;
-            --border: #3f3f46;
-            --text-primary: #f4f4f5;
-            --text-secondary: #a1a1aa;
-            --text-muted: #71717a;
-            --accent: #3b82f6;
-            --positive: #22c55e;
-            --negative: #ef4444;
-            --warning: #fbbf24;
-        }
         .wizard-fade-in {
             animation: wizard-fade 200ms ease-out;
         }

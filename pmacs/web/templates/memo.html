@@ -10,473 +10,774 @@
 {% set error_actions = error.get("actions", []) %}
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
-{% else %}
-
-<!-- Back navigation -->
+{% elif not_analyzed %}
+<!-- Friendly empty state: ticker is in the universe but has not been analyzed yet -->
 <div class="mb-6 reveal">
-    <a href="/pipeline" class="inline-flex items-center gap-1.5 text-sm text-text-muted hover:text-text-secondary transition-colors">
+    <a href="/universe" class="inline-flex items-center gap-1.5 text-sm text-text-muted hover:text-text-secondary transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-        Pipeline
+        Universe
     </a>
 </div>
-
-<!-- Ticker navigation -->
-<div class="flex items-center justify-between mb-4 gap-2">
-  {% if prev_ticker %}
-  <a href="/memo/{{ prev_ticker }}" data-memo-prev class="flex items-center gap-1 text-xs text-text-muted hover:text-text-primary transition-colors whitespace-nowrap">
-    ← {{ prev_ticker }}
-  </a>
-  {% else %}<span></span>{% endif %}
-  {% if ticker_position %}
-  <span class="text-[10px] text-text-muted whitespace-nowrap">{{ ticker_position }} of {{ ticker_total }} memos</span>
-  {% else %}<span></span>{% endif %}
-  {% if next_ticker %}
-  <a href="/memo/{{ next_ticker }}" data-memo-next class="flex items-center gap-1 text-xs text-text-muted hover:text-text-primary transition-colors whitespace-nowrap">
-    {{ next_ticker }} →
-  </a>
-  {% else %}<span></span>{% endif %}
-</div>
-
-<!-- Header: Ticker + Verdict + Price -->
-<div class="card card-elevated mb-8 reveal">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
-            <div class="flex items-center gap-3 mb-2">
-                <h1 class="text-2xl sm:text-3xl font-mono font-bold text-text-primary">{{ ticker }}</h1>
-                <span class="px-3 py-1 text-sm font-semibold rounded-xl
-                             {{ 'bg-positive-soft text-positive' if verdict == 'STRONG_BUY' else '' }}
-                             {{ 'bg-accent-soft text-accent' if verdict == 'BUY' else '' }}
-                             {{ 'bg-crucible-soft text-crucible' if verdict == 'HOLD' else '' }}
-                             {{ 'bg-negative-soft text-negative' if verdict == 'SKIP' else '' }}">
-                    {{ verdict }}
-                </span>
-            </div>
-            {% if memo.verdict_line %}
-            <p class="text-sm text-text-secondary max-w-xl">{{ memo.verdict_line }}</p>
-            {% endif %}
-        </div>
-        <div class="text-right space-y-1">
-            {% if current_price %}
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Current Price</p>
-            <p class="text-2xl font-mono font-semibold text-text-primary">${{ "%.2f"|format(current_price) }}</p>
-            {% endif %}
-            {% if holding and holding.entry_price_usd %}
-            <p class="text-xs text-text-muted">Entry: ${{ "%.2f"|format(holding.entry_price_usd) }} | Conviction: {{ "%.0f"|format(conviction * 100) }}%</p>
-            {% endif %}
-        </div>
+<div class="card card-elevated max-w-2xl mx-auto p-10 text-center" data-stagger>
+    <div class="w-16 h-16 mx-auto mb-6 rounded-2xl bg-accent-soft flex items-center justify-center">
+        <svg class="w-8 h-8 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+        </svg>
     </div>
-</div>
-
-<!-- Price Target Section -->
-{% if fair_value %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-green-500"></span>
-            <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Fair Value Estimate</h2>
-        </div>
-        {% if memo.memo_score is defined and memo.memo_score is not none %}
-        <span class="text-xs font-mono font-semibold {{ 'text-positive' if memo.memo_score >= 70 else 'text-warning' if memo.memo_score >= 50 else 'text-negative' }}">SCORE: {{ "%.0f"|format(memo.memo_score) }}</span>
-        {% endif %}
+    <h1 class="text-2xl font-mono font-bold text-text-primary mb-3">{{ ticker }}</h1>
+    <p class="text-text-secondary mb-2 leading-relaxed">No memo for this ticker yet.</p>
+    <p class="text-sm text-text-muted mb-8 leading-relaxed max-w-md mx-auto">
+        {{ ticker }} is in your universe but the analysis personas haven't produced a decision.
+        The memo will appear here after the next cycle that includes this ticker.
+    </p>
+    <div class="flex flex-wrap items-center justify-center gap-3">
+        <a href="/universe" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-xl bg-surface-sunken text-text-secondary hover:bg-border-subtle transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            View universe
+        </a>
+        <a href="/ticker/{{ ticker }}" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-xl bg-accent text-white hover:opacity-90 transition-opacity">
+            View data →
+        </a>
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        {% if valuation_range and valuation_range.get("low") %}
-        <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Bear Case</p>
-            <p class="text-xl font-mono font-bold text-negative">${{ valuation_range.low }}</p>
-        </div>
+    {% if prev_ticker or next_ticker %}
+    <div class="mt-8 flex items-center justify-between gap-3 text-sm">
+        {% if prev_ticker %}
+        <a href="/memo/{{ prev_ticker }}" class="inline-flex items-center gap-1.5 text-text-muted hover:text-accent transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            <span class="font-mono">{{ prev_ticker }}</span>
+        </a>
+        {% else %}
+        <span></span>
         {% endif %}
-        <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Fair Value</p>
-            <p class="text-2xl font-mono font-bold {{ 'text-positive' if upside_pct and upside_pct > 0 else 'text-negative' if upside_pct and upside_pct < 0 else 'text-text-primary' }}">
-                ${{ "%.2f"|format(fair_value) }}
-            </p>
-            {% if upside_pct is not none %}
-            <p class="text-sm font-mono {{ 'text-positive' if upside_pct > 0 else 'text-negative' }}">
-                {{ "+" if upside_pct >= 0 else "" }}{{ "%.1f"|format(upside_pct) }}% vs current
-            </p>
-            {% endif %}
-        </div>
-        {% if valuation_range and valuation_range.get("high") %}
-        <div class="text-center p-4 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Bull Case</p>
-            <p class="text-xl font-mono font-bold text-positive">${{ valuation_range.high }}</p>
-        </div>
+        {% if ticker_position and ticker_total %}
+        <span class="text-text-muted text-xs font-mono">{{ ticker_position }} / {{ ticker_total }}</span>
         {% endif %}
-    </div>
-    {% if memo.valuation_methodology %}
-    <div class="mt-4 p-4 bg-surface-sunken/50 rounded-xl">
-        <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Methodology</p>
-        <p class="text-sm text-text-secondary leading-relaxed">{{ memo.valuation_methodology }}</p>
+        {% if next_ticker %}
+        <a href="/memo/{{ next_ticker }}" class="inline-flex items-center gap-1.5 text-text-muted hover:text-accent transition-colors">
+            <span class="font-mono">{{ next_ticker }}</span>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% else %}
+        <span></span>
+        {% endif %}
     </div>
     {% endif %}
 </div>
+{% else %}
+
+<!-- ─── Ticker navigation strip ─────────────────────────────────────── -->
+<div class="flex items-center justify-between mb-4 gap-2 reveal">
+  {% if prev_ticker %}
+  <a href="/memo/{{ prev_ticker }}" data-memo-prev class="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors whitespace-nowrap">
+    ← <span class="font-mono">{{ prev_ticker }}</span>
+  </a>
+  {% else %}<span></span>{% endif %}
+  <div class="flex items-center gap-2">
+    <a href="/pipeline" class="text-xs text-text-muted hover:text-text-secondary transition-colors">Pipeline</a>
+    {% if ticker_position %}
+    <span class="text-[10px] text-text-muted font-mono">·</span>
+    <span class="text-[10px] text-text-muted font-mono whitespace-nowrap">{{ ticker_position }} / {{ ticker_total }}</span>
+    {% endif %}
+  </div>
+  {% if next_ticker %}
+  <a href="/memo/{{ next_ticker }}" data-memo-next class="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors whitespace-nowrap">
+    <span class="font-mono">{{ next_ticker }}</span> →
+  </a>
+  {% else %}<span></span>{% endif %}
+</div>
+
+{% set vp_class = 'vp-strong-buy' if verdict == 'STRONG_BUY' else ('vp-buy' if verdict == 'BUY' else ('vp-hold' if verdict == 'HOLD' else ('vp-pass' if verdict == 'PASS' else 'vp-skip'))) %}
+
+<!-- ─── HERO: Operating System of Finance ──────────────────────────── -->
+<section class="memo-hero reveal" data-stagger>
+    <div class="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+        <!-- Left: ticker identity -->
+        <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="os-pulse" aria-hidden="true"></span>
+                <span class="metric-label">Investment Memo</span>
+                {% if memo._decided_at %}
+                <span class="metric-sub">{{ memo._decided_at[:10] }}</span>
+                {% endif %}
+            </div>
+            <h1 class="memo-ticker mb-4">{{ ticker }}</h1>
+            <div class="flex flex-wrap items-center gap-2 mb-4">
+                <span class="verdict-pulse {{ vp_class }}">
+                    <span class="verdict-dot"></span>
+                    {{ verdict }}
+                </span>
+                <span class="risk-pill rp-medium" title="Conviction">CONVICTION {{ "%.0f"|format(conviction * 100) if conviction else 0 }}%</span>
+                {% if memo.memo_score is defined and memo.memo_score is not none %}
+                <span class="risk-pill {{ 'rp-low' if memo.memo_score >= 70 else 'rp-medium' if memo.memo_score >= 50 else 'rp-high' }}" title="Memo quality score from memo_scorer (Agents.md §13.5)">SCORE {{ "%.0f"|format(memo.memo_score) }}/100{% if memo.memo_grade %} (Grade {{ memo.memo_grade }}){% endif %}</span>
+                {% endif %}
+                <a href="/ticker/{{ ticker }}" class="ml-auto text-xs text-text-muted hover:text-accent transition-colors inline-flex items-center gap-1">
+                    Data
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </div>
+
+            {% if current_price %}
+            <div class="flex items-end gap-6 flex-wrap">
+                <div>
+                    <p class="metric-label mb-1">Current Price</p>
+                    <p class="metric-number text-4xl sm:text-5xl text-text-primary"
+                       data-anim-target="{{ "%.2f"|format(current_price) }}"
+                       data-anim-prefix="$"
+                       data-anim-decimals="2"
+                       data-anim-value="0">$0.00</p>
+                </div>
+                {% if fair_value %}
+                <div>
+                    <p class="metric-label mb-1">Fair Value</p>
+                    <p class="metric-number text-4xl sm:text-5xl {{ 'text-positive' if upside_pct and upside_pct > 0 else 'text-negative' if upside_pct and upside_pct < 0 else 'text-text-primary' }}"
+                       data-anim-target="{{ "%.2f"|format(fair_value) }}"
+                       data-anim-prefix="$"
+                       data-anim-decimals="2"
+                       data-anim-value="0">$0.00</p>
+                </div>
+                {% if upside_pct is not none %}
+                <div>
+                    <p class="metric-label mb-1">Upside</p>
+                    <p class="metric-number text-4xl sm:text-5xl {{ 'text-positive' if upside_pct > 0 else 'text-negative' }}">
+                        <span data-anim-target="{{ "%.1f"|format(upside_pct|abs) }}"
+                              data-anim-decimals="1"
+                              data-anim-value="0">0</span>%
+                        {% if upside_pct >= 0 %}↑{% else %}↓{% endif %}
+                    </p>
+                </div>
+                {% endif %}
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Right: conviction ring + key state -->
+        <div class="flex items-center gap-6">
+            <div class="text-center">
+                {% set ring_pct = (conviction * 100) if conviction else 0 %}
+                {% set ring_circumference = 2 * 3.14159265 * 38 %}
+                {% set ring_offset = ring_circumference * (1 - ring_pct / 100) %}
+                <svg width="100" height="100" viewBox="0 0 100 100" class="conviction-ring">
+                    <circle class="conviction-ring__track" cx="50" cy="50" r="38"></circle>
+                    <circle class="conviction-ring__fill" cx="50" cy="50" r="38"
+                            stroke="url(#convGrad)"
+                            stroke-dasharray="{{ ring_circumference }}"
+                            stroke-dashoffset="{{ ring_offset }}"></circle>
+                    <defs>
+                        <linearGradient id="convGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="var(--accent)"/>
+                            <stop offset="100%" stop-color="var(--crucible)"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <div style="margin-top:-72px; margin-bottom:14px;">
+                    <p class="metric-number text-2xl text-text-primary"
+                       data-anim-target="{{ "%.0f"|format(ring_pct) }}"
+                       data-anim-decimals="0"
+                       data-anim-suffix="%"
+                       data-anim-value="0">0%</p>
+                    <p class="metric-label mt-1">Conviction</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Allocator decision row: EV | R:R | Sizing ────────────────── -->
+    <div class="memo-hero__decision-row">
+        <div class="decision-card decision-card--ev">
+            <p class="decision-card__label">Enterprise Value</p>
+            {% if forward_valuation and forward_valuation.expected_price_usd %}
+            <p class="decision-card__value"
+               data-anim-target="{{ "%.0f"|format(forward_valuation.expected_price_usd) }}"
+               data-anim-prefix="$"
+               data-anim-decimals="0"
+               data-anim-value="0">$0</p>
+            <p class="decision-card__sub">
+                bear ${{ "%.0f"|format(forward_valuation.bear_price or 0) }}
+                · base ${{ "%.0f"|format(forward_valuation.base_price or 0) }}
+                · bull ${{ "%.0f"|format(forward_valuation.bull_price or 0) }}
+            </p>
+            {% elif fair_value %}
+            <p class="decision-card__value"
+               data-anim-target="{{ "%.0f"|format(fair_value) }}"
+               data-anim-prefix="$"
+               data-anim-decimals="0"
+               data-anim-value="0">$0</p>
+            <p class="decision-card__sub">
+                {% if upside_pct is not none %}
+                {{ "+" if upside_pct >= 0 else "" }}{{ "%.1f"|format(upside_pct) }}% upside vs current
+                {% endif %}
+            </p>
+            {% else %}
+            <p class="decision-card__value text-text-muted">—</p>
+            <p class="decision-card__sub"><span class="empty-chip">no forward valuation</span></p>
+            {% endif %}
+        </div>
+
+        <div class="decision-card decision-card--rr">
+            <p class="decision-card__label">Risk : Reward</p>
+            {% if rr_ratio is defined and rr_ratio is not none %}
+            <p class="decision-card__value"
+               data-anim-target="{{ "%.2f"|format(rr_ratio) }}"
+               data-anim-decimals="2"
+               data-anim-value="0">0.00</p>
+            <p class="decision-card__sub">
+                target ${{ "%.2f"|format(position_target) if position_target else "—" }}
+                · stop ${{ "%.2f"|format(position_stop) if position_stop else "—" }}
+            </p>
+            {% else %}
+            <p class="decision-card__value text-text-muted">—</p>
+            <p class="decision-card__sub"><span class="empty-chip">live price unavailable</span></p>
+            {% endif %}
+        </div>
+
+        <div class="decision-card decision-card--sizing">
+            <p class="decision-card__label">Position Sizing</p>
+            {% if sizing and sizing.is_available %}
+            <p class="decision-card__value">{{ sizing.shares_at_5pct }}<span class="text-base text-text-muted"> sh</span></p>
+            <p class="decision-card__sub">at {{ "%.0f"|format(risk_max_single_position_pct * 100) }}% cap · ${{ "{:,.0f}".format(paper_portfolio_value or 0) }} book</p>
+            <div class="sizing-row" style="margin-top: 0.6rem;">
+                <span class="sizing-row__risk">1% / 2%</span>
+                <span class="sizing-row__shares">{{ sizing.shares_at_1pct }} / {{ sizing.shares_at_2pct }} sh</span>
+            </div>
+            {% else %}
+            <p class="decision-card__value text-text-muted">—</p>
+            <p class="decision-card__sub"><span class="empty-chip">inputs incomplete</span></p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- PASS reason banner (only when verdict == PASS and pass_reason is set) -->
+    {% if verdict == 'PASS' and pass_reason %}
+    <div class="pass-reason-banner" role="status">
+        <span class="pass-reason-banner__label">Active No-Bid</span>
+        {{ pass_reason }}
+    </div>
+    {% endif %}
+
+    <!-- Freshness strip — per-category data age with colored chips -->
+    {% if freshness %}
+    <div class="freshness-strip" aria-label="Data freshness">
+        {% for key, (label, cls) in [('memo', ('memo', freshness.memo[1])), ('price', ('price', freshness.price[1])), ('filings', ('filings', freshness.filings[1])), ('sentiment', ('sentiment', freshness.sentiment[1]))] %}
+        <span class="freshness-chip freshness-chip--{{ cls }}">
+            <span class="freshness-dot"></span>
+            {{ label }} · {{ freshness[key][0] }}
+        </span>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+
+<!-- ─── MEMO DECK (presentation cards) ─────────────────────────────── -->
+<div class="memo-layout mt-6">
+<div class="memo-deck" data-memo-ticker="{{ ticker }}">
+
+<!-- ── 01 — Scenario Console ───────────────────────────────────────── -->
+{% set sp = memo.scenario_price if memo.scenario_price is mapping else none %}
+{% if sp and sp.expected_price_usd is not none %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">01</span>
+        <span class="memo-section-title">Scenario Console</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ sp.notes|default('probability-weighted')|truncate(48) }}</span>
+    </div>
+    <div class="scenario-console p-4 sm:p-6">
+        {% set bear_p = sp.bear_prob|default(0.25) %}
+        {% set base_p = sp.base_prob|default(0.50) %}
+        {% set bull_p = sp.bull_prob|default(0.25) %}
+        <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2 font-mono">Probability Mass</p>
+        <div class="scenario-bar mb-6">
+            <span class="scenario-bar-bear" style="width: {{ "%.1f"|format(bear_p * 100) }}%" title="Bear {{ "%.0f"|format(bear_p * 100) }}%"></span>
+            <span class="scenario-bar-base" style="width: {{ "%.1f"|format(base_p * 100) }}%" title="Base {{ "%.0f"|format(base_p * 100) }}%"></span>
+            <span class="scenario-bar-bull" style="width: {{ "%.1f"|format(bull_p * 100) }}%" title="Bull {{ "%.0f"|format(bull_p * 100) }}%"></span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="scenario-cell scenario-cell--bear">
+                <p class="metric-label">Bear</p>
+                <p class="metric-number text-2xl text-negative mt-2"
+                   data-anim-target="{{ "%.0f"|format((sp.bear_price or 0)|round|int) }}"
+                   data-anim-prefix="$"
+                   data-anim-decimals="0"
+                   data-anim-value="0">$0</p>
+                <p class="metric-sub mt-1">{{ "%.0f"|format(bear_p * 100) }}% prob.</p>
+            </div>
+            <div class="scenario-cell scenario-cell--base">
+                <p class="metric-label">Base</p>
+                <p class="metric-number text-2xl text-text-primary mt-2"
+                   data-anim-target="{{ "%.0f"|format((sp.base_price or 0)|round|int) }}"
+                   data-anim-prefix="$"
+                   data-anim-decimals="0"
+                   data-anim-value="0">$0</p>
+                <p class="metric-sub mt-1">{{ "%.0f"|format(base_p * 100) }}% prob.</p>
+            </div>
+            <div class="scenario-cell scenario-cell--bull">
+                <p class="metric-label">Bull</p>
+                <p class="metric-number text-2xl text-positive mt-2"
+                   data-anim-target="{{ "%.0f"|format((sp.bull_price or 0)|round|int) }}"
+                   data-anim-prefix="$"
+                   data-anim-decimals="0"
+                   data-anim-value="0">$0</p>
+                <p class="metric-sub mt-1">{{ "%.0f"|format(bull_p * 100) }}% prob.</p>
+            </div>
+            <div class="scenario-cell scenario-cell--exp">
+                <p class="metric-label">E[price]</p>
+                <p class="metric-number text-2xl text-crucible mt-2"
+                   data-anim-target="{{ "%.2f"|format(sp.expected_price_usd) }}"
+                   data-anim-prefix="$"
+                   data-anim-decimals="2"
+                   data-anim-value="0">$0.00</p>
+                {% if sp.expected_return_pct is not none %}
+                <p class="metric-sub mt-1 {{ 'text-positive' if sp.expected_return_pct > 0 else 'text-negative' }}">
+                    {{ "+" if sp.expected_return_pct >= 0 else "" }}{{ "%.1f"|format(sp.expected_return_pct) }}% exp. return
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        {% if valuation_range and (valuation_range.get("low") or valuation_range.get("high")) %}
+        <div class="mt-5 flex items-center justify-between text-xs text-text-muted font-mono">
+            <span>L {{ "$%.2f"|format(valuation_range.get('low') or 0) }}</span>
+            <span class="text-text-secondary">range · methodology</span>
+            <span>H {{ "$%.2f"|format(valuation_range.get('high') or 0) }}</span>
+        </div>
+        {% if memo.valuation_methodology %}
+        <p class="mt-3 text-xs text-text-muted leading-relaxed">{{ memo.valuation_methodology }}</p>
+        {% endif %}
+        {% endif %}
+    </div>
+</section>
 {% endif %}
 
-
-
-<!-- Business Model & Strategy -->
-{% if memo.business_model or memo.revenue_model or memo.key_acquisitions or memo.company_vision %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Business Model & Strategy</h2>
+<!-- ── 02 — Investment Thesis ─────────────────────────────────────── -->
+{% if memo.thesis %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">02</span>
+        <span class="memo-section-title">Investment Thesis</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">narrative</span>
     </div>
-    <div class="space-y-4">
-        {% if memo.revenue_model %}
-        <div>
-            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">How They Make Money</p>
-            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.revenue_model }}</p>
-        </div>
-        {% elif memo.business_model %}
-        <div>
-            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">How They Make Money</p>
-            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.business_model }}</p>
-        </div>
-        {% endif %}
-        {% if memo.key_acquisitions %}
-        <div>
-            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Key Acquisitions & Partnerships</p>
-            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.key_acquisitions }}</p>
-        </div>
-        {% endif %}
+    <div class="card card-elevated p-6 sm:p-8">
+        <div class="thesis-prose">{{ memo.thesis }}</div>
         {% if memo.company_vision %}
-        <div>
-            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Vision & Strategy</p>
+        <div class="mt-6 pt-6 border-t border-border-subtle">
+            <p class="metric-label mb-2">Vision &amp; Strategy</p>
             <p class="text-sm text-text-secondary leading-relaxed">{{ memo.company_vision }}</p>
         </div>
         {% endif %}
     </div>
-</div>
+</section>
 {% endif %}
 
-<!-- Financial Snapshot -->
-{% if memo.financial_snapshot %}
-{% set fs = memo.financial_snapshot %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Financial Snapshot</h2>
+<!-- ── 03 — Business Model & Strategy (compact 3-col) ─────────────── -->
+{% set has_bm = memo.business_model or memo.revenue_model or memo.key_acquisitions %}
+{% if has_bm %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">03</span>
+        <span class="memo-section-title">Business Model</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">revenue · moat</span>
     </div>
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-        {% if fs.revenue %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Revenue</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.revenue }}</p>
-        </div>
-        {% endif %}
-        {% if fs.revenue_growth %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Revenue Growth</p>
-            <p class="text-sm font-mono font-semibold {{ 'text-positive' if '+' in fs.revenue_growth|string else 'text-text-primary' }}">{{ fs.revenue_growth }}</p>
-        </div>
-        {% endif %}
-        {% if fs.gross_margin %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Gross Margin</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.gross_margin }}</p>
-        </div>
-        {% endif %}
-        {% if fs.operating_margin %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Operating Margin</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.operating_margin }}</p>
-        </div>
-        {% endif %}
-        {% if fs.net_margin %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Net Margin</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.net_margin }}</p>
-        </div>
-        {% endif %}
-        {% if fs.free_cash_flow %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Free Cash Flow</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.free_cash_flow }}</p>
-        </div>
-        {% endif %}
-        {% if fs.fcf_yield_ev %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">FCF Yield (EV)</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.fcf_yield_ev }}</p>
-        </div>
-        {% endif %}
-        {% if fs.revenue_guidance_next_year %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">NTM Rev Guidance</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.revenue_guidance_next_year }}</p>
-        </div>
-        {% endif %}
-        {% if fs.debt_to_equity %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Debt/Equity</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.debt_to_equity }}</p>
-        </div>
-        {% endif %}
-        {% if fs.roe %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">ROE</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.roe }}</p>
-        </div>
-        {% endif %}
-        {% if fs.pe_ratio %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">P/E (TTM)</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.pe_ratio }}</p>
-        </div>
-        {% endif %}
-        {% if fs.forward_pe %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">Forward P/E</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.forward_pe }}</p>
-        </div>
-        {% endif %}
-        {% if fs.peg_ratio %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest">PEG Ratio</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ fs.peg_ratio }}</p>
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endif %}
-
-<!-- Industry-Specific KPIs -->
-{% if memo.industry_kpis and memo.industry_kpis|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-violet-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Industry KPIs</h2>
-    </div>
-    <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-        {% set kpi_labels = {
-            'nrr': 'Net Revenue Retention', 'arr': 'Annual Recurring Revenue', 'grr': 'Gross Retention',
-            'rpo': 'RPO (Backlog)', 'customer_count': 'Customers', 'logo_churn': 'Logo Churn',
-            'tpv': 'Total Payment Volume', 'active_customers': 'Active Customers',
-            'arpac': 'Revenue / Customer', 'take_rate': 'Take Rate', 'npl_rate': 'NPL Rate',
-            'cost_to_serve': 'Cost-to-Serve',
-            'arpu': 'ARPU', 'contribution_ex_tac': 'Contrib. ex-TAC', 'platform_spend': 'Platform Spend',
-            'contracted_capacity': 'Contracted Capacity', 'hyperscaler_commitments': 'Hyperscaler Commits',
-            'gpu_utilization': 'GPU Utilization',
-            'gmv': 'GMV', 'order_frequency': 'Order Frequency',
-            'asp': 'Avg Selling Price', 'units_shipped': 'Units Shipped',
-            'design_wins': 'Design Wins', 'backlog': 'Backlog'
-        } %}
-        {% for key, value in memo.industry_kpis.items() %}
-        <div class="p-3 bg-surface-sunken/50 rounded-xl border border-violet-500/20">
-            <p class="text-[10px] text-violet-400 uppercase tracking-widest mb-0.5">{{ kpi_labels.get(key, key|replace('_', ' ')|title) }}</p>
-            <p class="text-sm font-mono font-semibold text-text-primary">{{ value }}</p>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
-
-<!-- Investment Thesis -->
-{% if memo.thesis %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-accent"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Investment Thesis</h2>
-    </div>
-    <div class="text-sm text-text-secondary leading-relaxed whitespace-pre-line">{{ memo.thesis }}</div>
-</div>
-{% endif %}
-
-<!-- Growth Drivers -->
-{% if memo.growth_drivers and memo.growth_drivers|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Growth Drivers</h2>
-    </div>
-    <div class="space-y-3">
-        {% for driver in memo.growth_drivers %}
-        <div class="flex items-start gap-3 p-3 bg-surface-sunken/50 rounded-xl">
-            <span class="mt-0.5 px-2 py-0.5 text-xs font-medium rounded-lg
-                         {{ 'bg-positive-soft text-positive' if driver.impact == 'high' else '' }}
-                         {{ 'bg-accent-soft text-accent' if driver.impact == 'medium' else '' }}
-                         {{ 'bg-surface-sunken text-text-muted' if driver.impact == 'low' else '' }}">
-                {{ driver.impact|default('?')|upper }}
-            </span>
-            <div class="flex-1">
-                <p class="text-sm text-text-primary font-medium">{{ driver.driver|default('') }}</p>
-                {% if driver.timeline %}
-                <p class="text-xs text-text-muted mt-0.5">Timeline: {{ driver.timeline }}</p>
-                {% endif %}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="card card-elevated p-5">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
+                <p class="metric-label">How They Make Money</p>
             </div>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.revenue_model or memo.business_model }}</p>
         </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
-
-<!-- Competitive Position -->
-{% if memo.competitive_position %}
-{% set cp = memo.competitive_position %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Competitive Position</h2>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
+        {% if memo.key_acquisitions %}
+        <div class="card card-elevated p-5">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="w-1.5 h-1.5 rounded-full bg-positive"></span>
+                <p class="metric-label">Deals &amp; Partnerships</p>
+            </div>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.key_acquisitions }}</p>
+        </div>
+        {% endif %}
+        {% if memo.competitive_position and memo.competitive_position is mapping %}
+        {% set cp = memo.competitive_position %}
+        <div class="card card-elevated p-5">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="w-1.5 h-1.5 rounded-full bg-crucible"></span>
+                <p class="metric-label">Competitive Position</p>
+            </div>
             {% if cp.moat_type %}
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Moat Type</p>
-            <p class="text-sm font-medium text-text-primary mb-3">{{ cp.moat_type }}</p>
+            <p class="text-sm font-medium text-text-primary mb-2">{{ cp.moat_type }}</p>
             {% endif %}
             {% if cp.market_share %}
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Market Share</p>
-            <p class="text-sm font-mono text-text-primary mb-3">{{ cp.market_share }}</p>
+            <p class="metric-sub mb-3">Share: <span class="text-text-secondary">{{ cp.market_share }}</span></p>
             {% endif %}
-        </div>
-        <div>
             {% if cp.advantages and cp.advantages|length > 0 %}
-            <p class="text-[10px] text-text-muted mb-1 uppercase tracking-widest">Advantages</p>
-            <ul class="space-y-1">
-                {% for adv in cp.advantages %}
-                <li class="text-sm text-positive flex items-start gap-1.5">
-                    <span class="mt-1 w-1.5 h-1.5 bg-positive rounded-full shrink-0"></span>
-                    {{ adv }}
-                </li>
-                {% endfor %}
-            </ul>
-            {% endif %}
-            {% if cp.threats and cp.threats|length > 0 %}
-            <p class="text-[10px] text-text-muted mb-1 mt-3 uppercase tracking-widest">Threats</p>
-            <ul class="space-y-1">
-                {% for threat in cp.threats %}
-                <li class="text-sm text-negative flex items-start gap-1.5">
-                    <span class="mt-1 w-1.5 h-1.5 bg-negative rounded-full shrink-0"></span>
-                    {{ threat }}
+            <ul class="space-y-1.5 mt-3">
+                {% for adv in cp.advantages[:3] %}
+                <li class="text-xs text-text-secondary flex items-start gap-1.5">
+                    <span class="mt-1 w-1 h-1 rounded-full bg-positive shrink-0"></span>{{ adv }}
                 </li>
                 {% endfor %}
             </ul>
             {% endif %}
         </div>
+        {% endif %}
     </div>
-</div>
+</section>
 {% endif %}
 
-<!-- Risk Factors -->
-{% if memo.risk_factors and memo.risk_factors|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-red-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Risk Analysis</h2>
+<!-- ── 04 — Financial Snapshot (animated KPIs) ────────────────────── -->
+{% if memo.financial_snapshot %}
+{% set fs = memo.financial_snapshot %}
+{% set fs_items = [
+    ('revenue', 'Revenue', fs.revenue),
+    ('revenue_growth', 'Growth', fs.revenue_growth),
+    ('gross_margin', 'Gross Margin', fs.gross_margin),
+    ('operating_margin', 'Op Margin', fs.operating_margin),
+    ('net_margin', 'Net Margin', fs.net_margin),
+    ('free_cash_flow', 'FCF', fs.free_cash_flow),
+    ('fcf_yield_ev', 'FCF Yield', fs.fcf_yield_ev),
+    ('pe_ratio', 'P/E TTM', fs.pe_ratio),
+    ('forward_pe', 'Fwd P/E', fs.forward_pe),
+    ('peg_ratio', 'PEG', fs.peg_ratio),
+    ('roe', 'ROE', fs.roe),
+    ('debt_to_equity', 'D/E', fs.debt_to_equity)
+] %}
+{% set ns_fs = namespace(items=[]) %}
+{% for k, lbl, v in fs_items %}
+    {% if v %}{% set ns_fs.items = ns_fs.items + [(k, lbl, v)] %}{% endif %}
+{% endfor %}
+{% if ns_fs.items|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">04</span>
+        <span class="memo-section-title">Financial Snapshot</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ ns_fs.items|length }} metrics</span>
     </div>
-    <div class="space-y-3">
-        {% for risk in memo.risk_factors %}
-        <div class="border border-border-subtle rounded-xl p-4">
-            <div class="flex items-start justify-between gap-3">
-                <p class="text-sm text-text-primary font-medium">{{ risk.risk|default('') }}</p>
-                <div class="flex gap-1.5 shrink-0">
-                    {% if risk.probability %}
-                    <span class="px-2 py-0.5 text-xs rounded-lg
-                                 {{ 'bg-negative-soft text-negative' if risk.probability == 'high' else '' }}
-                                 {{ 'bg-crucible-soft text-crucible' if risk.probability == 'medium' else '' }}
-                                 {{ 'bg-positive-soft text-positive' if risk.probability == 'low' else '' }}">
-                        P:{{ risk.probability|upper }}
-                    </span>
-                    {% endif %}
-                    {% if risk.impact %}
-                    <span class="px-2 py-0.5 text-xs rounded-lg
-                                 {{ 'bg-negative-soft text-negative' if risk.impact == 'high' else '' }}
-                                 {{ 'bg-crucible-soft text-crucible' if risk.impact == 'medium' else '' }}
-                                 {{ 'bg-positive-soft text-positive' if risk.impact == 'low' else '' }}">
-                        I:{{ risk.impact|upper }}
-                    </span>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+        {% for k, lbl, v in ns_fs.items %}
+        <div class="card card-elevated p-4">
+            <p class="metric-label">{{ lbl }}</p>
+            <p class="metric-number text-xl text-text-primary mt-2">{{ v }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endif %}
+
+<!-- ── 05 — Industry KPIs (highlighted) ────────────────────────────── -->
+{% if memo.industry_kpis and memo.industry_kpis|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">05</span>
+        <span class="memo-section-title">Industry KPIs</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ memo.industry_kpis|length }} signals</span>
+    </div>
+    {% set kpi_labels = {
+        'nrr': 'Net Revenue Retention', 'arr': 'Annual Recurring Revenue', 'grr': 'Gross Retention',
+        'rpo': 'RPO (Backlog)', 'customer_count': 'Customers', 'logo_churn': 'Logo Churn',
+        'tpv': 'Total Payment Volume', 'active_customers': 'Active Customers',
+        'arpac': 'Revenue / Customer', 'take_rate': 'Take Rate', 'npl_rate': 'NPL Rate',
+        'cost_to_serve': 'Cost-to-Serve',
+        'arpu': 'ARPU', 'contribution_ex_tac': 'Contrib. ex-TAC', 'platform_spend': 'Platform Spend',
+        'contracted_capacity': 'Contracted Capacity', 'hyperscaler_commitments': 'Hyperscaler Commits',
+        'gpu_utilization': 'GPU Utilization',
+        'gmv': 'GMV', 'order_frequency': 'Order Frequency',
+        'asp': 'Avg Selling Price', 'units_shipped': 'Units Shipped',
+        'design_wins': 'Design Wins', 'backlog': 'Backlog'
+    } %}
+    <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+        {% for key, value in memo.industry_kpis.items() %}
+        <div class="card card-elevated p-4 border-l-2 border-l-crucible">
+            <p class="metric-label text-crucible">{{ kpi_labels.get(key, key|replace('_', ' ')|title) }}</p>
+            <p class="metric-number text-xl text-text-primary mt-2">{{ value }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<!-- ── 06 — Growth Drivers ─────────────────────────────────────────── -->
+{% if memo.growth_drivers and memo.growth_drivers|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">06</span>
+        <span class="memo-section-title">Growth Drivers</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ memo.growth_drivers|length }} drivers</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {% for driver in memo.growth_drivers %}
+        <div class="card card-elevated p-4 relative overflow-hidden">
+            <div class="flex items-start gap-3">
+                <span class="risk-pill shrink-0 {{ 'rp-high' if driver.impact == 'high' else 'rp-medium' if driver.impact == 'medium' else 'rp-low' }}">
+                    {{ driver.impact|default('?')|upper }}
+                </span>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-text-primary leading-snug">{{ driver.driver|default('') }}</p>
+                    {% if driver.timeline %}
+                    <p class="metric-sub mt-1">⏱ {{ driver.timeline }}</p>
                     {% endif %}
                 </div>
             </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<!-- ── 07 — Risk Heatmap ───────────────────────────────────────────── -->
+{% if memo.risk_factors and memo.risk_factors|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">07</span>
+        <span class="memo-section-title">Risk Heatmap</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">P × I</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {% for risk in memo.risk_factors %}
+        {% set p_norm = risk.probability|default('medium') %}
+        {% set i_norm = risk.impact|default('medium') %}
+        <div class="risk-card">
+            <p class="text-sm text-text-primary font-medium leading-snug mb-3">{{ risk.risk|default('') }}</p>
+            <div class="flex items-center gap-2 flex-wrap mb-2">
+                {% if risk.probability %}
+                <span class="risk-pill {{ 'rp-high' if p_norm == 'high' else 'rp-medium' if p_norm == 'medium' else 'rp-low' }}">
+                    P · {{ risk.probability|upper }}
+                </span>
+                {% endif %}
+                {% if risk.impact %}
+                <span class="risk-pill {{ 'rp-high' if i_norm == 'high' else 'rp-medium' if i_norm == 'medium' else 'rp-low' }}">
+                    I · {{ risk.impact|upper }}
+                </span>
+                {% endif %}
+            </div>
             {% if risk.mitigation %}
-            <p class="text-xs text-text-muted mt-2">Mitigation: {{ risk.mitigation }}</p>
+            <p class="text-xs text-text-muted leading-relaxed"><span class="text-text-secondary font-medium">Mitigation:</span> {{ risk.mitigation }}</p>
             {% endif %}
         </div>
         {% endfor %}
     </div>
-</div>
+</section>
 {% endif %}
 
-<!-- Key Evidence -->
-{% if memo.key_evidence and memo.key_evidence|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-accent"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Key Evidence</h2>
+<!-- ── 08 — Bull / Bear Debate ─────────────────────────────────────── -->
+{% set bbd = memo.bull_bear_debate if memo.bull_bear_debate is mapping else {} %}
+{% if bbd.bull_case or bbd.bear_case %}
+{% set lean = (bbd.advocate_lean|default('BALANCED'))|upper %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">08</span>
+        <span class="memo-section-title">Bull vs. Bear</span>
+        <span class="memo-section-line"></span>
+        <span class="risk-pill {{ 'rp-low' if lean == 'BULL' else 'rp-high' if lean == 'BEAR' else 'rp-medium' }}">LEAN · {{ lean }}</span>
     </div>
-    <ul class="space-y-2">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="card card-elevated p-5 border-l-4 border-l-positive relative overflow-hidden">
+            <div class="absolute top-3 right-3 text-3xl opacity-20 select-none">↑</div>
+            <p class="metric-label text-positive mb-2">Bull Case</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bull_case }}</p>
+        </div>
+        <div class="card card-elevated p-5 border-l-4 border-l-negative relative overflow-hidden">
+            <div class="absolute top-3 right-3 text-3xl opacity-20 select-none">↓</div>
+            <p class="metric-label text-negative mb-2">Bear Case</p>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bear_case }}</p>
+        </div>
+    </div>
+    {% if bbd.reverse_dcf_gap %}
+    <div class="card card-elevated mt-3 p-4 bg-surface-sunken/40">
+        <p class="metric-label mb-1">Reverse-DCF Growth Gap</p>
+        <p class="text-sm text-text-secondary leading-relaxed">{{ bbd.reverse_dcf_gap }}</p>
+    </div>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- ── 09 — Adversarial Review (Crucible) ─────────────────────────── -->
+{% if crucible_result or (memo.crucible_attacks and memo.crucible_attacks|length > 0) %}
+{% set sev = crucible_result.severity if crucible_result else memo.crucible_severity|default(0) %}
+{% set survives = crucible_result.thesis_survives if crucible_result else (sev < 0.50) %}
+{% set summary = crucible_result.summary if crucible_result else memo.crucible_summary|default('') %}
+{% set attacks = crucible_result.attacks if (crucible_result and crucible_result.attacks) else memo.crucible_attacks|default([]) %}
+{% set sev_pct = (sev * 100)|round|int %}
+{% set sev_circumference = 2 * 3.14159265 * 28 %}
+{% set sev_offset = sev_circumference * (1 - sev_pct / 100) %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">09</span>
+        <span class="memo-section-title">Adversarial Review</span>
+        <span class="memo-section-line"></span>
+        <span class="risk-pill {{ 'rp-low' if survives else 'rp-high' }}">{{ "SURVIVES" if survives else "CHALLENGED" }}</span>
+    </div>
+    <div class="card card-elevated p-5 sm:p-6">
+        <div class="flex flex-col sm:flex-row items-center gap-6">
+            <!-- Severity ring -->
+            <div class="text-center">
+                <svg width="100" height="100" viewBox="0 0 100 100">
+                    <circle class="crucible-ring__track" cx="50" cy="50" r="28"></circle>
+                    <circle class="crucible-ring__circle" cx="50" cy="50" r="28"
+                            transform="rotate(-90 50 50)"
+                            stroke="{{ 'var(--positive)' if survives else 'var(--negative)' }}"
+                            stroke-dasharray="{{ sev_circumference }}"
+                            stroke-dashoffset="{{ sev_offset }}"></circle>
+                </svg>
+                <div style="margin-top:-72px; margin-bottom:14px;">
+                    <p class="metric-number text-2xl {{ 'text-positive' if survives else 'text-negative' }}"
+                       data-anim-target="{{ sev_pct }}"
+                       data-anim-decimals="0"
+                       data-anim-suffix=""
+                       data-anim-value="0">0</p>
+                    <p class="metric-label mt-1">Severity</p>
+                </div>
+            </div>
+            <div class="flex-1 min-w-0">
+                {% if summary %}
+                <p class="text-sm text-text-secondary leading-relaxed">{{ summary }}</p>
+                {% endif %}
+                {% if attacks and attacks|length > 0 %}
+                <p class="metric-label mt-4 mb-2">{{ attacks|length }} Attack{{ 's' if attacks|length > 1 }} Tested</p>
+                <div class="space-y-2">
+                    {% for atk in attacks %}
+                    {% set atk_text = atk if atk is string else (atk.get('text') or atk.get('attack') or atk.get('description') or atk|string) %}
+                    <div class="flex items-start gap-2 p-2 bg-surface-sunken/40 rounded-lg">
+                        <span class="mt-1 w-1.5 h-1.5 rounded-full bg-crucible shrink-0"></span>
+                        <p class="text-xs text-text-secondary leading-relaxed">{{ atk_text }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<!-- ── 10 — Key Evidence ───────────────────────────────────────────── -->
+{% if memo.key_evidence and memo.key_evidence|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">10</span>
+        <span class="memo-section-title">Key Evidence</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ memo.key_evidence|length }} signals</span>
+    </div>
+    <div class="card card-elevated p-5 sm:p-6">
+        <div>
         {% for ev in memo.key_evidence %}
-        <li class="text-sm text-text-secondary flex items-start gap-2">
-            <span class="mt-1.5 w-1.5 h-1.5 bg-accent rounded-full shrink-0"></span>
-            {{ ev }}
-        </li>
+        <div class="evidence-item">
+            <span class="evidence-dot"></span>
+            <p class="text-sm text-text-secondary leading-relaxed flex-1">{{ ev }}</p>
+        </div>
         {% endfor %}
-    </ul>
-</div>
+        </div>
+    </div>
+</section>
 {% endif %}
 
 {% if memo.bear_case_response %}
-<div class="card card-elevated card-accent-amber mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-        <h2 class="text-xs font-semibold text-crucible uppercase tracking-widest">Bear Case Response</h2>
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">11</span>
+        <span class="memo-section-title">Bear Case Response</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">rebuttal</span>
     </div>
-    <p class="text-sm text-text-secondary leading-relaxed">{{ memo.bear_case_response }}</p>
-</div>
+    <div class="card card-elevated p-5 border-l-4 border-l-warning bg-warning-soft/30">
+        <p class="text-sm text-text-secondary leading-relaxed">{{ memo.bear_case_response }}</p>
+    </div>
+</section>
 {% endif %}
 
-<!-- Catalyst Calendar -->
-{% if memo.catalyst_calendar and memo.catalyst_calendar|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Catalyst Calendar</h2>
+<!-- ── 12 — Reverse-DCF Anchor ─────────────────────────────────────── -->
+{% set rdcf = memo.reverse_dcf if memo.reverse_dcf is mapping else none %}
+{% if rdcf and (rdcf.implied_growth_pct is not none or rdcf.fair_value_usd is not none) %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">12</span>
+        <span class="memo-section-title">Reverse-DCF Anchor</span>
+        <span class="memo-section-line"></span>
+        {% if rdcf.valuation_lean %}
+        <span class="risk-pill {{ 'rp-low' if rdcf.valuation_lean == 'BULLISH' else 'rp-high' if rdcf.valuation_lean == 'BEARISH' else 'rp-medium' }}">{{ rdcf.valuation_lean }}</span>
+        {% endif %}
     </div>
-    <div class="space-y-3">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="card card-elevated p-4">
+            <p class="metric-label">Market-Implied</p>
+            <p class="metric-number text-xl text-text-primary mt-2">{{ "%.1f"|format(rdcf.implied_growth_pct * 100) }}%</p>
+        </div>
+        <div class="card card-elevated p-4">
+            <p class="metric-label">Estimated</p>
+            <p class="metric-number text-xl text-text-primary mt-2">{{ "%.1f"|format(rdcf.assumed_growth_pct * 100) }}%</p>
+        </div>
+        <div class="card card-elevated p-4">
+            <p class="metric-label">Gap</p>
+            <p class="metric-number text-xl mt-2 {{ 'text-positive' if rdcf.growth_gap_pct > 0 else 'text-negative' if rdcf.growth_gap_pct < 0 else 'text-text-primary' }}">
+                {{ "+" if rdcf.growth_gap_pct >= 0 else "" }}{{ "%.1f"|format(rdcf.growth_gap_pct * 100) }}pp
+            </p>
+        </div>
+        <div class="card card-elevated p-4">
+            <p class="metric-label">Fair Value</p>
+            <p class="metric-number text-xl text-accent mt-2">${{ "%.2f"|format(rdcf.fair_value_usd) }}</p>
+        </div>
+    </div>
+    {% if rdcf.notes %}
+    <p class="mt-3 text-xs text-text-muted leading-relaxed">{{ rdcf.notes }}</p>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- ── 13 — Catalyst Calendar (timeline) ──────────────────────────── -->
+{% if memo.catalyst_calendar and memo.catalyst_calendar|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">13</span>
+        <span class="memo-section-title">Catalyst Calendar</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ memo.catalyst_calendar|length }} events</span>
+    </div>
+    <div class="card card-elevated p-5 sm:p-6">
         {% for event in memo.catalyst_calendar %}
-        <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 p-3 bg-surface-sunken/50 rounded-xl">
-            <div class="shrink-0 sm:w-20">
-                <p class="text-xs font-mono text-text-muted">{{ event.expected_date|default("TBD") }}</p>
-            </div>
-            <div class="flex-1">
-                <p class="text-sm text-text-primary font-medium">{{ event.event|default('') }}</p>
+        <div class="catalyst-row">
+            <div class="catalyst-row__date">{{ event.expected_date|default("TBD") }}</div>
+            <div class="catalyst-row__body">
+                <p class="text-sm font-medium text-text-primary">{{ event.event|default('') }}</p>
                 {% if event.potential_impact %}
-                <p class="text-xs text-text-muted mt-0.5">{{ event.potential_impact }}</p>
+                <p class="text-xs text-text-muted mt-1">{{ event.potential_impact }}</p>
                 {% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
-</div>
+</section>
 {% endif %}
 
-<!-- Agent Signals -->
+<!-- ── 14 — Agent Insights (probability meters) ───────────────────── -->
 {% set _agents = agent_results if (agent_results and agent_results|length > 0) else (memo.agent_signals if (memo.agent_signals and memo.agent_signals|length > 0) else []) %}
-{% if _agents|length > 0 %}
-{# Filter: only show agents with confidence >= 0.30 #}
-{% set ns_shown = namespace(agents=[]) %}
+{% set ns_agents = namespace(agents=[]) %}
 {% for sig in _agents %}
     {% if sig.confidence|default(0) >= 0.30 %}
-        {% set ns_shown.agents = ns_shown.agents + [sig] %}
+        {% set ns_agents.agents = ns_agents.agents + [sig] %}
     {% endif %}
 {% endfor %}
-{% if ns_shown.agents|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Agent Insights ({{ ns_shown.agents|length }})</h2>
+{% if ns_agents.agents|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">14</span>
+        <span class="memo-section-title">Agent Insights</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">{{ ns_agents.agents|length }} voices</span>
     </div>
-
-    <div class="space-y-3">
-        {% for sig in ns_shown.agents %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {% for sig in ns_agents.agents %}
         {% set p_up_val = sig.p_up|default(0.33) %}
         {% set p_down_val = sig.p_down|default(0.33) %}
+        {% set p_flat_val = (1 - p_up_val - p_down_val) if (1 - p_up_val - p_down_val) > 0 else 0 %}
         {% set conf_val = sig.confidence|default(0) %}
         {% set direction = p_up_val - p_down_val %}
         {% set signal_text = sig.signal|default(sig.key_signal|default('')) %}
         {% set analysis_text = sig.analysis|default('') %}
-        {# Determine verdict based on direction and confidence #}
         {% if conf_val >= 0.50 %}
             {% if direction > 0.10 %}
                 {% set agent_verdict = "Bullish" %}
@@ -492,126 +793,271 @@
             {% set agent_verdict = "Low Confidence" %}
             {% set verdict_class = "text-text-muted" %}
         {% endif %}
-        <div class="flex items-start gap-3 p-3 bg-surface-sunken/50 rounded-xl">
-            <div class="shrink-0 w-28">
-                <p class="text-sm font-semibold text-text-primary">{{ sig.persona|default('')|replace('_', ' ')|title }}</p>
-                <span class="text-xs font-mono {{ verdict_class }}">{{ agent_verdict }}</span>
+        <div class="agent-card">
+            <div>
+                <p class="agent-card__name">{{ sig.persona|default('')|replace('_', ' ')|title }}</p>
+                <p class="agent-card__verdict {{ verdict_class }}">{{ agent_verdict }}</p>
+                <div class="metric-label mt-3">P(up)</div>
+                <p class="metric-number text-base text-positive mt-1">{{ "%.0f"|format(p_up_val * 100) }}%</p>
+                <div class="metric-label mt-2">P(down)</div>
+                <p class="metric-number text-base text-negative mt-1">{{ "%.0f"|format(p_down_val * 100) }}%</p>
+                <div class="prob-meter mt-2" title="Probability distribution">
+                    <span class="prob-meter-up" style="width: {{ "%.1f"|format(p_up_val * 100) }}%"></span>
+                    <span class="prob-meter-flat" style="width: {{ "%.1f"|format(p_flat_val * 100) }}%"></span>
+                    <span class="prob-meter-down" style="width: {{ "%.1f"|format(p_down_val * 100) }}%"></span>
+                </div>
+                <div class="metric-label mt-3">Confidence</div>
+                <div class="confidence-bar-thin">
+                    <div class="confidence-bar-thin__fill" style="width: {{ "%.0f"|format(conf_val * 100) }}%"></div>
+                </div>
             </div>
-            <div class="flex-1 min-w-0">
+            <div class="min-w-0">
                 {% if signal_text %}
-                <p class="text-sm text-text-secondary leading-relaxed">{{ signal_text }}</p>
+                <p class="text-sm text-text-primary leading-relaxed">{{ signal_text }}</p>
                 {% endif %}
                 {% if analysis_text and conf_val >= 0.50 %}
-                <details class="mt-1.5">
-                    <summary class="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary list-none flex items-center gap-1">
-                        <svg class="w-3 h-3 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                <details class="mt-3 group">
+                    <summary class="text-xs text-text-muted cursor-pointer hover:text-text-secondary flex items-center gap-1 list-none select-none">
+                        <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         Full analysis
                     </summary>
-                    <p class="text-xs text-text-muted leading-relaxed mt-1.5 pl-4">{{ analysis_text }}</p>
+                    <p class="text-xs text-text-muted leading-relaxed mt-2 pl-4 border-l border-border-subtle">{{ analysis_text }}</p>
                 </details>
                 {% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
-</div>
-{% endif %}
-{% endif %}
-
-<!-- Crucible Review -->
-{% if crucible_result or (memo.crucible_attacks and memo.crucible_attacks|length > 0) %}
-{% set sev = crucible_result.severity if crucible_result else memo.crucible_severity|default(0) %}
-{% set survives = crucible_result.thesis_survives if crucible_result else (sev < 0.50) %}
-{% set summary = crucible_result.summary if crucible_result else memo.crucible_summary|default('') %}
-{% set attacks = crucible_result.attacks if (crucible_result and crucible_result.attacks) else memo.crucible_attacks|default([]) %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full {{ 'bg-positive' if survives else 'bg-negative' }}"></span>
-            <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Adversarial Review</h2>
-        </div>
-        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-xl {{ 'bg-positive-soft text-positive' if survives else 'bg-negative-soft text-negative' }}">
-            {{ "Thesis Survives" if survives else "Thesis Challenged" }}
-        </span>
-    </div>
-    {% if summary %}
-    <p class="text-sm text-text-secondary leading-relaxed mb-3">{{ summary }}</p>
-    {% endif %}
-    {% if attacks and attacks|length > 0 %}
-    <details>
-        <summary class="text-[10px] text-text-muted cursor-pointer hover:text-text-secondary list-none flex items-center gap-1">
-            <svg class="w-3 h-3 transition-transform details-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            {{ attacks|length }} attack{{ 's' if attacks|length > 1 }} tested
-        </summary>
-        <div class="mt-2 space-y-2">
-            {% for atk in attacks %}
-            {% set atk_text = atk if atk is string else (atk.get('text') or atk.get('attack') or atk.get('description') or atk|string) %}
-            <div class="p-2.5 bg-surface-sunken/30 rounded-lg">
-                <p class="text-xs text-text-secondary leading-relaxed">{{ atk_text }}</p>
-            </div>
-            {% endfor %}
-        </div>
-    </details>
-    {% endif %}
-</div>
+</section>
 {% endif %}
 
-<!-- Sizing Note -->
-{% if memo.position_sizing_note %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-accent"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Position Sizing</h2>
+<!-- ── 15 — What Would Change My Mind ─────────────────────────────── -->
+{% if memo.what_would_change_my_mind and memo.what_would_change_my_mind|length > 0 %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">15</span>
+        <span class="memo-section-title">What Would Change My Mind</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">falsification triggers</span>
     </div>
-    <div class="flex items-center gap-4 flex-wrap">
-        {% if memo.conviction is defined %}
-        <div class="text-center p-3 bg-surface-sunken/50 rounded-xl">
-            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-0.5">Conviction</p>
-            <p class="text-lg font-mono font-bold text-text-primary">{{ "%.0f"|format(memo.conviction * 100) }}%</p>
-        </div>
-        {% endif %}
-        <div class="flex-1 min-w-0">
-            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.position_sizing_note }}</p>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<!-- Decision History -->
-{% if ticker_decisions and ticker_decisions|length > 0 %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision History</h2>
-    </div>
-    <div class="space-y-2">
-        {% for d in ticker_decisions %}
-        <div class="flex items-center gap-3 py-2.5 border-b border-border-subtle last:border-0">
-            <span class="text-xs font-mono text-text-muted" {% if d.decided_at %}data-time-ago="{{ d.decided_at }}"{% endif %}>{{ d.decided_at|default('') }}</span>
-            <span class="px-2 py-0.5 text-xs rounded-xl font-medium
-                         {{ 'bg-positive-soft text-positive' if d.verdict == 'STRONG_BUY' else '' }}
-                         {{ 'bg-accent-soft text-accent' if d.verdict == 'BUY' else '' }}
-                         {{ 'bg-crucible-soft text-crucible' if d.verdict == 'HOLD' else '' }}
-                         {{ 'bg-negative-soft text-negative' if d.verdict == 'SKIP' else '' }}">
-                {{ d.verdict }}
-            </span>
-            <span class="text-xs font-mono text-text-muted">{{ "%.0f"|format((d.conviction or 0) * 100) }}%</span>
+    <div class="card card-elevated p-5 sm:p-6 border-l-4 border-l-negative">
+        <p class="text-xs text-text-muted mb-3 leading-relaxed">Pre-registered, falsifiable triggers that would invalidate or reverse this thesis.</p>
+        {% for trigger in memo.what_would_change_my_mind %}
+        <div class="evidence-item">
+            <span class="evidence-dot" style="background: var(--negative); box-shadow: 0 0 0 3px var(--negative-soft);"></span>
+            <p class="text-sm text-text-secondary leading-relaxed flex-1">{{ trigger }}</p>
         </div>
         {% endfor %}
     </div>
-</div>
+</section>
 {% endif %}
 
-<!-- Fallback: raw text for legacy memos -->
-{% if memo.raw_text and not memo.thesis %}
-<div class="card card-elevated mb-8 reveal" data-stagger>
-    <div class="flex items-center gap-2 mb-3">
-        <span class="w-2 h-2 rounded-full bg-accent"></span>
-        <h2 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Analysis</h2>
+<!-- ── 16 — Position Sizing + Decision History ────────────────────── -->
+{% if memo.position_sizing_note or (ticker_decisions and ticker_decisions|length > 0) %}
+<section class="reveal memo-reveal-once" data-stagger>
+    <div class="memo-section-head">
+        <span class="memo-section-num">16</span>
+        <span class="memo-section-title">Position &amp; History</span>
+        <span class="memo-section-line"></span>
+        <span class="memo-section-tag">execution</span>
     </div>
-    <pre class="text-sm text-text-secondary whitespace-pre-wrap font-mono leading-relaxed">{{ memo.raw_text }}</pre>
-</div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {% if memo.position_sizing_note %}
+        <div class="card card-elevated p-5 lg:col-span-2">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
+                <p class="metric-label">Sizing Note</p>
+            </div>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ memo.position_sizing_note }}</p>
+            {% if holding and holding.entry_price_usd %}
+            <div class="mt-4 pt-4 border-t border-border-subtle grid grid-cols-3 gap-3 text-xs">
+                <div>
+                    <p class="metric-label">Entry</p>
+                    <p class="metric-number text-base text-text-primary mt-1">${{ "%.2f"|format(holding.entry_price_usd) }}</p>
+                </div>
+                <div>
+                    <p class="metric-label">Size</p>
+                    <p class="metric-number text-base text-text-primary mt-1">${{ "{:,.0f}".format(holding.position_size_usd or 0) }}</p>
+                </div>
+                <div>
+                    <p class="metric-label">State</p>
+                    <p class="metric-number text-base text-text-primary mt-1">{{ holding.state }}</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% if ticker_decisions and ticker_decisions|length > 0 %}
+        <div class="card card-elevated p-5">
+            <p class="metric-label mb-3">Decision History</p>
+            {% for d in ticker_decisions[:5] %}
+            <div class="decision-strip">
+                <span class="text-xs font-mono text-text-muted" {% if d.get('decided_at') %}data-time-ago="{{ d['decided_at'] }}"{% endif %}>{{ (d.get('decided_at') or '')[:10] }}</span>
+                <span class="risk-pill shrink-0 {{ 'rp-low' if d.get('verdict') == 'STRONG_BUY' else 'rp-low' if d.get('verdict') == 'BUY' else 'rp-medium' if d.get('verdict') == 'HOLD' else 'rp-high' }}">{{ d.get('verdict') or 'N/A' }}</span>
+                <span class="ml-auto metric-number text-xs text-text-primary">{{ "%.0f"|format((d.get('conviction_score') or 0) * 100) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</section>
 {% endif %}
+
+<!-- raw_text fallback removed: memo page renders ONLY the full long-form memo.
+     Legacy short text is no longer surfaced; tickers without a structured memo
+     route to the explicit not-analyzed empty state instead. -->
+
+</div><!-- /memo-deck -->
+
+<!-- ─── MEMO SIDEBAR — sticky right rail (≥1200px) / mobile bottom-sheet ── -->
+<aside class="memo-sidebar" aria-label="Memo sidebar">
+    <!-- EV / R:R / Sizing summary card -->
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">Allocator Card</p>
+        <div class="space-y-3 text-sm">
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Verdict</span>
+                <span class="font-mono font-semibold {{ 'text-positive' if verdict in ('STRONG_BUY', 'BUY') else 'text-crucible' if verdict == 'HOLD' else 'text-text-muted' }}">{{ verdict_tier_label or verdict }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Conviction</span>
+                <span class="font-mono font-semibold">{{ "%.0f"|format((conviction or 0) * 100) }}%</span>
+            </div>
+            {% if current_price %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Current</span>
+                <span class="font-mono font-semibold">${{ "%.2f"|format(current_price) }}</span>
+            </div>
+            {% endif %}
+            {% if fair_value %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Fair Value</span>
+                <span class="font-mono font-semibold">${{ "%.2f"|format(fair_value) }}</span>
+            </div>
+            {% endif %}
+            {% if rr_ratio is defined and rr_ratio is not none %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">R:R</span>
+                <span class="font-mono font-semibold">{{ "%.2f"|format(rr_ratio) }}</span>
+            </div>
+            {% endif %}
+            {% if position_target %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Target</span>
+                <span class="font-mono font-semibold">${{ "%.2f"|format(position_target) }}</span>
+            </div>
+            {% endif %}
+            {% if position_stop %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Stop</span>
+                <span class="font-mono font-semibold">${{ "%.2f"|format(position_stop) }}</span>
+            </div>
+            {% endif %}
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Max Position</span>
+                <span class="font-mono font-semibold">{{ "%.0f"|format(risk_max_single_position_pct * 100) }}%</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-text-muted">Paper Capital</span>
+                <span class="font-mono font-semibold">${{ "{:,.0f}".format(paper_portfolio_value or 0) }}</span>
+            </div>
+        </div>
+    </div>
+
+    {% if sizing and sizing.is_available %}
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">Sizing Detail</p>
+        <div class="text-xs text-text-muted mb-3 leading-relaxed">
+            R:R = {{ "%.2f"|format(sizing.rr_ratio) }} at {{ "%.0f"|format(risk_max_single_position_pct * 100) }}% cap.
+            Binding constraint: <span class="font-semibold text-text-secondary">{{ sizing.binding_constraint }}</span>.
+        </div>
+        <div class="sizing-row">
+            <span class="sizing-row__risk">Risk 1%</span>
+            <span class="sizing-row__shares">{{ sizing.shares_at_1pct }} sh · ${{ "{:,.0f}".format(sizing.cost_at_1pct or 0) }}</span>
+        </div>
+        <div class="sizing-row">
+            <span class="sizing-row__risk">Risk 2%</span>
+            <span class="sizing-row__shares">{{ sizing.shares_at_2pct }} sh · ${{ "{:,.0f}".format(sizing.cost_at_2pct or 0) }}</span>
+        </div>
+        <div class="sizing-row {% if sizing.binding_constraint == 'max_position' %}sizing-row--binding{% endif %}">
+            <span class="sizing-row__risk">Risk 5% (or cap)</span>
+            <span class="sizing-row__shares">{{ sizing.shares_at_5pct }} sh · ${{ "{:,.0f}".format(sizing.cost_at_5pct or 0) }}{% if sizing.binding_constraint == 'max_position' %}<span class="sizing-row__binding-tag">cap</span>{% endif %}</span>
+        </div>
+        {% if sizing.notes %}
+        <p class="mt-2 text-[10px] text-text-muted leading-relaxed">{{ sizing.notes }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if catalysts_12mo %}
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">12-Month Catalysts</p>
+        <div class="memo-timeline" style="margin: 0; padding: 0.25rem 0;">
+            {% for cat in catalysts_12mo[:8] %}
+            {% set ds = cat.expected_date|default('TBD') %}
+            <div class="timeline-node timeline-node--{{ cat.impact|default('neutral') }}">
+                <p class="timeline-node__date">{{ ds[:10] if ds and ds != 'TBD' else 'TBD' }}</p>
+                <p class="timeline-node__title">{{ cat.event|default(cat.title|default('Catalyst')) }}</p>
+                {% if cat.potential_impact %}
+                <p class="timeline-node__impact">{{ cat.potential_impact }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if memo.what_would_change_my_mind and memo.what_would_change_my_mind|length > 0 %}
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">Exit Triggers</p>
+        {% for trigger in memo.what_would_change_my_mind %}
+        <div class="evidence-item">
+            <span class="evidence-dot" style="background: var(--negative); box-shadow: 0 0 0 3px var(--negative-soft);"></span>
+            <p class="text-sm text-text-secondary leading-relaxed flex-1">{{ trigger }}</p>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if _agents %}
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">Persona Ensemble</p>
+        <div class="space-y-2">
+            {% for sig in _agents[:8] %}
+            {% set conf = sig.confidence|default(0) %}
+            <div class="text-xs">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-text-secondary">{{ sig.persona|default('')|replace('_', ' ')|title }}</span>
+                    <span class="font-mono text-text-muted">{{ "%.0f"|format(conf * 100) }}%</span>
+                </div>
+                <div class="confidence-bar-thin">
+                    <div class="confidence-bar-thin__fill" style="width: {{ "%.0f"|format(conf * 100) }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if ticker_decisions and ticker_decisions|length > 0 %}
+    <div class="sidebar-section">
+        <p class="sidebar-section__title">Decision History</p>
+        {% for d in ticker_decisions[:5] %}
+        <div class="decision-strip">
+            <span class="text-xs font-mono text-text-muted">{{ (d.get('decided_at') or '')[:10] }}</span>
+            <span class="risk-pill shrink-0 {{ 'rp-low' if d.get('verdict') == 'STRONG_BUY' else 'rp-low' if d.get('verdict') == 'BUY' else 'rp-medium' if d.get('verdict') == 'HOLD' else 'rp-high' }}">{{ d.get('verdict') or 'N/A' }}</span>
+            <span class="ml-auto metric-number text-xs text-text-primary">{{ "%.0f"|format((d.get('conviction_score') or 0) * 100) }}%</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</aside>
+<div class="memo-sidebar__scrim" aria-hidden="true"></div>
+<button type="button" class="memo-sidebar-toggle" aria-expanded="false" aria-controls="memo-sidebar">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    Sizing &amp; history
+</button>
+</div><!-- /memo-layout -->
 
 {% endif %}
 

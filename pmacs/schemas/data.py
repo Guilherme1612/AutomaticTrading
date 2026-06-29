@@ -25,6 +25,7 @@ class DataSource(str, Enum):
     FUNDAMENTALS = "fundamentals"
     TECHNICAL = "technical"
     YAHOO = "yahoo"
+    EDGAR_KPI = "edgar_kpi"  # SaaS KPI disclosures extracted from filing narrative
 
 
 class EvidenceType(str, Enum):

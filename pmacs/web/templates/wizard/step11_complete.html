@@ -6,7 +6,7 @@
 <div class="w-full max-w-xl px-8 text-center">
     {% if promotion_result and promotion_result.get("promoted") %}
     <div class="mb-8">
-        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 mb-4">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-positive mb-4">
             <span class="text-positive text-3xl">&#10003;</span>
         </div>
         <h1 class="text-3xl font-bold text-text-primary mb-2">Setup Complete</h1>
@@ -14,20 +14,20 @@
     </div>
     {% elif promotion_result %}
     <div class="mb-8">
-        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-900/30 mb-4">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-negative mb-4">
             <span class="text-negative text-3xl">&#10007;</span>
         </div>
         <h1 class="text-3xl font-bold text-text-primary mb-2">Promotion Failed</h1>
         <p class="text-text-secondary text-base">System setup is done, but mode promotion encountered an error.</p>
     </div>
     {% if wizard_error or promotion_result.get("error") %}
-    <div class="mb-6 p-4 bg-red-900/20 border border-red-700/40 rounded-lg text-left">
+    <div class="mb-6 p-4 bg-negative-soft border border-negative rounded-lg text-left">
         <p class="text-sm text-negative">{{ wizard_error or promotion_result.get("error", "Unknown error") }}</p>
     </div>
     {% endif %}
     {% else %}
     <div class="mb-8">
-        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-900/30 mb-4">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-warning mb-4">
             <span class="text-warning text-3xl">&#9888;</span>
         </div>
         <h1 class="text-3xl font-bold text-text-primary mb-2">Finishing Setup</h1>
@@ -38,7 +38,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Retry Promotion
         </button>
     </div>
@@ -85,7 +85,7 @@
     </div>
 
     <a href="/"
-       class="inline-flex items-center gap-2 px-8 py-3 bg-blue-600 text-white rounded-lg font-medium text-base hover:bg-blue-700 transition-colors">
+       class="inline-flex items-center gap-2 px-8 py-3 bg-accent text-white rounded-lg font-medium text-base hover:bg-accent transition-colors">
         Open Dashboard
         <span class="text-xs opacity-75">localhost:8000</span>
     </a>

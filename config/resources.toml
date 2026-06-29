@@ -13,7 +13,11 @@ quantization = "UD-Q4_K_XL"
 
 [budgets]
 phase1_seconds_per_symbol = 270
-daily_llm_seconds_total = 18000
+# Wave-2 debate wall-clock budget per symbol (Agents.md §11b-§11d): bull/bear
+# advocates + cross-persona auditor run in parallel (max_workers=3) after wave-1.
+debate_wave_seconds_per_symbol = 180
+# Bumped from 18000 to absorb the +3 wave-2 LLM calls/symbol (debate wave).
+daily_llm_seconds_total = 21600
 
 [stop_loss]
 intraday_check_interval_seconds = 1800

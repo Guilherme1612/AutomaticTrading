@@ -36,8 +36,13 @@ def _setup(tmp_path):
         "INSERT INTO queue (cycle_id, ticker, priority_band, enqueued_at, completed_at) VALUES (?, ?, ?, ?, ?)",
         ("c1", "GOOG", 1, "2024-01-01T10:00:00", None),
     )
+    conn.execute(
+        "INSERT INTO decisions (cycle_id, ticker, verdict, conviction_score, decided_at) VALUES (?, ?, ?, ?, ?)",
+        ("c1", "TSLA", "HOLD", 0.42, "2024-01-01T11:00:00"),
+    )
     add_ticker(conn, UniverseEntry(ticker="AAPL", sector="Technology"))
     add_ticker(conn, UniverseEntry(ticker="MSFT", sector="Technology"))
+    add_ticker(conn, UniverseEntry(ticker="TSLA", sector="Technology"))
     conn.commit()
     conn.close()
 
@@ -102,6 +107,148 @@ class TestAgentsRoute:
             assert response.status_code == 200
 
 
+def _seed_memo(db_path: Path, ticker: str, memo: dict, cycle_id: str = "c1") -> None:
+    """Insert a structured memo (the Part C injected shape) for a ticker."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+            "memo_json, decided_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (cycle_id, ticker, "STRONG_BUY", 0.65, json.dumps(memo),
+             "2026-06-24T10:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_FULL_MEMO = {
+    "verdict_line": "STRONG_BUY — conviction 0.65",
+    "p_up": 0.62, "p_flat": 0.20, "p_down": 0.18, "conviction": 0.65,
+    "agent_signals": [
+        {"persona": "growth_hunter", "signal": "bullish", "direction": "bullish",
+         "p_up": 0.70, "p_flat": 0.20, "p_down": 0.10, "confidence": 0.60,
+         "analysis": "rev growth 48%", "evidence_cited": ["e1"]},
+        {"persona": "short_interest", "signal": "bearish", "direction": "bearish",
+         "p_up": 0.20, "p_flat": 0.30, "p_down": 0.50, "confidence": 0.40,
+         "analysis": "short 9.5%", "evidence_cited": ["e3"]},
+    ],
+    "crucible_severity": 0.35,
+    "crucible_attacks": [{"attack_type": "moat", "description": "thin moat"}],
+    "crucible_summary": "Thesis survives with minor concerns.",
+    "crucible_thesis_survives": True,
+}
+
+
+class TestDashboardDbBackedMemo:
+    """Task #8 Part D — agents/memo pages render the injected memo_json fields
+    from the persisted memos table (no demo-path live globals)."""
+
+    def test_agents_sankey_data_reads_persisted_memo(self):
+        cfg = get_config()
+        _seed_memo(cfg.sqlite_path, "AAPL", _FULL_MEMO)
+        with TestClient(app) as client:
+            resp = client.get("/agents/sankey-data?ticker=AAPL")
+        assert resp.status_code == 200
+        data = resp.json()
+        # The seeded memo's agent_signals surface as complete persona outputs.
+        gh = next(p for p in data["personas"] if p["id"] == "growth_hunter")
+        assert gh["status"] == "complete"
+        assert gh["p_up"] == 0.70
+        # Arbitration numbers reconstructed from the memo.
+        assert data["arbitration_result"]["p_up"] == 0.62
+        assert data["arbitration_result"]["conviction"] == 0.65
+        assert data["arbitration_result"]["verdict"] == "STRONG_BUY"
+        # Crucible reconstructed from the injected crucible_* fields.
+        assert data["crucible_result"]["severity"] == 0.35
+        assert data["crucible_result"]["thesis_survives"] is True
+        assert "AAPL" in data["available_tickers"]
+
+    def test_memo_page_renders_agent_signals_from_persisted_json(self):
+        cfg = get_config()
+        _seed_memo(cfg.sqlite_path, "MSFT", _FULL_MEMO)
+        # MSFT must be in the universe for the page to resolve (fixture adds it).
+        with TestClient(app) as client:
+            resp = client.get("/memo/MSFT")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # The Agent Signals card renders the persona name + its analysis text.
+        assert "Growth Hunter" in body
+        assert "rev growth 48%" in body
+
+
+class TestOperatorRoutesUseOrchestrator:
+    """Task #8 Part B — the operator routes run the single canonical engine.
+
+    /api/solo/run and /api/cycle/start are operator-initiated, so they bypass the
+    kill-switch gate (skip_kill_switch=True) — never an auto-disengage
+    (Non-Negotiable #5). /api/cycle/orchestrator stays gated (False). All three
+    pre-generate a cycle_id the route returns immediately, and run_cycle owns the
+    cycles-row insert (the route does NOT insert its own row).
+    """
+
+    def _capture(self, monkeypatch):
+        import pmacs.web.routes.pipeline as P
+        calls: list[dict] = []
+
+        def _fake(cfg, trigger, cycle_id, tickers, skip_kill_switch):
+            calls.append({
+                "trigger": trigger, "cycle_id": cycle_id,
+                "tickers": tickers, "skip_kill_switch": skip_kill_switch,
+            })
+
+        monkeypatch.setattr(P, "_launch_orchestrator_cycle", _fake)
+        return calls
+
+    def test_solo_run_bypasses_kill_switch_single_ticker(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/solo/run", json={"ticker": "oust"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["ticker"] == "OUST"
+        assert body["cycle_id"].startswith("SOLO-OUST-")
+        assert len(calls) == 1
+        c = calls[0]
+        assert c["skip_kill_switch"] is True
+        assert c["tickers"] == ["OUST"]
+        assert c["trigger"] == "solo_research"
+        assert c["cycle_id"] == body["cycle_id"]
+
+    def test_cycle_start_bypasses_kill_switch(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/cycle/start", json={"trigger": "manual",
+                                                        "tickers": ["AAPL", "MSFT"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cycle_id"].startswith("CYCLE-")
+        assert len(calls) == 1
+        assert calls[0]["skip_kill_switch"] is True
+        assert calls[0]["tickers"] == ["AAPL", "MSFT"]
+        assert calls[0]["cycle_id"] == body["cycle_id"]
+
+    def test_orchestrator_route_stays_gated(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/cycle/orchestrator", json={"tickers": ["NVDA"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cycle_id"].startswith("ORCH-")
+        assert len(calls) == 1
+        assert calls[0]["skip_kill_switch"] is False
+        assert calls[0]["tickers"] == ["NVDA"]
+        assert calls[0]["cycle_id"] == body["cycle_id"]
+
+    def test_solo_run_rejects_invalid_ticker(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        with TestClient(app) as client:
+            resp = client.post("/api/solo/run", json={"ticker": "123"})
+        assert resp.status_code == 400
+        assert calls == []
+
+
 class TestPipelineRoute:
     """Tests for the pipeline page route."""
 
@@ -141,6 +288,36 @@ class TestUniverseRoute:
         with TestClient(app) as client:
             response = client.get("/universe")
             assert response.status_code == 200
+
+    def test_universe_data_link_only_for_cycled_tickers(self):
+        """Both the data link and the memo link are gated on has_been_cycled.
+
+        A ticker that has not been analyzed in any cycle (no evidence, no
+        holdings, no decisions) has no useful data on /ticker/{symbol} and
+        must not be linked from the universe page — otherwise the link
+        leads to a polite but empty state, which is a dead-end.
+        """
+        with TestClient(app) as client:
+            response = client.get("/universe")
+            text = response.text
+            assert response.status_code == 200
+            # AAPL has a holding, TSLA has a decision -> both cycled -> data link shown
+            assert '/ticker/AAPL' in text
+            assert '/ticker/TSLA' in text
+            # MSFT has no cycle data -> data link hidden
+            assert '/ticker/MSFT' not in text
+
+    def test_universe_memo_link_only_for_cycled_tickers(self):
+        with TestClient(app) as client:
+            response = client.get("/universe")
+            text = response.text
+            assert response.status_code == 200
+            # AAPL has a holding, TSLA has a decision -> both cycled -> memo link
+            # shown (now deep-links into the unified ticker workspace §16.6 #memo).
+            assert '/ticker/AAPL#memo' in text
+            assert '/ticker/TSLA#memo' in text
+            # MSFT has no cycle data -> memo link hidden
+            assert '/ticker/MSFT#memo' not in text
 
 
 class TestSettingsRoute:
@@ -182,3 +359,138 @@ class TestSparklineAPI:
             api_resp = client.get("/api/dashboard/sparkline?metric=sharpe&window=1W")
             assert api_resp.status_code == 200
             assert isinstance(api_resp.json(), list)
+
+
+class TestDashboardPartials:
+    """SSE-driven dashboard region partials (Source.md §14, Architecture.md §4.4).
+
+    Each partial returns one region's HTML and is self-rewiring — the root
+    container carries its own hx-get/hx-trigger/hx-swap so an outerHTML swap
+    leaves it live for the next `pmacs:refresh` event.
+    """
+
+    REGIONS = ("positions", "decisions", "health", "mutation")
+
+    def test_each_partial_returns_200(self):
+        with TestClient(app) as client:
+            for region in self.REGIONS:
+                resp = client.get(f"/api/dashboard/partials/{region}")
+                assert resp.status_code == 200, f"{region}: {resp.status_code}"
+
+    def test_each_partial_is_self_rewiring(self):
+        with TestClient(app) as client:
+            for region in self.REGIONS:
+                resp = client.get(f"/api/dashboard/partials/{region}")
+                # Root container must carry its own hx-get so the swapped-in
+                # fragment stays subscribed to pmacs:refresh.
+                assert f'hx-get="/api/dashboard/partials/{region}"' in resp.text
+                assert "hx-trigger=\"pmacs:refresh from:body\"" in resp.text
+                assert 'hx-swap="outerHTML"' in resp.text
+
+    def test_unknown_region_404s(self):
+        with TestClient(app) as client:
+            resp = client.get("/api/dashboard/partials/nonexistent")
+            assert resp.status_code == 404
+
+    def test_positions_partial_renders_force_exit_for_active_holding(self):
+        """§16.4: the active-positions table exposes a Force-exit button per row."""
+        with TestClient(app) as client:
+            resp = client.get("/api/dashboard/partials/positions")
+            assert resp.status_code == 200
+            # The autouse fixture inserts an ACTIVE AAPL holding → button renders.
+            assert "forceExit('AAPL')" in resp.text
+
+
+class TestSettingsSection20:
+    """§20 Settings expansion (Source.md §20.2–§20.12): section anchors + the
+    operator-confirmed TOML-writing routes (risk/crucible/brokers/operator).
+
+    Each operator-confirmed change must persist to the relevant TOML atomically
+    and be typed-confirm gated client-side (see test_operator_confirm_gates.py).
+    """
+
+    ANCHORS = (
+        "general", "brokers", "inference", "budget", "universe", "risk",
+        "crucible", "mutations", "personas", "queue", "audit", "operator",
+        "notifications", "reset",
+    )
+
+    def test_settings_renders_all_section20_anchors(self):
+        with TestClient(app) as client:
+            resp = client.get("/settings")
+            assert resp.status_code == 200
+            for anchor in self.ANCHORS:
+                assert f'id="{anchor}"' in resp.text, f"settings.html missing §20 anchor #{anchor}"
+
+    def test_settings_subnav_links_to_section20_index(self):
+        with TestClient(app) as client:
+            resp = client.get("/settings")
+            # The §20.1 sub-nav must link every subsection.
+            assert 'href="#risk"' in resp.text
+            assert 'href="#brokers"' in resp.text
+            assert 'href="#operator"' in resp.text
+
+    def test_risk_route_writes_toml(self, tmp_path, monkeypatch):
+        """§20.6 — POST /api/settings/risk writes risk.toml [position]."""
+        import os
+        from pmacs.web.config import get_config, configure
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/risk", json={"max_single_position_pct": 0.25})
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["ok"] is True
+            # On disk
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["position"]["max_single_position_pct"] == 0.25
+            # Read-back via GET
+            get = client.get("/api/settings/risk")
+            assert get.json()["risk"]["max_single_position_pct"] == 0.25
+
+    def test_risk_route_validates_range(self):
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/risk", json={"max_single_position_pct": 2.0})
+            assert resp.status_code == 400
+
+    def test_crucible_route_writes_toml(self):
+        """§20.7 — POST /api/settings/crucible writes crucible.toml [time_budget]."""
+        cfg = get_config()
+        crucible_path = cfg.config_dir / "crucible.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/crucible", json={"seconds_per_attack": 120, "max_cycles": 3})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(crucible_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["time_budget"]["seconds_per_attack"] == 120
+            assert data["time_budget"]["max_cycles"] == 3
+
+    def test_brokers_route_writes_catastrophe_net(self):
+        """§20.3 — POST /api/settings/brokers writes risk.toml [pricing]."""
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/brokers", json={"catastrophe_net_stop_pct": 0.20})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["pricing"]["default_stop_loss_pct"] == 0.20
+
+    def test_operator_route_writes_per_trade_approval(self):
+        """§20.12 — POST /api/settings/operator writes risk.toml [operator]."""
+        cfg = get_config()
+        risk_path = cfg.config_dir / "risk.toml"
+        with TestClient(app) as client:
+            resp = client.post("/api/settings/operator", json={"per_trade_approval": True})
+            assert resp.status_code == 200, resp.text
+            import tomllib
+            with open(risk_path, "rb") as f:
+                data = tomllib.load(f)
+            assert data["operator"]["per_trade_approval"] is True
+
+    def test_cost_settings_template_removed(self):
+        """Finding I: the dead cost_settings.html template is folded into Settings."""
+        assert not (Path(__file__).resolve().parents[2] / "pmacs" / "web" / "templates" / "cost_settings.html").exists()

@@ -678,7 +678,8 @@ def cmd_setup() -> None:
     if not pip_path:
         pip_path = str(Path(sys.executable).parent / "pip")
 
-    # Collect missing packages
+    # Collect missing packages (core runtime only — embeddings/playwright/qrcode
+    # are optional extras; see pyproject [project.optional-dependencies]).
     required_packages = [
         "pydantic>=2.5",
         "httpx>=0.27",
@@ -693,7 +694,6 @@ def cmd_setup() -> None:
         "yfinance>=0.2",
         "kuzu>=0.5.0",
         "qdrant-client>=1.12.0",
-        "sentence-transformers>=3.0.0",
         "pytz>=2024.1",
     ]
     import importlib
@@ -714,7 +714,6 @@ def cmd_setup() -> None:
         "yfinance": "yfinance",
         "kuzu": "kuzu",
         "qdrant-client": "qdrant_client",
-        "sentence-transformers": "sentence_transformers",
         "pytz": "pytz",
     }
 

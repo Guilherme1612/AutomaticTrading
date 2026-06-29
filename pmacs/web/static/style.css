@@ -46,7 +46,7 @@ body::before {
     animation: ambient-drift 25s ease-in-out infinite;
     pointer-events: none;
     z-index: -1;
-    opacity: 0.6;
+    opacity: 0.2;
 }
 
 /* ─── Dark mode body + surface overrides ─────────────────────────────── */
@@ -82,6 +82,20 @@ body::before {
 .dark .text-zinc-500,
 .dark .text-zinc-400 {
     color: var(--text-muted);
+}
+
+/* Lighter text variants for dark-mode WCAG AA on dark surfaces */
+.dark .text-accent {
+    color: var(--accent-text);
+}
+
+.dark .text-negative {
+    color: var(--negative-text);
+}
+
+/* KPI card violet tint (Source.md §13.1 data-viz palette) */
+.border-kpi-violet {
+    border-color: color-mix(in srgb, var(--viz-violet) 10%, transparent);
 }
 
 /* ─── Reduced Motion (Source.md §13.7) ─────────────────────────────────── */
@@ -283,7 +297,7 @@ body::before {
 
 .ticker-autocomplete-input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 16px rgba(37,99,235,0.08);
+    box-shadow: 0 0 0 3px var(--accent-ring), 0 4px 16px var(--accent-soft);
 }
 
 .ticker-autocomplete-dropdown {
@@ -791,7 +805,7 @@ header {
 .card-stat.card-accent-blue::after  { background: radial-gradient(circle, var(--accent-soft), transparent); }
 .card-stat.card-accent-green::after { background: radial-gradient(circle, var(--positive-soft), transparent); }
 .card-stat.card-accent-red::after   { background: radial-gradient(circle, var(--negative-soft), transparent); }
-.card-stat.card-accent-amber::after { background: radial-gradient(circle, rgba(245,158,11,0.12), transparent); }
+.card-stat.card-accent-amber::after { background: radial-gradient(circle, var(--warning-soft), transparent); }
 
 /* Interactive card with smooth lift */
 .card-interactive {
@@ -1310,6 +1324,49 @@ textarea:focus-visible {
     border-radius: 2px;
 }
 
+/* ─── Workspace Tabs (F-004) ─────────────────────────────────────────── */
+/* Active state is data-attribute driven so it survives without JS. */
+.ws-tab {
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ws-tab:hover {
+    background: var(--surface-sunken);
+}
+.ws-tab[aria-selected="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.ws-tab[aria-selected="true"]:hover {
+    filter: brightness(0.97);
+}
+
+/* ─── Persona Details Marker (F-010) ────────────────────────────────── */
+/* <details> open/closed chevron. Apply class="pm-details" to the <details>. */
+details.pm-details > summary { list-style: none; cursor: pointer; }
+details.pm-details > summary::-webkit-details-marker { display: none; }
+details.pm-details > summary::after {
+    content: '\25B8';
+    margin-left: auto;
+    padding-left: 0.5rem;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+details.pm-details[open] > summary::after {
+    transform: rotate(90deg);
+}
+
+/* ─── Eyebrow Micro-Label (F-011, F-014) ────────────────────────────── */
+/* Consolidates the 10px uppercase tracking-widest label pattern that
+   appears ~30 times on /ticker/{ticker}. Higher contrast than
+   text-text-muted at 10-12px to clear WCAG AA. */
+.pmacs-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+}
+
 /* ─── Modal Backdrop ──────────────────────────────────────────────────── */
 
 #blocking-modal,
@@ -1479,15 +1536,15 @@ textarea:focus-visible {
 
 /* Subtle lift on running state */
 [data-persona].card-accent-blue {
-    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.08),
-                0 0 0 1px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 2px 12px var(--accent-soft),
+                0 0 0 1px var(--accent-soft);
 }
 
 /* Completion glow pulse */
 @keyframes complete-glow {
-    0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.2); }
-    50% { box-shadow: 0 0 16px 4px rgba(34, 197, 94, 0.12); }
-    100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive) 20%, transparent); }
+    50% { box-shadow: 0 0 16px 4px color-mix(in srgb, var(--positive) 12%, transparent); }
+    100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 .persona-complete-glow {
@@ -1510,11 +1567,11 @@ textarea:focus-visible {
 }
 
 [data-pipeline-step]:has(.bg-accent.anim-breathing) {
-    background-color: rgba(59, 130, 246, 0.04);
+    background-color: var(--accent-soft);
 }
 
 [data-pipeline-step]:has(.bg-positive) {
-    background-color: rgba(34, 197, 94, 0.03);
+    background-color: var(--positive-soft);
 }
 
 /* Result card entrance */
@@ -1536,3 +1593,1104 @@ textarea:focus-visible {
 .bg-positive, .bg-negative, .bg-border-strong {
     transition: width 0.6s var(--ease-out-expo);
 }
+
+/* ─── Live-update motion: cycle progress + sparkline fades ──────────────── */
+/* Eases the cycle progress bar as SSE ticker_progress events arrive.
+   The prefers-reduced-motion block at top zeroes this for a11y users. */
+#cycle-progress-bar {
+    transition: width 0.6s var(--ease-out-expo);
+}
+
+/* Sparkline re-render fade-in — avoids a hard cut when a sparkline refreshes
+   mid-page while surrounding cards animate in on load. */
+@keyframes sparkline-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.sparkline-fade-in {
+    animation: sparkline-fade-in 0.2s var(--ease-out-expo) both;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OPERATING SYSTEM OF FINANCE — MEMO SECTION
+   Presentation-grade memo with animated hero, scenario console, conviction
+   ring, risk heatmap, and step-by-step information flow.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Light-mode visual depth (only fires when not in .dark) ─────────────
+   In light mode, --accent-soft / --positive-soft / etc. resolve to 8% alpha
+   pastels which are nearly invisible on white. The memo deck overrides them
+   locally (scoped to .memo-deck) and gives each section a subtle container
+   so the page reads as a presentation deck, not a wall of white. */
+:root:not(.dark) .memo-deck {
+    --accent-soft: rgba(99, 102, 241, 0.22);
+    --positive-soft: rgba(22, 163, 74, 0.22);
+    --negative-soft: rgba(220, 38, 38, 0.22);
+    --warning-soft: rgba(217, 119, 6, 0.22);
+    --crucible-soft: rgba(168, 85, 247, 0.22);
+    --surface-elevated: #ffffff;
+    --surface-sunken: #eef2ff;
+    --border-subtle: rgba(99, 102, 241, 0.20);
+    --border: #c7d2fe;
+}
+:root:not(.dark) .memo-deck > section {
+    /* Bold pastel background — visibly tinted, not "almost white".
+       pale-indigo #eef2ff is the base; a soft gradient adds subtle depth. */
+    background:
+        linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(255, 255, 255, 0) 60%),
+        linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%);
+    border: 1px solid rgba(99, 102, 241, 0.32);
+    border-radius: 1.25rem;
+    padding: 1.5rem 1.75rem 1.75rem;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.8) inset,
+        0 1px 0 rgba(15, 23, 42, 0.02),
+        0 10px 30px -10px rgba(99, 102, 241, 0.22),
+        0 4px 10px -4px rgba(99, 102, 241, 0.14);
+}
+/* Hero keeps its own richer gradient — keep it visually distinct from the
+   stacked sections below it. */
+:root:not(.dark) .memo-deck > .memo-hero {
+    background:
+        radial-gradient(ellipse at 12% 0%, rgba(59, 130, 246, 0.28) 0%, transparent 55%),
+        radial-gradient(ellipse at 90% 100%, rgba(168, 85, 247, 0.26) 0%, transparent 55%),
+        radial-gradient(ellipse at 100% 0%, rgba(16, 185, 129, 0.22) 0%, transparent 50%),
+        linear-gradient(180deg, #ffffff 0%, #f0f4ff 100%);
+    border: 1px solid rgba(99, 102, 241, 0.22);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.9) inset,
+        0 18px 48px -12px rgba(59, 130, 246, 0.28),
+        0 8px 24px -6px rgba(168, 85, 247, 0.18);
+}
+/* Tinted card backgrounds — give scenario cells, risk cards, agent cards,
+   and decision strips visible color tints in light mode so they don't
+   dissolve into white. */
+:root:not(.dark) .memo-deck .scenario-cell {
+    background: linear-gradient(180deg, #ffffff 0%, #eef2ff 100%);
+    border-color: rgba(99, 102, 241, 0.24);
+}
+:root:not(.dark) .memo-deck .scenario-cell--bear {
+    background: linear-gradient(180deg, #fff5f5 0%, #ffe4e6 100%);
+    border-color: rgba(220, 38, 38, 0.30);
+}
+:root:not(.dark) .memo-deck .scenario-cell--bull {
+    background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%);
+    border-color: rgba(22, 163, 74, 0.30);
+}
+:root:not(.dark) .memo-deck .scenario-cell--exp {
+    background: linear-gradient(180deg, #faf5ff 0%, #f3e8ff 100%);
+    border-color: rgba(168, 85, 247, 0.30);
+}
+:root:not(.dark) .memo-deck .scenario-console {
+    background: linear-gradient(180deg, #ffffff 0%, #f5f7ff 100%);
+    border-color: rgba(99, 102, 241, 0.24);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+:root:not(.dark) .memo-deck .risk-card,
+:root:not(.dark) .memo-deck .agent-card {
+    background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
+    border-color: rgba(99, 102, 241, 0.20);
+}
+:root:not(.dark) .memo-deck .decision-strip {
+    background: linear-gradient(180deg, #f1f5ff 0%, #e0e7ff 100%);
+    border-color: rgba(99, 102, 241, 0.28);
+}
+:root:not(.dark) .memo-deck .catalyst-row {
+    border-color: rgba(99, 102, 241, 0.18);
+}
+:root:not(.dark) .memo-deck .thesis-prose {
+    background: linear-gradient(180deg, #ffffff 0%, #f6f8ff 100%);
+    border-color: rgba(99, 102, 241, 0.20);
+}
+/* Risk-card severity tint via border-left — keep it visible in light mode */
+:root:not(.dark) .memo-deck .risk-card::before {
+    background: linear-gradient(180deg, var(--negative), var(--negative-soft)) !important;
+}
+/* Up the section divider line weight in light mode so the title bar
+   reads clearly against the new section background. */
+:root:not(.dark) .memo-deck .memo-section-line {
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.40) 0%, transparent 100%);
+}
+:root:not(.dark) .memo-deck .memo-section-num {
+    background: linear-gradient(135deg, var(--accent-soft), var(--crucible-soft));
+    box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.30);
+}
+
+/* ─── Memo Hero ────────────────────────────────────────────────────────── */
+
+.memo-hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    background:
+        radial-gradient(ellipse at 12% 0%, var(--accent-soft) 0%, transparent 55%),
+        radial-gradient(ellipse at 90% 100%, var(--crucible-soft) 0%, transparent 55%),
+        radial-gradient(ellipse at 100% 0%, var(--positive-soft) 0%, transparent 50%),
+        linear-gradient(180deg, var(--surface-elevated), var(--surface));
+    border: 1px solid var(--border-subtle);
+    padding: 2.5rem 2.5rem 2rem;
+    box-shadow: 0 1px 0 var(--border-subtle), 0 12px 40px rgba(15, 23, 42, 0.06);
+}
+@media (max-width: 640px) {
+    .memo-hero { padding: 1.5rem 1.25rem 1.25rem; }
+}
+.dark .memo-hero {
+    box-shadow: 0 1px 0 var(--border-subtle), 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+/* Soft moving gradient mesh — gives the hero a "live, alive" feeling without
+   being distracting. Mesh is blurred + low opacity, layered on top of the
+   static gradient above. */
+.memo-hero::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
+    background:
+        radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.22), transparent 38%),
+        radial-gradient(circle at 70% 60%, rgba(168, 85, 247, 0.20), transparent 42%),
+        radial-gradient(circle at 50% 90%, rgba(16, 185, 129, 0.18), transparent 48%);
+    filter: blur(40px);
+    animation: memo-mesh-drift 18s ease-in-out infinite alternate;
+    pointer-events: none;
+    z-index: 0;
+}
+/* Soft mode pushes the mesh a bit more vibrant in light mode (8% defaults
+   are invisible on white) */
+:root:not(.dark) .memo-hero::before {
+    background:
+        radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.32), transparent 40%),
+        radial-gradient(circle at 70% 60%, rgba(168, 85, 247, 0.28), transparent 44%),
+        radial-gradient(circle at 50% 90%, rgba(16, 185, 129, 0.24), transparent 50%);
+}
+@keyframes memo-mesh-drift {
+    0%   { transform: translate3d(-3%, -2%, 0) rotate(0deg); }
+    50%  { transform: translate3d(4%,  3%, 0) rotate(6deg); }
+    100% { transform: translate3d(-2%, 4%, 0) rotate(-4deg); }
+}
+
+.memo-hero > * { position: relative; z-index: 1; }
+
+/* Big ticker glyph — monospaced, oversized, animated in */
+.memo-ticker {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+    color: var(--text-primary);
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 60%, var(--crucible) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: ticker-glyph-in 0.7s var(--ease-out-expo) both;
+}
+@keyframes ticker-glyph-in {
+    from { opacity: 0; transform: translateY(14px) scale(0.96); filter: blur(6px); }
+    to   { opacity: 1; transform: translateY(0)    scale(1);    filter: blur(0); }
+}
+
+/* Verdict pulse — soft ring that breathes to draw the eye to the call */
+.verdict-pulse {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.verdict-pulse::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    opacity: 0.35;
+    animation: verdict-ring 2.4s ease-out infinite;
+    pointer-events: none;
+}
+@keyframes verdict-ring {
+    0%   { transform: scale(1);    opacity: 0.45; }
+    70%  { transform: scale(1.18); opacity: 0; }
+    100% { transform: scale(1.18); opacity: 0; }
+}
+
+.verdict-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 25%, transparent);
+    animation: verdict-dot 1.6s ease-in-out infinite;
+}
+@keyframes verdict-dot {
+    0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 25%, transparent); }
+    50%      { box-shadow: 0 0 0 8px color-mix(in srgb, currentColor 12%, transparent); }
+}
+
+.vp-strong-buy { background: var(--positive-soft); color: var(--positive); }
+.vp-buy        { background: var(--accent-soft);   color: var(--accent); }
+.vp-hold       { background: var(--crucible-soft); color: var(--crucible); }
+.vp-skip       { background: var(--negative-soft); color: var(--negative); }
+
+/* Big metric number — animated count-up */
+.metric-number {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+}
+.metric-label {
+    font-size: 0.625rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.metric-sub {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* ─── Section Header ──────────────────────────────────────────────────── */
+
+.memo-section-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.memo-section-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.4rem;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.memo-section-title {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+.memo-section-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+}
+.memo-section-tag {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+/* ─── Scenario Console ────────────────────────────────────────────────── */
+
+.scenario-console {
+    border: 1px solid var(--border-subtle);
+    border-radius: 1.25rem;
+    background: linear-gradient(180deg, var(--surface-elevated), var(--surface));
+    overflow: hidden;
+}
+.scenario-bar {
+    display: flex;
+    height: 0.75rem;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--border-subtle);
+    position: relative;
+}
+.scenario-bar > span {
+    display: block;
+    height: 100%;
+    transition: width 1s var(--ease-out-expo);
+    position: relative;
+}
+.scenario-bar-bear  { background: linear-gradient(90deg, var(--negative), var(--viz-rose)); }
+.scenario-bar-base  { background: linear-gradient(90deg, var(--viz-slate), var(--accent)); }
+.scenario-bar-bull  { background: linear-gradient(90deg, var(--viz-emerald), var(--positive)); }
+
+.scenario-cell {
+    text-align: center;
+    padding: 1rem;
+    border-radius: 0.75rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    transition: transform 0.2s var(--ease-out-expo), border-color 0.2s;
+}
+.scenario-cell:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+}
+.scenario-cell--bear  { border-top: 3px solid var(--negative); }
+.scenario-cell--base  { border-top: 3px solid var(--accent); }
+.scenario-cell--bull  { border-top: 3px solid var(--positive); }
+.scenario-cell--exp   {
+    border-top: 3px solid var(--crucible);
+    background: linear-gradient(180deg, var(--crucible-soft), var(--surface-sunken));
+}
+
+/* ─── Conviction Ring (SVG) ──────────────────────────────────────────── */
+
+.conviction-ring {
+    transform: rotate(-90deg);
+}
+.conviction-ring__track {
+    fill: none;
+    stroke: var(--border-subtle);
+    stroke-width: 6;
+}
+.conviction-ring__fill {
+    fill: none;
+    stroke-width: 6;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 1.2s var(--ease-out-expo);
+}
+
+/* ─── Risk Heatmap ───────────────────────────────────────────────────── */
+
+.risk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 0.4rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.rp-high   { background: var(--negative-soft); color: var(--negative); }
+.rp-medium { background: var(--crucible-soft); color: var(--crucible); }
+.rp-low    { background: var(--positive-soft); color: var(--positive); }
+
+.risk-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.85rem;
+    padding: 1rem;
+    background: var(--surface-elevated);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s var(--ease-out-expo), border-color 0.2s;
+}
+.risk-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--negative);
+}
+.risk-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 60%, var(--negative-soft) 100%);
+    pointer-events: none;
+}
+
+/* ─── Catalyst Timeline ──────────────────────────────────────────────── */
+
+.catalyst-row {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 1rem;
+    align-items: start;
+    padding: 0.85rem 0;
+    border-top: 1px solid var(--border-subtle);
+    position: relative;
+}
+.catalyst-row:first-child { border-top: 0; }
+.catalyst-row__date {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-align: right;
+    padding-top: 0.15rem;
+}
+.catalyst-row__body {
+    padding-left: 1rem;
+    border-left: 2px solid var(--accent);
+    position: relative;
+}
+.catalyst-row__body::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: 0.55rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+/* ─── Agent Insight Card ─────────────────────────────────────────────── */
+
+.agent-card {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr;
+    gap: 1rem;
+    align-items: start;
+    padding: 1rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.85rem;
+    background: var(--surface-elevated);
+    transition: transform 0.2s var(--ease-out-expo), border-color 0.2s;
+}
+.agent-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+}
+.agent-card__name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.agent-card__verdict {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.prob-meter {
+    display: flex;
+    height: 0.5rem;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--border-subtle);
+    margin-top: 0.4rem;
+}
+.prob-meter-up   { background: linear-gradient(90deg, var(--positive), var(--viz-emerald)); transition: width 1s var(--ease-out-expo); }
+.prob-meter-flat { background: var(--viz-slate); transition: width 1s var(--ease-out-expo); }
+.prob-meter-down { background: linear-gradient(90deg, var(--negative), var(--viz-rose)); transition: width 1s var(--ease-out-expo); }
+
+.confidence-bar-thin {
+    height: 3px;
+    background: var(--border-subtle);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+.confidence-bar-thin__fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--crucible));
+    border-radius: 2px;
+    transition: width 1s var(--ease-out-expo);
+}
+
+/* ─── Crucible Score Ring ─────────────────────────────────────────────── */
+
+.crucible-ring {
+    position: relative;
+    width: 7rem;
+    height: 7rem;
+}
+.crucible-ring__circle {
+    fill: none;
+    stroke-width: 6;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 1.2s var(--ease-out-expo);
+}
+.crucible-ring__track { fill: none; stroke: var(--border-subtle); stroke-width: 6; }
+
+/* ─── Memo Flow Connector (left rail dots) ───────────────────────────── */
+
+.memo-deck {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+}
+
+/* ─── Key Evidence bullet — animated dots ─────────────────────────────── */
+
+.evidence-item {
+    display: flex;
+    align-items: start;
+    gap: 0.75rem;
+    padding: 0.65rem 0;
+    border-top: 1px dashed var(--border-subtle);
+}
+.evidence-item:first-child { border-top: 0; }
+.evidence-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--accent);
+    margin-top: 0.5rem;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ─── Mini Pulse (used in "alive" indicators) ────────────────────────── */
+
+@keyframes os-pulse {
+    0%, 100% { opacity: 0.45; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.4); }
+}
+.os-pulse {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--positive);
+    margin-right: 0.4rem;
+    animation: os-pulse 1.8s ease-in-out infinite;
+    vertical-align: middle;
+}
+
+/* ─── Subtle entrance for memo deck cards (works alongside reveal) ───── */
+
+.memo-deck > section {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
+}
+.memo-deck > section.revealed {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* ─── Decision History Strip ─────────────────────────────────────────── */
+
+.decision-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.65rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    font-size: 0.75rem;
+}
+.decision-strip + .decision-strip { margin-top: 0.4rem; }
+
+/* ─── Thesis Prose ───────────────────────────────────────────────────── */
+
+.thesis-prose {
+    font-size: 1.05rem;
+    line-height: 1.75;
+    color: var(--text-secondary);
+    letter-spacing: -0.005em;
+}
+.thesis-prose::first-letter {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 2.5rem;
+    font-weight: 800;
+    line-height: 1;
+    float: left;
+    padding: 0.3rem 0.65rem 0 0;
+    background: linear-gradient(135deg, var(--accent), var(--crucible));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .agent-card { grid-template-columns: 1fr; }
+    .catalyst-row { grid-template-columns: 1fr; }
+    .catalyst-row__date { text-align: left; }
+    .catalyst-row__body { padding-left: 0.85rem; border-left-width: 2px; }
+}
+
+/* ─── Print friendly ─────────────────────────────────────────────────── */
+
+@media print {
+    .memo-hero::before, .verdict-pulse::before, .verdict-dot,
+    .os-pulse, .catalyst-row__body::before { animation: none !important; }
+    .memo-hero { background: white; }
+}
+
+/* ─── PASS verdict pill (active no-bid) ───────────────────────────────── */
+
+:root {
+    --memo-pass-token: #475569; /* slate-600 */
+    --memo-pass-soft: color-mix(in srgb, #475569 18%, transparent);
+}
+.vp-pass {
+    background: var(--memo-pass-soft);
+    color: var(--memo-pass-token);
+}
+.dark .vp-pass {
+    background: color-mix(in srgb, #94a3b8 22%, transparent);
+    color: #cbd5e1;
+}
+
+/* De-emphasize SKIP (passive abstention) — PASS is now the active no-bid */
+.vp-skip {
+    background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+    color: var(--text-muted);
+}
+
+/* ─── Memo Hero decision row (EV / R:R / Sizing cards) ────────────────── */
+
+.memo-hero__decision-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin-top: 1.25rem;
+}
+@media (max-width: 768px) {
+    .memo-hero__decision-row { grid-template-columns: 1fr; }
+}
+.decision-card {
+    padding: 0.9rem 1rem;
+    border-radius: 0.85rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    position: relative;
+    overflow: hidden;
+}
+.decision-card__label {
+    font-size: 0.625rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+}
+.decision-card__value {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.5rem;
+    line-height: 1;
+}
+.decision-card__sub {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+.decision-card--ev .decision-card__value { color: var(--positive); }
+.decision-card--rr .decision-card__value { color: var(--accent); }
+.decision-card--sizing .decision-card__value { color: var(--crucible); }
+
+/* Three risk-budget rows inside the sizing card */
+.sizing-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.4rem 0;
+    border-top: 1px dashed var(--border-subtle);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.78rem;
+}
+.sizing-row:first-child { border-top: 0; }
+.sizing-row__risk { color: var(--text-muted); }
+.sizing-row__shares { color: var(--text-primary); font-weight: 600; }
+.sizing-row--binding .sizing-row__shares { color: var(--negative); }
+.sizing-row__binding-tag {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0 0.35rem;
+    font-size: 0.55rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--negative) 22%, transparent);
+    color: var(--negative);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    vertical-align: middle;
+}
+
+/* ─── Freshness strip ─────────────────────────────────────────────────── */
+
+.freshness-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 1rem;
+}
+.freshness-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    font-size: 0.65rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text-muted);
+}
+.freshness-dot {
+    width: 6px; height: 6px; border-radius: 999px;
+    background: var(--text-muted);
+}
+.freshness-chip--fresh .freshness-dot { background: var(--positive); }
+.freshness-chip--stale-ok .freshness-dot { background: #f59e0b; }
+.freshness-chip--stale-bad .freshness-dot { background: var(--negative); }
+.freshness-chip--unknown .freshness-dot { background: var(--border-subtle); }
+
+/* ─── PASS reason banner ──────────────────────────────────────────────── */
+
+.pass-reason-banner {
+    margin-top: 0.85rem;
+    padding: 0.85rem 1rem;
+    border-radius: 0.85rem;
+    background: var(--memo-pass-soft);
+    border: 1px solid color-mix(in srgb, var(--memo-pass-token) 35%, transparent);
+    color: var(--memo-pass-token);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+.dark .pass-reason-banner {
+    background: color-mix(in srgb, #94a3b8 14%, transparent);
+    border-color: color-mix(in srgb, #94a3b8 30%, transparent);
+    color: #cbd5e1;
+}
+.pass-reason-banner__label {
+    font-size: 0.625rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+/* ─── Empty-state chip (no fabrication rule) ──────────────────────────── */
+
+.empty-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    border: 1px dashed var(--border-subtle);
+    font-size: 0.7rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text-muted);
+}
+.empty-chip__icon { opacity: 0.6; }
+
+/* ─── Thesis bullet (Premise→Mechanism→Outcome→Number chain) ──────────── */
+
+.thesis-bullet {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.4rem;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.6rem;
+    border-radius: 0.75rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+.thesis-bullet__row {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    gap: 0.65rem;
+    align-items: baseline;
+}
+.thesis-bullet__label {
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+.thesis-bullet__value {
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-size: 0.92rem;
+}
+.thesis-bullet__number {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 700;
+    color: var(--accent);
+}
+
+/* ─── Risk matrix (3×3 grid) ──────────────────────────────────────────── */
+
+.risk-matrix {
+    display: grid;
+    grid-template-columns: auto repeat(3, minmax(0, 1fr));
+    grid-template-rows: auto repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+.risk-matrix__corner { /* empty top-left */ }
+.risk-matrix__col-head,
+.risk-matrix__row-head {
+    font-size: 0.6rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 700;
+    text-align: center;
+    padding: 0.2rem 0;
+}
+.risk-matrix__row-head { text-align: right; padding-right: 0.4rem; }
+.risk-matrix__cell {
+    position: relative;
+    min-height: 4.5rem;
+    border-radius: 0.5rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    padding: 0.4rem;
+    overflow: hidden;
+}
+.risk-matrix__cell--low      { background: color-mix(in srgb, var(--positive) 10%, var(--surface-sunken)); }
+.risk-matrix__cell--medium   { background: color-mix(in srgb, #f59e0b 12%, var(--surface-sunken)); }
+.risk-matrix__cell--high     { background: color-mix(in srgb, var(--negative) 12%, var(--surface-sunken)); }
+.risk-matrix__dot {
+    position: absolute;
+    width: 0.65rem; height: 0.65rem;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.risk-matrix__dot-label {
+    position: absolute;
+    bottom: 0.25rem;
+    left: 0.4rem;
+    right: 0.4rem;
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    line-height: 1.2;
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* ─── Catalyst timeline (horizontal scroll-snap) ──────────────────────── */
+
+.memo-timeline {
+    display: flex;
+    gap: 0.85rem;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding: 1rem 0 0.5rem;
+    margin: 0 -1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+}
+.memo-timeline::-webkit-scrollbar { height: 6px; }
+.memo-timeline::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
+.timeline-node {
+    flex: 0 0 14rem;
+    scroll-snap-align: start;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.75rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    position: relative;
+}
+.timeline-node::before {
+    content: "";
+    position: absolute;
+    top: 0.6rem;
+    left: -0.55rem;
+    width: 0.65rem; height: 0.65rem;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.timeline-node__date {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.3rem;
+}
+.timeline-node__title {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.3;
+}
+.timeline-node__impact {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+}
+.timeline-node--tbd::before { background: var(--border-subtle); box-shadow: none; }
+.timeline-node--positive::before { background: var(--positive); box-shadow: 0 0 0 3px color-mix(in srgb, var(--positive) 25%, transparent); }
+.timeline-node--negative::before { background: var(--negative); box-shadow: 0 0 0 3px color-mix(in srgb, var(--negative) 25%, transparent); }
+
+/* ─── Inline evidence chip (within prose) ────────────────────────────── */
+
+.evidence-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.05rem 0.45rem;
+    margin: 0 0.15rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    cursor: help;
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.evidence-chip[data-freshness="stale"] {
+    background: color-mix(in srgb, #f59e0b 18%, transparent);
+    color: #b45309;
+    border-color: color-mix(in srgb, #f59e0b 40%, transparent);
+}
+.dark .evidence-chip[data-freshness="stale"] {
+    color: #fbbf24;
+}
+
+/* ─── Memo sidebar (sticky right rail) ────────────────────────────────── */
+
+.memo-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+}
+@media (min-width: 1200px) {
+    .memo-layout {
+        grid-template-columns: minmax(0, 1fr) 22rem;
+        align-items: start;
+    }
+    .memo-sidebar {
+        position: sticky;
+        top: 1rem;
+        max-height: calc(100vh - 2rem);
+        overflow-y: auto;
+        scrollbar-width: thin;
+    }
+}
+.memo-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.sidebar-section {
+    padding: 1rem;
+    border-radius: 0.85rem;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+.sidebar-section__title {
+    font-size: 0.625rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: 0.65rem;
+}
+
+/* Mobile bottom-sheet toggle — only visible <768px */
+.memo-sidebar-toggle {
+    display: none;
+}
+@media (max-width: 1199px) {
+    .memo-sidebar-toggle {
+        display: inline-flex;
+        position: fixed;
+        bottom: 1rem;
+        right: 1rem;
+        z-index: 50;
+        padding: 0.65rem 1rem;
+        border-radius: 999px;
+        background: var(--accent);
+        color: white;
+        font-size: 0.85rem;
+        font-weight: 600;
+        box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 35%, transparent);
+        border: 0;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+    }
+    .memo-sidebar {
+        position: fixed;
+        inset: auto 0 0 0;
+        z-index: 60;
+        max-height: 70vh;
+        background: var(--surface);
+        border-top-left-radius: 1rem;
+        border-top-right-radius: 1rem;
+        padding: 1.25rem;
+        box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.18);
+        transform: translateY(100%);
+        transition: transform 0.3s var(--ease-out-expo);
+    }
+    .memo-sidebar.is-open { transform: translateY(0); }
+    .memo-sidebar__scrim {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s var(--ease-out-expo);
+        z-index: 55;
+    }
+    .memo-sidebar__scrim.is-open {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+/* ─── Reveal-once-per-session guard ───────────────────────────────────── */
+
+.memo-deck > section.memo-reveal-once {
+    opacity: 0;
+    transform: translateY(18px);
+}
+.memo-deck > section.memo-reveal-once.is-revealed {
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
+}
+
+/* ─── Dark-mode gradient (deep desaturated indigo) ────────────────────── */
+
+.dark .memo-deck > section {
+    background: linear-gradient(180deg, #1e1b4b 0%, #312e81 100%);
+    color: rgba(255, 255, 255, 0.95);
+    border-color: color-mix(in srgb, #818cf8 25%, transparent);
+}
+.dark .memo-hero {
+    background: linear-gradient(180deg, #1e1b4b 0%, #312e81 100%);
+    color: rgba(255, 255, 255, 0.95);
+    border-color: color-mix(in srgb, #818cf8 30%, transparent);
+}
+.dark .memo-deck .scenario-cell,
+.dark .memo-deck .decision-card,
+.dark .memo-deck .sidebar-section,
+.dark .memo-deck .thesis-bullet,
+.dark .memo-deck .timeline-node,
+.dark .memo-deck .risk-matrix__cell {
+    background: color-mix(in srgb, #1e1b4b 70%, #312e81);
+    border-color: color-mix(in srgb, #818cf8 20%, transparent);
+    color: rgba(255, 255, 255, 0.92);
+}
+.dark .memo-deck .freshness-chip,
+.dark .memo-deck .empty-chip {
+    background: color-mix(in srgb, #1e1b4b 70%, #312e81);
+    color: rgba(255, 255, 255, 0.7);
+    border-color: color-mix(in srgb, #818cf8 22%, transparent);
+}
+.dark .thesis-bullet__value,
+.dark .timeline-node__title,
+.dark .scenario-cell .metric-number,
+.dark .decision-card__value { color: rgba(255, 255, 255, 0.95); }
+.dark .decision-card__sub,
+.dark .memo-deck .metric-label,
+.dark .memo-deck .metric-sub,
+.dark .thesis-bullet__label { color: rgba(255, 255, 255, 0.6); }
+
+/* Sizing card row colors in dark mode */
+.dark .sizing-row__risk { color: rgba(255, 255, 255, 0.55); }
+.dark .sizing-row__shares { color: rgba(255, 255, 255, 0.95); }

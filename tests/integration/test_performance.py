@@ -29,10 +29,22 @@ from pmacs.nervous.sse_publisher import SSEPublisher
 from pmacs.schemas.agents import PersonaName, PersonaOutput
 from pmacs.schemas.contracts import HoldingState
 from pmacs.schemas.conviction import VerdictTier
+from pmacs.schemas.data import EvidencePacket
 from pmacs.schemas.queue import PriorityBand, QueueItem
 from pmacs.sim.ledger import PaperLedger
 from pmacs.storage.audit import AuditVerifier
 from pmacs.storage.sqlite import init_db
+
+
+def _empty_evidence(ticker: str, cycle_id: str) -> EvidencePacket:
+    """Return a fast, empty evidence packet to keep performance tests hermetic."""
+    return EvidencePacket(
+        ticker=ticker,
+        cycle_id=cycle_id,
+        evidence=[],
+        fetched_at=datetime.now(timezone.utc),
+        source_count=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +252,11 @@ class TestStepTimingRecorded:
             side_effect=lambda ticker, cycle_id, **kw: gate_results.get(
                 ticker, GatekeeperResult(ticker=ticker, admitted=False),
             ),
+        ), patch(
+            "pmacs.data.evidence_router.fetch_evidence_for_ticker",
+            side_effect=lambda t, cid: _empty_evidence(t, cid),
+        ), patch(
+            "pmacs.data.price_cache.PriceCache.get_price", return_value=150.0,
         ), patch.object(
             orch, "_dispatch_personas", return_value=aapl_outputs,
         ), patch(
@@ -553,6 +570,11 @@ class TestExitTestFullCycle:
             side_effect=lambda ticker, cycle_id, **kw: gate_results.get(
                 ticker, GatekeeperResult(ticker=ticker, admitted=False),
             ),
+        ), patch(
+            "pmacs.data.evidence_router.fetch_evidence_for_ticker",
+            side_effect=lambda t, cid: _empty_evidence(t, cid),
+        ), patch(
+            "pmacs.data.price_cache.PriceCache.get_price", return_value=150.0,
         ), patch.object(
             orch, "_dispatch_personas", side_effect=mock_dispatch,
         ), patch(

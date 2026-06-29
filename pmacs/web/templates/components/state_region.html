@@ -1,0 +1,22 @@
+{# StateRegion (Source.md §13.4) — the single contract for every data region's
+   non-ready states. Render this instead of bespoke loading/empty/error markup.
+
+   Usage: {% include "components/state_region.html" %}
+   Required context variable:
+     region_state  — one of "loading" | "empty" | "error"   (omit / "ready" → renders nothing; the page's own markup is the ready state)
+
+   Loading props:  loading_what, loading_eta_seconds, loading_count, loading_count_unit, loading_cancel
+   Empty props:    empty_title, empty_message
+   Error props:    error_code, error_description, error_explanation, error_actions, error_spec_ref
+
+   The "ready" state is intentionally NOT wrapped — it is the region's own
+   content. Callers branch: {% if region_state and region_state != 'ready' %}
+   {% include "components/state_region.html" %}{% else %}…ready content…{% endif %}
+#}
+{% if region_state == "loading" %}
+    {% include "components/loading_state.html" %}
+{% elif region_state == "empty" %}
+    {% include "components/empty_state.html" %}
+{% elif region_state == "error" %}
+    {% include "components/error_state.html" %}
+{% endif %}

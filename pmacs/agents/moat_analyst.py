@@ -43,6 +43,34 @@ class MoatAnalystRunner(PersonaRunner):
         from pmacs.schemas.personas import MoatAnalystOutput
         return MoatAnalystOutput
 
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """MoatAnalyst drift fixes (deepseek-v4-flash on openrouter).
+
+        - ``moat_components[].type`` → ``moat_type`` (LLM uses natural-language
+          "type" because the prompt labels moat dimensions; canonical schema
+          uses ``moat_type``).
+        - ``moat_components[].evidence_ids`` may be empty when LLM omits it
+          (Pydantic min_length=1 violated).
+        - Top-level ``evidence_ids`` may also be empty.
+
+        All fixes are recorded via _log_normalization (cycle-scoped audit).
+        """
+        all_fixes: list[dict[str, Any]] = []
+        model_cls = self.get_pydantic_model()
+
+        # 1) Rename "type" → "moat_type" inside moat_components (nested scope)
+        parsed, fixes = self._rename_keys(
+            parsed, {"type": "moat_type"}, scope="any"
+        )
+        all_fixes.extend(fixes)
+
+        # 2) Pad empty evidence_ids at top + nested level
+        parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
+        return parsed
+
     def get_sanity_validator(self):
         from pmacs.agents.sanity.moat_analyst import MoatAnalystSanity
         return MoatAnalystSanity()

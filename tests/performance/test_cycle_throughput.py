@@ -66,18 +66,18 @@ class TestCycleThroughputProfiler:
     def test_simulate_returns_results(self):
         from ops.profile_cycle import simulate_cycle
 
-        results = simulate_cycle(admitted_symbols=16, mutation_active=False)
+        results = simulate_cycle(admitted_symbols=10, mutation_active=False)
         assert len(results) >= 5
         assert all(r.pass_ for r in results)
 
-    def test_simulate_16_ticker_universe(self):
-        """Verify 16-ticker config (exit test spec says 16 tickers)."""
+    def test_simulate_10_ticker_universe(self):
+        """Verify 10-ticker default universe (spec §Phases.md exit test #2)."""
         from ops.profile_cycle import simulate_cycle
 
-        results = simulate_cycle(admitted_symbols=16, mutation_active=False)
+        results = simulate_cycle(admitted_symbols=10, mutation_active=False)
         # Find the Phase 1 total entry
         phase1_total = [r for r in results if "Total" in r.name]
         assert len(phase1_total) == 1
-        # Budget should scale: 16 symbols, not 20
-        # The profiler uses the admitted_symbols param
+        # Budget should reflect 10 admitted symbols (not 20)
+        assert phase1_total[0].budget_s == 2700
         assert phase1_total[0].pass_ is True

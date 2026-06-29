@@ -336,8 +336,8 @@ class TestAll18TaxonomyTypes:
         assert result.severity == 0.0
 
     def test_all_18_enums_covered(self) -> None:
-        """Verify the FailureTaxonomy enum has exactly 18 members."""
-        assert len(FailureTaxonomy) == 18
+        """Verify the FailureTaxonomy enum has 18 outcome + 5 reasoning-flaw members."""
+        assert len(FailureTaxonomy) == 23
 
 
 # ---------------------------------------------------------------------------

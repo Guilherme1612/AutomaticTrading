@@ -10,7 +10,7 @@ process/port separation was reversed.
 
 ## Context
 
-PMACS has two FastAPI processes serving HTTP on localhost: `pmacs-nervous` (port 8000) handles orchestration, write API, and SSE event streaming; `pmacs-dashboard` (port 8001) renders the web UI that the operator interacts with. Both could be merged into a single process to simplify deployment (one plist, one port, shared state).
+PMACS originally had two FastAPI processes serving HTTP on localhost: `pmacs-nervous` (port 8000) handled orchestration, write API, and SSE event streaming; a separate `pmacs-dashboard` process (port 8001) rendered the web UI. They were later merged into a single FastAPI process on port 8000 to simplify deployment (one plist, one port, shared state).
 
 The dashboard uses Jinja2 server-side templates with HTMX for interactivity. It subscribes to `pmacs-nervous` via SSE for real-time data and exposes no write endpoints of its own. All write actions are proxied through nervous's operator-confirmed POST API.
 
@@ -18,7 +18,7 @@ Merging the two processes would reduce operational overhead (one launchd plist i
 
 ## Decision
 
-Keep `pmacs-dashboard` and `pmacs-nervous` as separate processes. Dashboard is read-only; nervous holds all write access and orchestration logic.
+Merge `pmacs-dashboard` and `pmacs-nervous` into a single FastAPI process served on port 8000. The combined process remains read-only for dashboard pages; all write actions are still routed through nervous's operator-confirmed POST API.
 
 Use server-rendered Jinja2 templates with HTMX for the dashboard UI rather than a SPA framework (React, Vue, etc.).
 
@@ -26,16 +26,15 @@ Use server-rendered Jinja2 templates with HTMX for the dashboard UI rather than 
 
 **Positive:**
 
-- Attack surface isolation: a vulnerability in the dashboard's template rendering or browser-facing code cannot escalate to write access on nervous. Dashboard has no database write paths.
-- Dashboard can be restarted independently without disrupting an active cycle or trade execution.
+- Single launchd plist and a single operator-facing port (8000) simplify deployment and reduce confusion.
+- No inter-process SSE hop; real-time updates stream from the same process serving the UI.
 - Jinja2 autoescape provides XSS protection by default. Combined with strict CSP disallowing inline scripts and external resources, the attack surface is minimal.
 - No JavaScript build pipeline. Templates live in `pmacs/web/templates/` and `pmacs/web/components/`. Changes are file-level, no bundling step.
 - Dashboard reads SQLite directly (read-only connection) and subscribes to nervous SSE for push updates, providing low-latency data without polling.
 
 **Negative:**
 
-- Two launchd plists to manage.
-- Inter-process SSE adds ~1-2ms latency for real-time updates (negligible at operator-interaction timescales).
+- Dashboard and nervous share a process; a severe vulnerability in template rendering theoretically has access to the orchestration process. Mitigated by keeping dashboard routes read-only and requiring CSRF + operator confirmation on every write endpoint.
 - HTMX partials require server round-trips for every interaction. Acceptable for an operator-facing tool, but would not scale to a multi-user product.
 
 **References:** spec/Architecture.md §4.3 (pmacs-dashboard), §4.4 (SSE), §18.6 (CSRF/XSS), spec/Source.md §14-20 (page specifications).

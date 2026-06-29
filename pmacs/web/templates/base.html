@@ -6,34 +6,37 @@
     <title>PMACS - {% block title %}Dashboard{% endblock %}</title>
     <link rel="stylesheet" href="/static/dist/tailwind.css?v=2">
     <script src="/static/vendor/htmx.min.js"></script>
-    <script src="/static/vendor/d3.min.js"></script>
+    <script src="/static/vendor/d3.min.js" defer></script>
     <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <style>
         /* Light mode tokens — Source.md §13.1 + extended design system */
         :root {
             --surface: #f8fafc;
-            --surface-elevated: rgba(255,255,255,0.75);
+            --surface-elevated: #ffffff;
             --surface-sunken: #f1f5f9;
-            --surface-overlay: rgba(255,255,255,0.85);
-            --surface-glass: rgba(255,255,255,0.55);
+            --surface-overlay: #ffffff;
+            --surface-glass: rgba(255,255,255,0.92);
             --border: #e2e8f0;
             --border-subtle: rgba(226,232,240,0.5);
             --border-strong: #cbd5e1;
             --text-primary: #0f172a;
-            --text-secondary: #475569;
-            --text-muted: #94a3b8;
-            --accent: #3b82f6;
-            --positive: #22c55e;
-            --negative: #ef4444;
-            --warning: #f59e0b;
-            --strong-buy: #15803d;
-            --crucible: #a855f7;
+            --text-secondary: #334155;
+            --text-muted: #475569;
+            --accent: #2563eb;
+            --accent-text: #2563eb;
+            --positive: #166534;
+            --negative: #b91c1c;
+            --negative-text: #b91c1c;
+            --warning: #92400e;
+            --strong-buy: #166534;
+            --crucible: #7e22ce;
             /* Status tints */
             --accent-soft: rgba(59,130,246,0.08);
             --accent-ring: rgba(59,130,246,0.25);
             --positive-soft: rgba(34,197,94,0.08);
             --negative-soft: rgba(239,68,68,0.08);
+            --warning-soft: rgba(245,158,11,0.10);
             --crucible-soft: rgba(168,85,247,0.08);
             /* Data viz palette */
             --viz-blue: #3b82f6;
@@ -67,18 +70,21 @@
             --border-subtle: rgba(30,41,59,0.5);
             --border-strong: #334155;
             --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent: #60a5fa;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --accent: #2563eb;
+            --accent-text: #60a5fa;
             --positive: #4ade80;
-            --negative: #f87171;
+            --negative: #b91c1c;
+            --negative-text: #f87171;
             --warning: #fbbf24;
             --strong-buy: #16a34a;
             --crucible: #c084fc;
-            --accent-soft: rgba(96,165,250,0.12);
-            --accent-ring: rgba(96,165,250,0.3);
+            --accent-soft: rgba(37,99,235,0.12);
+            --accent-ring: rgba(37,99,235,0.3);
             --positive-soft: rgba(74,222,128,0.12);
-            --negative-soft: rgba(248,113,113,0.12);
+            --negative-soft: rgba(185,28,28,0.12);
+            --warning-soft: rgba(251,191,36,0.14);
             --crucible-soft: rgba(192,132,252,0.12);
             --viz-blue: #60a5fa;
             --viz-emerald: #34d399;
@@ -117,16 +123,35 @@
     <!-- Top bar: glassmorphic -->
     <header class="fixed top-0 left-0 right-0 h-14 border-b border-border-subtle flex items-center px-4 lg:px-6 z-40" role="banner">
         <!-- Hamburger (mobile only) -->
-        <button type="button" onclick="toggleMobileSidebar()" class="lg:hidden mr-3 p-2 rounded-xl text-text-muted hover:text-text-primary hover:bg-surface-sunken transition-colors flex-shrink-0" aria-label="Toggle navigation">
+        <button type="button" onclick="toggleMobileSidebar()" class="lg:hidden mr-3 p-2 rounded-xl text-text-muted hover:text-text-primary hover:bg-surface-sunken transition-colors flex-shrink-0" aria-label="Toggle navigation" data-responsive-hidden="desktop">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
             </svg>
         </button>
         <div class="flex items-center gap-3">
-            <span class="font-mono font-bold text-lg tracking-tight gradient-text" aria-label="PMACS">PMACS</span>
+            <span class="font-mono font-bold text-lg tracking-tight gradient-text">PMACS</span>
             <span class="mode-badge ml-1 px-2.5 py-0.5 text-xs font-mono rounded-full font-medium {{ 'bg-positive-soft text-positive' if 'PAPER' in mode else 'bg-accent-soft text-accent' }}"
-                  aria-label="Current mode: {{ mode }}">{{ mode }}</span>
+                  role="img" aria-label="Current mode: {{ mode }}">{{ mode }}</span>
+            <div id="health-strip" class="hidden md:flex items-center gap-2 ml-2 text-xs text-text-muted" role="status" aria-live="polite" title="System health (inference + last cycle)">
+                <span id="health-dot" class="w-1.5 h-1.5 rounded-full bg-text-muted" aria-hidden="true"></span>
+                <span id="health-inference">Inference: …</span>
+                <span class="text-border-strong" aria-hidden="true">·</span>
+                <span id="health-last-cycle">Last cycle: …</span>
+            </div>
         </div>
+        <!-- Command palette trigger — opens existing #cmd-k modal (Cmd-K) -->
+        <button type="button"
+                onclick="toggleCmdK()"
+                class="mx-2 md:mx-4 inline-flex items-center gap-2 px-3 py-1.5 text-xs text-text-muted bg-surface-sunken/50 backdrop-blur rounded-xl hover:bg-surface-sunken hover:text-text-secondary transition-all duration-200 border border-border-subtle/60"
+                aria-label="Open command palette (Cmd-K)"
+                aria-keyshortcuts="Meta+K Control+K"
+                title="Search tickers, pages, actions (⌘K)">
+            <svg class="w-3.5 h-3.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <span>Search…</span>
+            <kbd class="ml-1 text-[10px] font-mono text-text-secondary font-medium">⌘K</kbd>
+        </button>
         <div id="cycle-indicator" class="flex-1 text-center text-sm text-text-muted hidden sm:block" role="status" aria-live="polite">
             <span id="cycle-idle-label" class="inline-flex items-center gap-2" style="display:none">
                 <span class="live-dot"></span>
@@ -140,7 +165,8 @@
         <button id="theme-toggle"
                 onclick="(function(){var t=localStorage.getItem('pmacs-theme')==='dark'?'light':'dark';localStorage.setItem('pmacs-theme',t);document.documentElement.classList.toggle('dark',t==='dark');document.getElementById('theme-toggle').textContent=t==='dark'?'☀':'🌙';})()"
                 class="mr-2 px-3 py-1.5 text-sm rounded-xl bg-surface-sunken hover:bg-border-subtle transition-colors text-text-muted"
-                title="Toggle dark/light mode">
+                title="Toggle dark/light mode"
+                data-responsive-hidden="mobile-small">
             🌙
         </button>
         <button type="button" id="kill-switch-btn"
@@ -152,7 +178,7 @@
     </header>
 
     <!-- Left sidebar: glassmorphic -->
-    <nav id="sidebar" class="fixed left-0 top-14 bottom-0 w-60 border-r border-border-subtle p-4 overflow-y-auto"
+    <nav id="sidebar" class="fixed left-0 top-14 bottom-0 w-60 border-r border-border-subtle p-4 overflow-y-auto" tabindex="0"
          role="navigation" aria-label="Main navigation">
         {% set pages = [
             ("dashboard", "Dashboard", "/", "1", '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>'),
@@ -170,7 +196,7 @@
                    hx-push-url="true"
                    hx-target="#main-content"
                    hx-select="#main-content"
-                   hx-swap="outerHTML"
+                   hx-swap="outerHTML transition:200ms"
                    class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200
                           {% if page == id %}
                               active bg-accent-soft text-accent font-medium
@@ -181,7 +207,7 @@
                    title="{{ name }}">
                     <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">{{ icon_path }}</svg>
                     <span class="nav-label">{{ name }}</span>
-                    <kbd class="ml-auto text-[10px] text-text-muted font-mono hidden lg:inline nav-label opacity-50">{{ shortcut }}</kbd>
+                    {% if shortcut %}<kbd class="ml-auto text-[10px] text-text-muted font-mono hidden lg:inline nav-label">{{ shortcut }}</kbd>{% endif %}
                 </a>
             </li>
             {% endfor %}
@@ -198,8 +224,8 @@
         <!-- Bottom: operator + quick action -->
         <div class="absolute bottom-4 left-4 right-4 space-y-3">
             <div class="flex items-center gap-2 text-xs text-text-muted">
-                <span class="live-dot" style="width:6px;height:6px" aria-label="System online"></span>
-                <span class="sidebar-bottom-text">Operator</span>
+                <span class="live-dot" style="width:6px;height:6px" aria-hidden="true"></span>
+                <span class="sidebar-bottom-text">Operator online</span>
             </div>
             <button type="button" onclick="toggleCmdK()"
                     class="w-full px-3 py-2 text-xs text-left text-text-muted bg-surface-sunken/50 backdrop-blur rounded-xl hover:bg-surface-sunken transition-all duration-200 flex items-center gap-2"
@@ -219,7 +245,7 @@
     </main>
 
     <!-- Cmd-K command palette -->
-    <div id="cmd-k" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" role="dialog" aria-label="Command palette" aria-modal="true">
+    <div id="cmd-k" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" role="dialog" aria-label="Command palette" aria-modal="true" inert>
         <div class="w-full max-w-lg rounded-2xl border border-border-subtle overflow-hidden" style="box-shadow: 0 24px 80px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.08);">
             <div class="bg-surface-glass backdrop-blur-xl">
                 <div class="flex items-center gap-3 px-5 py-4 border-b border-border-subtle">
@@ -227,18 +253,18 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
                     <input id="cmd-k-input" type="text" placeholder="Search tickers, pages, actions..."
-                           class="flex-1 bg-transparent text-base outline-none text-text-primary placeholder-text-muted"
+                           class="flex-1 bg-transparent text-base outline-none text-text-primary placeholder:text-text-muted/80"
                            aria-label="Search commands"
                            autocomplete="off" spellcheck="false">
                     <kbd class="text-[10px] font-mono text-text-muted bg-surface-sunken px-1.5 py-0.5 rounded">esc</kbd>
                 </div>
-                <ul id="cmd-k-results" class="max-h-72 overflow-y-auto py-1" role="listbox"></ul>
+                <ul id="cmd-k-results" class="max-h-72 overflow-y-auto py-1" role="listbox" tabindex="0"></ul>
             </div>
         </div>
     </div>
 
     <!-- Keyboard shortcut overlay -->
-    <div id="shortcut-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-label="Keyboard shortcuts" aria-modal="true">
+    <div id="shortcut-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-label="Keyboard shortcuts" aria-modal="true" inert>
         <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-2xl border border-border-subtle p-8">
             <div class="flex items-center justify-between mb-8">
                 <h3 class="text-lg font-semibold text-text-primary">Keyboard Shortcuts</h3>
@@ -294,11 +320,29 @@
     </div>
 
     <!-- Blocking modal -->
-    <div id="blocking-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="alertdialog" aria-modal="true">
+    <div id="blocking-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="alertdialog" aria-modal="true" inert>
         <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-md border border-negative/30 p-8">
             <h3 id="blocking-modal-title" class="text-lg font-semibold text-negative mb-3"></h3>
             <p id="blocking-modal-message" class="text-sm text-text-secondary mb-6 leading-relaxed"></p>
             <div id="blocking-modal-actions" class="flex gap-3 justify-end"></div>
+        </div>
+    </div>
+
+    <!-- Typed-confirm modal (Source.md §13.2 — destructive operator-confirmed actions) -->
+    <div id="confirm-modal" class="hidden fixed inset-0 z-[60] flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" inert>
+        <div class="bg-surface-glass backdrop-blur-xl rounded-2xl shadow-xl w-full max-w-md border border-border-subtle p-8">
+            <h3 id="confirm-modal-title" class="text-lg font-semibold text-text-primary mb-2"></h3>
+            <p id="confirm-modal-description" class="text-sm text-text-secondary mb-3 leading-relaxed"></p>
+            <p id="confirm-modal-consequences" class="text-xs text-text-muted mb-4 leading-relaxed"></p>
+            <label for="confirm-modal-input" class="block text-xs text-text-muted uppercase tracking-widest mb-1.5">
+                Type <span id="confirm-modal-symbol" class="font-mono font-semibold text-negative"></span> to confirm
+            </label>
+            <input id="confirm-modal-input" type="text" autocomplete="off" spellcheck="false"
+                   class="w-full px-3 py-2 mb-4 bg-surface-sunken rounded-xl border border-border-subtle text-text-primary font-mono text-sm focus:border-accent focus:outline-none" />
+            <div class="flex gap-3 justify-end">
+                <button type="button" id="confirm-modal-cancel" class="px-4 py-2 text-sm rounded-xl bg-surface-sunken text-text-secondary hover:bg-border transition-colors">Cancel</button>
+                <button type="button" id="confirm-modal-confirm" class="px-4 py-2 text-sm rounded-xl bg-negative text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed" disabled>Confirm</button>
+            </div>
         </div>
     </div>
 
@@ -316,12 +360,13 @@
         </div>
     </div>
 
-    <!-- SSE connection status — persistent bottom-right indicator -->
-    <div class="fixed bottom-2 right-3 z-10">
-        <span id="sse-status" class="text-[9px] text-text-muted font-mono">Connecting...</span>
+    <!-- SSE connection status — persistent bottom-right pill -->
+    <div class="fixed bottom-2 right-3 z-10 flex items-center gap-1.5 px-2 py-1 rounded-full bg-surface-glass/80 backdrop-blur border border-border-subtle" role="status" aria-live="polite">
+        <span id="sse-status-dot" class="w-1.5 h-1.5 rounded-full bg-text-muted" aria-hidden="true"></span>
+        <span id="sse-status" class="text-[9px] font-mono text-text-muted">Connecting…</span>
     </div>
 
-    <script src="/static/app.js?v=7"></script>
+    <script src="/static/app.js?v=9"></script>
     <script src="/static/pmacs-anim.js?v=4"></script>
     <script>
         (function() {
@@ -345,7 +390,7 @@
                 var url = navMap[e.key];
                 var target = document.getElementById("main-content");
                 if (target && typeof htmx !== "undefined") {
-                    htmx.ajax("GET", url, {target: "#main-content", select: "#main-content", swap: "outerHTML", pushUrl: true});
+                    htmx.ajax("GET", url, {target: "#main-content", select: "#main-content", swap: "outerHTML transition:200ms", pushUrl: true});
                 } else {
                     window.location.href = url;
                 }

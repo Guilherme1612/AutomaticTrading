@@ -18,7 +18,7 @@ from typing import Any
 
 from pmacs.agents.sanity.base import BaseSanityValidator, SanityResult
 
-VALID_VERDICT_PREFIXES = ("STRONG_BUY", "BUY", "HOLD", "SKIP")
+VALID_VERDICT_PREFIXES = ("STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS")
 
 
 class MemoWriterSanity(BaseSanityValidator):
@@ -150,5 +150,152 @@ class MemoWriterSanity(BaseSanityValidator):
                         )
                 except (TypeError, ValueError):
                     pass
+
+        # ── Wave-2 enrichment checks (Agents.md §16.9) ───────────────────────
+        # These fields are optional-with-defaults so simulation and pipeline
+        # paths without debate context still pass. When the LLM DOES populate
+        # them, enforce structural sanity: no empty items, no malformed dicts.
+
+        bull_bear_debate = output.get("bull_bear_debate") or {}
+        if isinstance(bull_bear_debate, dict) and bull_bear_debate:
+            for key in ("bull_case", "bear_case"):
+                val = bull_bear_debate.get(key)
+                if val is not None and not str(val).strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=f"bull_bear_debate.{key} is present but empty",
+                    )
+            advocate_lean = bull_bear_debate.get("advocate_lean")
+            if advocate_lean is not None:
+                lean = str(advocate_lean).strip().upper()
+                if lean and lean not in ("BULL", "BEAR", "BALANCED", "NEUTRAL"):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"bull_bear_debate.advocate_lean='{advocate_lean}' "
+                               "must be one of BULL/BEAR/BALANCED/NEUTRAL",
+                    )
+
+        wwm = output.get("what_would_change_my_mind") or []
+        if isinstance(wwm, list) and wwm:
+            for i, item in enumerate(wwm):
+                if not item or not str(item).strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=f"what_would_change_my_mind[{i}] is empty",
+                    )
+
+        reverse_dcf = output.get("reverse_dcf")
+        if reverse_dcf is not None:
+            if not isinstance(reverse_dcf, dict):
+                return SanityResult(
+                    passed=False,
+                    reason=f"reverse_dcf must be a dict, got {type(reverse_dcf).__name__}",
+                )
+
+        scenario_price = output.get("scenario_price")
+        if scenario_price is not None:
+            if not isinstance(scenario_price, dict):
+                return SanityResult(
+                    passed=False,
+                    reason=f"scenario_price must be a dict, got {type(scenario_price).__name__}",
+                )
+
+        # ── Allocator-grade sanity (.planning/memo_allocator_redesign_prompt.md) ──
+        # These mirror the schema-level @model_validator. The schema catches
+        # gross garbage; this layer catches semantic problems the LLM could
+        # produce that pass the schema but are still wrong.
+
+        # 1. verdict: must be one of the 5 tiers or empty (legacy).
+        verdict = output.get("verdict", "")
+        if verdict and verdict not in ("STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS"):
+            return SanityResult(
+                passed=False,
+                reason=f"verdict={verdict!r} must be one of STRONG_BUY/BUY/HOLD/SKIP/PASS",
+            )
+
+        # 2. pass_reason: required when verdict=PASS, ≤ 200 chars, non-empty.
+        if verdict == "PASS":
+            pr = output.get("pass_reason")
+            if not pr or not str(pr).strip():
+                return SanityResult(
+                    passed=False,
+                    reason=(
+                        "verdict=PASS requires a non-empty pass_reason "
+                        "(active no-bid, not 'couldn't decide')"
+                    ),
+                )
+            if len(str(pr)) > 200:
+                return SanityResult(
+                    passed=False,
+                    reason=f"pass_reason length {len(str(pr))} exceeds 200 char cap",
+                )
+
+        # 3. thesis_bullets: 1-5 entries, all four fields present.
+        tb = output.get("thesis_bullets") or []
+        if isinstance(tb, list) and tb:
+            if len(tb) > 5:
+                return SanityResult(
+                    passed=False,
+                    reason=f"thesis_bullets capped at 5 entries, got {len(tb)}",
+                )
+            for i, b in enumerate(tb):
+                if not isinstance(b, dict):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"thesis_bullets[{i}] must be a dict",
+                    )
+                for fld in ("premise", "mechanism", "outcome", "number"):
+                    if not str(b.get(fld) or "").strip():
+                        return SanityResult(
+                            passed=False,
+                            reason=f"thesis_bullets[{i}].{fld} is required and non-empty",
+                        )
+
+        # 4. comparable_transactions: ≤ 5, at least one multiple per row.
+        ct = output.get("comparable_transactions") or []
+        if isinstance(ct, list) and ct:
+            if len(ct) > 5:
+                return SanityResult(
+                    passed=False,
+                    reason=f"comparable_transactions capped at 5 entries, got {len(ct)}",
+                )
+            for i, c in enumerate(ct):
+                if not isinstance(c, dict):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"comparable_transactions[{i}] must be a dict",
+                    )
+                if c.get("ev_revenue_multiple") is None and c.get("ev_ebitda_multiple") is None:
+                    return SanityResult(
+                        passed=False,
+                        reason=(
+                            f"comparable_transactions[{i}] needs at least one of "
+                            f"ev_revenue_multiple / ev_ebitda_multiple — empty comps "
+                            f"are not a substitute for fabrication"
+                        ),
+                    )
+
+        # 5. counter_thesis: every claim has a falsifier.
+        cth = output.get("counter_thesis") or []
+        if isinstance(cth, list) and cth:
+            for i, ct in enumerate(cth):
+                if not isinstance(ct, dict):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"counter_thesis[{i}] must be a dict",
+                    )
+                if not str(ct.get("claim") or "").strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=f"counter_thesis[{i}].claim is required",
+                    )
+                if not str(ct.get("falsifier") or "").strip():
+                    return SanityResult(
+                        passed=False,
+                        reason=(
+                            f"counter_thesis[{i}].falsifier is required — "
+                            f"the operator must commit to a falsifiable trigger"
+                        ),
+                    )
 
         return SanityResult(passed=True)

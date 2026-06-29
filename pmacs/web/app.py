@@ -3,6 +3,7 @@
 import asyncio
 import json
 import secrets
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -17,17 +18,10 @@ from pmacs.nervous.api import router as _nervous_router
 
 _heartbeat_dir: Path = _data_dir() / "heartbeats"
 
-app = FastAPI(title="PMACS")
-
-# Include nervous API routes (health) into combined app
-app.include_router(_nervous_router)
-
-
 # ---------------------------------------------------------------------------
 # Startup: close any cycles stuck in RUNNING state from a prior crash
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
 async def _close_stuck_cycles() -> None:
     """Mark RUNNING cycles as ABORTED if the server was restarted mid-run.
 
@@ -60,6 +54,46 @@ async def _close_stuck_cycles() -> None:
             db.close()
     except Exception:
         pass  # Non-fatal: don't block startup
+
+
+async def _seed_universe() -> None:
+    """Ensure default universe tickers are present (IMP-5)."""
+    try:
+        from pmacs.web.config import get_config
+        from pmacs.storage.sqlite import connect as _sql_connect
+        from pmacs.data.universe import seed_default_universe
+        cfg = get_config()
+        db = _sql_connect(cfg.sqlite_path)
+        try:
+            inserted = seed_default_universe(db)
+            if inserted:
+                from pmacs.logsys import log_debug
+                log_debug(
+                    "UNIVERSE_SEEDED",
+                    payload={"inserted": inserted},
+                    msg=f"Seeded universe tickers: {', '.join(inserted)}",
+                )
+        finally:
+            db.close()
+    except Exception:
+        pass  # Non-fatal: don't block startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run startup tasks (close stuck cycles, seed universe) on boot.
+
+    Replaces the deprecated @app.on_event("startup") handlers.
+    """
+    await _close_stuck_cycles()
+    await _seed_universe()
+    yield
+
+
+app = FastAPI(title="PMACS", lifespan=lifespan)
+
+# Include nervous API routes (health) into combined app
+app.include_router(_nervous_router)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +245,19 @@ class WizardRedirectMiddleware(BaseHTTPMiddleware):
             state = _read_wizard_state()
             if not state.get("completed", False):
                 return RedirectResponse(url="/wizard/", status_code=302)
-        except Exception:
+        except Exception as exc:
+            # S-014: log the underlying error so operators see the real cause
+            # (e.g. data_dir not writable, malformed wizard.json) instead of a
+            # misleading "you haven't completed the wizard" redirect. The
+            # redirect still happens — the operator is still gated — but the
+            # debug stream shows what actually broke.
+            log_debug(
+                "WIZARD_STATE_READ_FAILED",
+                payload={"path": path, "error": repr(exc)},
+                level="WARN",
+                cycle_id="-",
+                msg=f"wizard state read failed for {path}; redirecting to /wizard/",
+            )
             return RedirectResponse(url="/wizard/", status_code=302)
 
         return await call_next(request)
@@ -247,20 +293,19 @@ from pmacs.web.templating import templates  # noqa: E402  # shared instance used
 # Import and include routes
 from pmacs.web.routes import (  # noqa: E402
     agents,
-    compare,
     cortex,
     dashboard,
     debug,
     memo,
     pipeline,
     settings,
+    ticker_data,
     universe,
     wizard,
 )
 
 app.include_router(dashboard.router)
 app.include_router(agents.router)
-app.include_router(compare.router)
 app.include_router(pipeline.router)
 app.include_router(universe.router)
 app.include_router(cortex.router)
@@ -268,33 +313,7 @@ app.include_router(debug.router)
 app.include_router(settings.router)
 app.include_router(wizard.router)
 app.include_router(memo.router)
-
-
-# ---------------------------------------------------------------------------
-# SSE broadcast helper — called by _emit_event in pipeline routes to push
-# events to all connected browser clients via the nervous publisher.
-# ---------------------------------------------------------------------------
-
-def _broadcast_event(frame: str) -> None:
-    """Push a pre-serialised event JSON string to all SSE clients.
-
-    Parses the flat event produced by _emit_event and forwards it through
-    the in-process SSEPublisher so the /events endpoint fans it out to
-    every connected browser.
-    """
-    import json as _json
-
-    from pmacs.nervous.api import _publisher
-
-    try:
-        evt = _json.loads(frame)
-        stream = evt.get("stream", "system")
-        event_type = evt.get("event_type", "unknown")
-        # Include event/event_type in data so JS handlers can read them
-        data = {k: v for k, v in evt.items() if k not in ("stream", "id", "timestamp")}
-        _publisher.publish(stream, event_type, data)
-    except Exception:
-        pass
+app.include_router(ticker_data.router)
 
 
 # ---------------------------------------------------------------------------

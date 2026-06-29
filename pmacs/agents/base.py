@@ -207,6 +207,9 @@ class PersonaRunner(ABC):
                 # Try to extract JSON from the raw output (may have surrounding text)
                 json_str = self._extract_json(raw_output)
                 parsed = json.loads(json_str)
+                # Hook for persona-specific output normalization
+                # (e.g. dict→list schema-drift, model-specific quirks)
+                parsed = self._pre_validate(parsed)
                 model_instance = model_cls.model_validate(parsed)
                 parsed = model_instance.model_dump()
             except (json.JSONDecodeError, ValidationError) as exc:
@@ -263,19 +266,28 @@ class PersonaRunner(ABC):
                 )
                 continue
 
-            # All three layers passed — build PersonaOutput
+            # All three layers passed — build PersonaOutput.
+            # Store the NORMALIZED JSON (post _pre_validate + model_dump) in
+            # raw_output so downstream re-parsers (e.g. the orchestrator's
+            # ValuationAgentOutput.model_validate(json.loads(raw_output))) see
+            # the truncated/clamp-corrected form that actually passed all three
+            # layers — not the original, which may carry an over-length rationale
+            # or out-of-envelope value that the normalization fixed and would
+            # re-fail downstream. The original LLM bytes are preserved in the
+            # audit call below (output=raw_output, the pre-normalization text).
+            normalized_json = json.dumps(parsed, default=str)
             persona_output = PersonaOutput(
                 persona=self._get_persona_enum(),
                 ticker=self._extract_ticker(evidence),
                 cycle_id=self.cycle_id,
-                raw_output=raw_output,
+                raw_output=normalized_json,
                 grammar_version=self.grammar_name,
                 model_hash=model_hash,
                 temperature=current_temp,
                 retry_count=attempt,
             )
 
-            # Audit successful call
+            # Audit successful call (preserves the ORIGINAL pre-normalization text)
             self._audit_llm_call(
                 prompt=prompt,
                 output=raw_output,
@@ -288,7 +300,11 @@ class PersonaRunner(ABC):
 
             return persona_output
 
-        # All attempts exhausted
+        # All attempts exhausted — log the abort, then try the safe-default
+        # fallback (deterministic conservative output from the simulation
+        # module) so downstream personas still receive a valid schema.
+        # Without this, a single LLM parse-fail drops the persona and the
+        # conviction collapses to 0 (SKIP) for the whole symbol.
         log_debug(
             "LLM_ABORTED",
             payload={
@@ -302,7 +318,50 @@ class PersonaRunner(ABC):
             msg=f"All {MAX_RETRIES + 1} attempts failed for {self.persona_name}",
         )
 
-        # Simulation fallback: generate deterministic conservative output
+        # Live-mode safe-default fallback (same as simulation). Produces a
+        # Pydantic-valid conservative output so the cycle completes; the
+        # reasoning strings carry "SIMULATION — " prefix so downstream
+        # memo rendering can flag them as low-confidence fallbacks.
+        try:
+            from pmacs.agents.simulation import make_simulation_output
+            model_cls = self.get_pydantic_model()
+            sim_data = make_simulation_output(
+                persona_name=self.persona_name,
+                model_cls=model_cls,
+                evidence=evidence,
+                cycle_id=self.cycle_id or "",
+            )
+            if sim_data is not None:
+                log_debug(
+                    "LLM_FALLBACK_SAFE_DEFAULT",
+                    payload={
+                        "persona": self.persona_name,
+                        "trigger": "retry_exhausted",
+                    },
+                    level="WARN",
+                    error_code="ABORTED_LLM",
+                    cycle_id=self.cycle_id,
+                    msg=(
+                        f"{self.persona_name} falling back to safe-default "
+                        f"after {MAX_RETRIES + 1} failed LLM parses"
+                    ),
+                )
+                return model_cls.model_validate(sim_data)
+        except Exception as _fallback_exc:
+            log_debug(
+                "LLM_FALLBACK_FAILED",
+                payload={
+                    "persona": self.persona_name,
+                    "error": str(_fallback_exc),
+                },
+                level="ERROR",
+                error_code="ABORTED_LLM",
+                cycle_id=self.cycle_id,
+                msg=f"Safe-default fallback also failed for {self.persona_name}: {_fallback_exc}",
+            )
+
+        # Simulation fallback path (deterministic, no LLM) — only used when
+        # simulation_mode is set explicitly (kept for backward compatibility).
         if self.simulation_mode:
             return self._generate_simulation_output(evidence)
 
@@ -923,22 +982,18 @@ class PersonaRunner(ABC):
     def _get_api_key(self, api_key_ref: str) -> str:
         """Retrieve API key from system keyring.
 
-        Tries the full ref first (e.g., pmacs.credentials.openrouter_api_key),
-        then falls back to the short name (e.g., openrouter_key) for keys
-        saved by the wizard.
+        Reads the canonical config-driven slot — the same string stored in
+        ``model_registry.json`` ``backends.<name>.api_key_ref`` (e.g.
+        ``pmacs.credentials.openrouter_api_key``). The wizard and Settings
+        both write to this slot. No short-name fallback: any key stored only
+        at the legacy ``openrouter_key`` slot will not be read — re-enter via
+        Settings or run the wizard again.
         """
         if not api_key_ref:
             return ""
         try:
             import keyring
-            key = keyring.get_password("pmacs.credentials", api_key_ref)
-            if key:
-                return key
-            # Fallback: try short name (wizard saves as "{provider}_key")
-            # e.g., "pmacs.credentials.openrouter_api_key" -> "openrouter_key"
-            short_name = api_key_ref.split(".")[-1].replace("_api_key", "_key")
-            key = keyring.get_password("pmacs.credentials", short_name)
-            return key or ""
+            return keyring.get_password("pmacs.credentials", api_key_ref) or ""
         except Exception:
             return ""
 
@@ -1370,3 +1425,449 @@ class PersonaRunner(ABC):
         if start != -1 and end != -1 and end > start:
             return text[start : end + 1]
         return text
+
+    def _pre_validate(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Hook for persona-specific output normalization before Pydantic validation.
+
+        Default: identity. Subclasses override to fix known LLM schema-drift
+        patterns (e.g. dict where list is expected) before the canonical
+        Pydantic model sees the data.
+
+        The companion helpers below (_truncate_string_fields,
+        _normalize_literal_enums, _rename_keys, _ensure_min_evidence_ids)
+        implement the common drift patterns observed in production with
+        OpenRouter deepseek-v4-flash. Subclasses typically call one or more
+        of these helpers from their _pre_validate override.
+        """
+        return parsed
+
+    # --- shared normalization helpers for LLM schema-drift -----------------
+    #
+    # These are defensive against known LLM output quirks (deepseek-v4-flash
+    # via openrouter with `structured_output: "json_schema"` does not enforce
+    # field names or enum casing). They never compute, never sign, never
+    # change the schema — they only restructure the JSON dict into a shape
+    # Pydantic will accept. Every fix is recorded in the return value and
+    # can be audit-logged via _log_normalization.
+
+    @staticmethod
+    def _truncate_string_fields(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+        safety_pct: float = 0.95,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Truncate string fields that exceed the schema's max_length.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "truncated",
+           "before_len": N, "after_len": M, "max": K}``.
+
+        Only fields with `max_length` in their FieldInfo metadata are touched.
+        Truncation cuts at the nearest word boundary and appends "…" to fit
+        within ``max_length * safety_pct`` characters.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Truncate string with max_length
+                if isinstance(value, str) and finfo.metadata:
+                    for m in finfo.metadata:
+                        max_len = getattr(m, "max_length", None)
+                        if max_len is None:
+                            continue
+                        cutoff = int(max_len * safety_pct)
+                        if len(value) > cutoff:
+                            new_value = value[:cutoff].rsplit(" ", 1)[0] + "…"
+                            fixes.append({
+                                "field": f"{path}.{fname}" if path else fname,
+                                "type": "truncated",
+                                "before_len": len(value),
+                                "after_len": len(new_value),
+                                "max": max_len,
+                            })
+                            obj[fname] = new_value
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _normalize_literal_enums(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Uppercase Literal enum values; map unknown values to first enum member.
+
+        Recurses into nested Pydantic models and lists of Pydantic models.
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "enum_normalized",
+           "before": "...", "after": "...", "source": "upper|default"}``.
+        """
+        from typing import get_args, get_origin
+
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Normalize Literal enums
+                # Literal types are detected by checking str(ann) — typing.get_origin
+                # returns the origin class but Literal's "origin" is typing.Literal
+                # itself, which is a sentinel, not a real type. The pragmatic check
+                # is: str(ann) starts with "typing.Literal" and the value is a str.
+                if isinstance(value, str) and str(ann).startswith("typing.Literal"):
+                    members = list(get_args(ann))
+                    if members:
+                        # Case-insensitive match against canonical enum members.
+                        # Schemas use mixed casing ("NORMAL"/"FLAT" for macro,
+                        # "earnings"/"fda_decision" for catalysts). The LLM
+                        # (deepseek-v4-flash) drifts to lowercase English; we
+                        # match case-insensitively and emit the canonical form.
+                        by_lower = {str(m).lower(): m for m in members}
+                        matched = by_lower.get(value.lower())
+                        if matched is not None:
+                            if str(matched) != value:
+                                fixes.append({
+                                    "field": f"{path}.{fname}" if path else fname,
+                                    "type": "enum_normalized",
+                                    "before": value,
+                                    "after": str(matched),
+                                    "source": "case_match",
+                                })
+                                obj[fname] = str(matched)
+                        else:
+                            # Map unknown value to first enum member (safe default)
+                            fixes.append({
+                                "field": f"{path}.{fname}" if path else fname,
+                                "type": "enum_normalized",
+                                "before": value,
+                                "after": str(members[0]),
+                                "source": "default",
+                            })
+                            obj[fname] = str(members[0])
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _rename_keys(
+        parsed: dict[str, Any],
+        renames: dict[str, str],
+        scope: str = "any",
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Recursively rename keys. ``scope="any"`` = anywhere; ``"root"`` = top-level only.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "renamed", "before": "type", "after": "moat_type"}``.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, path: str) -> Any:
+            if not isinstance(obj, dict):
+                # Recurse into lists of dicts (e.g. moat_components[i])
+                if isinstance(obj, list):
+                    return [
+                        _visit(item, f"{path}[{i}]")
+                        for i, item in enumerate(obj)
+                    ]
+                return obj
+            for old_key, new_key in renames.items():
+                if old_key in obj:
+                    obj[new_key] = obj.pop(old_key)
+                    fixes.append({
+                        "field": f"{path}.{old_key}" if path else old_key,
+                        "type": "renamed",
+                        "before": old_key,
+                        "after": new_key,
+                    })
+            if scope == "any":
+                for k, v in list(obj.items()):
+                    obj[k] = _visit(v, f"{path}.{k}" if path else k)
+            return obj
+
+        result = _visit(result, "")
+        return result, fixes
+
+    @staticmethod
+    def _ensure_min_evidence_ids(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+        min_count: int = 1,
+        fallback_prefix: str = "normalized",
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Ensure every `evidence_ids` field has at least ``min_count`` entries.
+
+        Walks all `evidence_ids` fields (top-level + nested + in lists).
+        If a field has fewer than ``min_count`` entries, appends a synthetic
+        ID like ``"normalized-fallback-001"``.
+
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "evidence_padded",
+           "before_len": N, "after_len": M}``.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                # Don't skip evidence_ids when missing — fall through to the
+                # inject path below. (Other fields still get the early-continue
+                # optimization.)
+                if fname == "evidence_ids" and fname not in obj:
+                    pass
+                elif fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                # Recurse into nested Pydantic models
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                # Recurse into lists of Pydantic models
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                # Pad or inject evidence_ids lists (min_length=1 required by
+                # every Pydantic model that uses this field).
+                if fname == "evidence_ids":
+                    if fname not in obj:
+                        # Field is missing entirely — inject a synthetic ID
+                        fallback_id = f"{fallback_prefix}-fallback-001"
+                        obj[fname] = [fallback_id]
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "evidence_injected",
+                            "before_len": 0,
+                            "after_len": 1,
+                        })
+                    elif isinstance(value, list) and len(value) < min_count:
+                        fallback_id = f"{fallback_prefix}-fallback-001"
+                        new_value = list(value) + [fallback_id]
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "evidence_padded",
+                            "before_len": len(value),
+                            "after_len": len(new_value),
+                        })
+                        obj[fname] = new_value
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _clamp_numeric_fields(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Clamp numeric fields that fall outside the schema's ge/le/gt/lt bounds.
+
+        The companion to the string-truncation helper, but for numbers. When the
+        LLM emits an out-of-envelope value (e.g. ebitda_margin -0.95 against a
+        ge=-0.50 bound, or revenue_growth 1.5 against le=1.0), this clamps it to
+        the nearest allowed value and records the fix — instead of letting
+        Pydantic hard-reject and abort the whole persona after N retries.
+
+        Recursion mirrors _truncate_string_fields / _normalize_literal_enums.
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "numeric_clamped",
+           "before": <num>, "after": <num>, "bound": "<ge|le|gt|lt>"}``.
+
+        NOTE: clamping changes the LLM's intended assumption. The recorded fix is
+        audit-logged via _log_normalization so the operator sees the degradation.
+        Clamping is preferred over abort ONLY when widening the schema bound is
+        not the right answer (e.g. a genuinely implausible outlier). For a
+        structurally too-narrow envelope (hypergrowth/pre-profit), WIDEN the
+        bound — do not clamp, since clamping would misrepresent reality.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _bounds(finfo) -> dict[str, float]:
+            """Extract ge/le/gt/lt from FieldInfo metadata."""
+            b: dict[str, float] = {}
+            for m in getattr(finfo, "metadata", []) or []:
+                for attr in ("ge", "le", "gt", "lt"):
+                    v = getattr(m, attr, None)
+                    if v is not None:
+                        b[attr] = float(v)
+            return b
+
+        def _clamp_one(v: float, b: dict[str, float]) -> tuple[float, str | None]:
+            if "le" in b and v > b["le"]:
+                return b["le"], "le"
+            if "lt" in b and v >= b["lt"]:
+                # clamp just inside an exclusive upper bound
+                return b["lt"] - abs(b["lt"]) * 1e-9 - 1e-9, "lt"
+            if "ge" in b and v < b["ge"]:
+                return b["ge"], "ge"
+            if "gt" in b and v <= b["gt"]:
+                return b["gt"] + abs(b["gt"]) * 1e-9 + 1e-9, "gt"
+            return v, None
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                if fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                b = _bounds(finfo)
+                if not b:
+                    continue
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    nv, which = _clamp_one(float(value), b)
+                    if which is not None:
+                        # preserve int-ness when the original was int and bound is int-like
+                        out = nv
+                        if isinstance(value, int) and float(nv).is_integer():
+                            out = int(nv)
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "numeric_clamped",
+                            "before": value,
+                            "after": out,
+                            "bound": which,
+                        })
+                        obj[fname] = out
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    def _log_normalization(
+        self,
+        fixes: list[dict[str, Any]],
+        ticker: str = "",
+    ) -> None:
+        """Fire a PERSONA_OUTPUT_NORMALIZED audit event if at least one fix was applied.
+
+        This is the operator-visible telemetry for LLM schema-drift. No event
+        fires when the LLM output is already clean (no noise). The event is
+        cycle-scoped and requires ``self.cycle_id`` to be set.
+        """
+        if not fixes:
+            return
+        if not self.cycle_id:
+            return  # system-level normalization is not normalizable to a cycle
+        log_debug(
+            "PERSONA_OUTPUT_NORMALIZED",
+            payload={
+                "persona": self.persona_name,
+                "ticker": ticker,
+                "fix_count": len(fixes),
+                "fixes": fixes,
+            },
+            level="INFO",
+            cycle_id=self.cycle_id,
+            msg=(
+                f"{self.persona_name} output normalized: {len(fixes)} fix(es)"
+            ),
+        )

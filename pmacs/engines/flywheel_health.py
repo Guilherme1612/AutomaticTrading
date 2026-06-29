@@ -69,7 +69,9 @@ def count_trades_in_mode(mode: str, db_path: Path) -> int:
         return 0
     with _sql_connect(db_path, read_only=True) as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM holdings WHERE mode = ?",
+            "SELECT COUNT(*) FROM holdings WHERE mode = ? AND state IN "
+            "('RESOLVED_UP','RESOLVED_DOWN','RESOLVED_FLAT','RESOLVED_MIXED',"
+            "'STOPPED_OUT','EXIT_THESIS_INVALIDATED','EXIT_OPPORTUNITY_COST','EXIT_TRAILING_STOP','EXIT_FAILED')",
             (mode,),
         ).fetchone()
         return row[0] if row else 0

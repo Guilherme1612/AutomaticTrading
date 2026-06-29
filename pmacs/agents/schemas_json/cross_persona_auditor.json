@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "cross_persona_auditor",
+  "description": "JSON Schema for cross_persona_auditor persona output (Agents.md §11d). Emits flags only — NO probabilities.",
+  "type": "object",
+  "properties": {
+    "ticker": {
+      "type": "string"
+    },
+    "flags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "flag_type": {
+            "type": "string",
+            "enum": [
+              "CITATION_GAP",
+              "CONCLUSION_UNSUPPORTED",
+              "CONFLICTING_CONCLUSIONS",
+              "NUMBER_MISUSE",
+              "HALLUCINATED_EVIDENCE"
+            ]
+          },
+          "target_persona": {
+            "type": "string",
+            "enum": [
+              "macro_regime",
+              "catalyst_summarizer",
+              "moat_analyst",
+              "growth_hunter",
+              "insider_activity",
+              "short_interest",
+              "forensics"
+            ]
+          },
+          "severity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "taxonomy_mapping": {
+            "type": "string",
+            "enum": [
+              "CITATION_GAP",
+              "CONCLUSION_UNSUPPORTED",
+              "CONFLICTING_CONCLUSIONS",
+              "NUMBER_MISUSE",
+              "HALLUCINATED_EVIDENCE"
+            ]
+          }
+        },
+        "required": [
+          "flag_type",
+          "target_persona",
+          "severity",
+          "description",
+          "evidence_ids",
+          "taxonomy_mapping"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 600
+    }
+  },
+  "required": [
+    "ticker",
+    "flags",
+    "summary"
+  ],
+  "additionalProperties": false
+}

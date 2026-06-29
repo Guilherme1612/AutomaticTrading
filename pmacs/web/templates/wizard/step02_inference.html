@@ -31,7 +31,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="group p-6 bg-surface-elevated border-2 border-border rounded-lg text-left hover:border-blue-500 hover:bg-blue-900/10 transition-all cursor-pointer">
+                class="group p-6 bg-surface-elevated border-2 border-border rounded-lg text-left hover:border-accent hover:bg-accent-soft transition-all cursor-pointer">
             <div class="text-2xl mb-3 text-text-muted">&#9729;</div>
             <h3 class="text-sm font-semibold text-text-primary mb-1">Cloud API</h3>
             <p class="text-xs text-text-secondary leading-relaxed">Use Anthropic Claude API. Requires internet and API key. Faster setup.</p>
@@ -65,7 +65,7 @@
         </div>
 
         {% if llm_result and llm_result.get("ok") %}
-        <div class="flex items-center gap-3 p-3 bg-green-900/20 border border-green-700/40 rounded mb-4">
+        <div class="flex items-center gap-3 p-3 bg-positive-soft border border-positive rounded mb-4">
             <span class="text-positive text-lg">&#10003;</span>
             <div>
                 <p class="text-sm font-medium text-positive">llama-server detected</p>
@@ -79,11 +79,11 @@
         {% endif %}
 
         {% else %}
-        <div class="flex items-center gap-3 p-3 bg-red-900/20 border border-red-700/40 rounded mb-4">
+        <div class="flex items-center gap-3 p-3 bg-negative-soft border border-negative rounded mb-4">
             <span class="text-negative text-lg">&#10007;</span>
             <div>
                 <p class="text-sm font-medium text-negative">{{ llm_result.get("title", "Detection failed") if llm_result else "Checking..." }}</p>
-                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No inference server found on 127.0.0.1:8080") if llm_result else "" }}</p>
+                <p class="text-xs text-text-muted">{{ llm_result.get("message", "No local inference server found.") if llm_result else "" }}</p>
             </div>
         </div>
 
@@ -108,7 +108,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Next
         </button>
         {% else %}

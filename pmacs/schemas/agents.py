@@ -17,8 +17,18 @@ class PersonaName(str, Enum):
     INSIDER_ACTIVITY = "insider_activity"
     SHORT_INTEREST = "short_interest"
     FORENSICS = "forensics"
+    # Wave-2 debate + audit personas (Agents.md §11b-§11d). Run after the 7
+    # analysis personas, before Arbitration. Advocates emit DirectionalProbability;
+    # the auditor emits flags (no probabilities).
+    BULL_ADVOCATE = "bull_advocate"
+    BEAR_ADVOCATE = "bear_advocate"
+    CROSS_PERSONA_AUDITOR = "cross_persona_auditor"
     CRUCIBLE = "crucible"
     MEMO_WRITER = "memo_writer"
+    # Post-arbitration forward-valuation persona (Agents.md §18, Architecture.md
+    # §9.4b). Emits bull/base/bear ASSUMPTIONS consumed by the deterministic
+    # ForwardValuationEngine. Does NOT enter Arbitration, does NOT amend conviction.
+    VALUATION_AGENT = "valuation_agent"
 
 
 class DirectionalProbability(BaseModel):

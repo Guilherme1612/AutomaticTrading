@@ -398,12 +398,13 @@ class TestArbitrationThroughConviction:
 
         With all-immature signals that agree on direction (UP), arbitration
         returns PROCEED_BOOTSTRAP_LOW_CONFIDENCE. The pipeline runs through
-        arbitration, EV, sizing, and conviction. With bootstrap haircut and
-        low EV multiple, conviction is too low for BUY, so the pipeline
-        aborts at verdict SKIP. This verifies the pipeline correctly:
+        arbitration, EV, sizing, and conviction. With bootstrap maturity factor
+        set to 1.0 and the current EV/pricing configuration, conviction lands in
+        the HOLD range (>= 0.05), so a scan record is written but no position is
+        opened. This verifies the pipeline correctly:
         1) Arbitrates all 7 persona outputs into a single UP direction
         2) Transitions holding through PHASE1 -> PHASE2 -> APPROVED_PENDING
-        3) Aborts at verdict SKIP (correct bootstrap behavior)
+        3) Records a HOLD verdict without opening a position (bootstrap behavior)
         """
         cycle_id = "test-arb-conv-001"
         item = _make_queue_item("AAPL", cycle_id)
@@ -442,14 +443,17 @@ class TestArbitrationThroughConviction:
         # and verdict (13k), confirming all 7 signals were processed.
         assert op_seq > 13
 
-        # With bootstrap conviction, verdict is SKIP -> pipeline aborts
-        # before writing scan records (step 13n). This is correct behavior.
+        # With bootstrap conviction, the low-but-positive consensus produces a
+        # HOLD verdict (>= 0.05), which writes a scan record but does not open a
+        # position. No capital is at risk.
         records = _get_scan_records(tmp_db, cycle_id)
-        assert len(records) == 0, (
-            "No scan records expected when verdict is SKIP (bootstrap conviction)"
+        assert len(records) == 1, (
+            "Expected one HOLD scan record for bootstrap low-conviction case"
         )
+        assert records[0]["verdict"] == VerdictTier.HOLD.value
+        assert records[0]["direction"] == "UP"
 
-        # No position opened in ledger (correct for SKIP)
+        # No position opened in ledger (correct for HOLD)
         assert "AAPL" not in ledger.positions
 
     def test_arbitration_with_forced_buy(

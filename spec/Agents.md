@@ -27,10 +27,14 @@
 9.   Persona: InsiderActivity
 10.  Persona: ShortInterest
 11.  Persona: Forensics
+11b. Persona: BullAdvocate (second-wave bull-side advocate)
+11c. Persona: BearAdvocate (second-wave bear-side advocate)
+11d. Persona: CrossPersonaAuditor (second-wave synthesis auditor)
 12.  Persona: Crucible
 13.  Persona: MemoWriter
+13b. Persona: ValuationAgent (post-arbitration forward-valuation assumptions)
 14.  Inter-persona communication model
-15.  Failure Diagnostic Engine — the 18 taxonomy types
+15.  Failure Diagnostic Engine — the 18 outcome + 5 reasoning-flaw taxonomy types
 16.  Crucible adversarial loop (inner state machine)
 17.  Mutation Engine — candidate generation rules and rollback safety
 18.  Episodic context injection
@@ -56,6 +60,9 @@
 | Holding state machine | `Architecture.md` | §8.2 |
 | Mutation Engine process (daemon, lifecycle, SQLite) | `Architecture.md` | §10 |
 | Mutation rollback mechanics (code, tables) | `Architecture.md` | §10.7, §10.8 |
+| Forward-valuation engine (EV/EBITDA, 6-12mo) | `Architecture.md` | §9.4b |
+| Forward-valuation memo display | `Source.md` | §16.9 |
+| ValuationAgent persona (assumptions, not price) | `Agents.md` | §13b |
 | Failure Diagnostic Engine (engine code) | `Architecture.md` | §9.5 |
 | Per-persona file paths | `Architecture.md` | §3 (repo tree) |
 | Cycle orchestration (when personas run) | `Architecture.md` | §12 |
@@ -80,7 +87,7 @@ Each persona receives evidence, produces a structured output, and exits. It has 
 
 ### 1.2 Same model, different minds
 
-All 9 LLM personas (7 analysis personas + Crucible + MemoWriter) share one base model. Differentiation comes from:
+All 14 LLM personas (10 analysis personas + 2 wave-2 debate advocates + 1 wave-2 synthesis auditor + Crucible + MemoWriter + ValuationAgent) share one base model (and one active backend — see Architecture.md §17.5). The deterministic Simulation persona (`pmacs/agents/simulation.py`) is the LLM-unavailable fallback. Differentiation comes from:
 
 1. **System prompt** — each persona has a distinct role, perspective, and analytical lens
 2. **Evidence selection** — each persona receives a different evidence subset relevant to its analytical role
@@ -88,7 +95,7 @@ All 9 LLM personas (7 analysis personas + Crucible + MemoWriter) share one base 
 4. **Temperature** — analysis personas at 0.2, Crucible at 0.1 (more deterministic for adversarial reasoning)
 5. **Episodic context** — each persona receives its own track-record brief (`persona_ticker_affinity`)
 
-This is deliberate. Running 9 different base models would multiply RAM and cycle time beyond the M1 Max budget (`Architecture.md §20`). Same base + different prompts produces meaningfully different outputs at acceptable cost. The Mutation Engine's persona-affinity dimension compensates for any base-model uniformity bias by learning which personas perform better on which ticker types.
+This is deliberate. Running 13 different base models would multiply RAM and cycle time beyond the M1 Max budget (`Architecture.md §20`). Same base + different prompts produces meaningfully different outputs at acceptable cost. The Mutation Engine's persona-affinity dimension compensates for any base-model uniformity bias by learning which personas perform better on which ticker types.
 
 ### 1.3 What "independent" means
 
@@ -114,8 +121,13 @@ This independence prevents correlated hallucination. If MoatAnalyst hallucinates
 | 5 | **InsiderActivity** | Yes | Reads Form 4 + insider transaction data; detects clustered buying/selling patterns | Slot 2 (first in slot) |
 | 6 | **ShortInterest** | Yes | Reads FINRA short data; flags anomalous short interest changes | Slot 2 (second in slot) |
 | 7 | **Forensics** | Yes | Reads financial statements; hunts for accounting red flags, related-party risks, earnings quality issues | Slot 2 (third in slot) |
-| — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence. Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
+| 8 | **BullAdvocate** | Yes | Second-wave. Reads all wave-1 persona outputs; argues the bull case, surfacing evidence the consensus under-weighted | Wave 2 (after slots 0-2, before Arbitration) |
+| 9 | **BearAdvocate** | Yes | Second-wave. Reads all wave-1 persona outputs; argues the bear case, surfacing evidence the consensus under-weighted | Wave 2 |
+| 10 | **CrossPersonaAuditor** | Yes | Second-wave. Audits wave-1 outputs for citation gaps, unsupported conclusions, conflicting conclusions, number misuse. Emits structured flags — **never probabilities** | Wave 2 |
+| — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence + auditor flags (wave-2 only — see `§11d.6`). Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
 | — | **MemoWriter** | Yes | Reads all persona outputs + Arbitrated + Crucible. Produces the operator-facing memo. | Runs after Crucible |
+| — | **ValuationAgent** | Yes | Post-arbitration. Emits bull/base/bear forward-valuation ASSUMPTIONS (revenue growth path, margin trajectory, EBITDA margin at horizon, acquisition impact, exit EV/EBITDA multiple) with rationale + per-scenario `probability_of_occurrence`. Consumed by the deterministic `ForwardValuationEngine` (Architecture.md §9.4b). Does **not** enter Arbitration, does **not** amend conviction, does **not** emit a price. | Runs after Arbitration, before/within valuation triangulation (step 13e5) |
+| — | **Simulation** | No (deterministic Python) | Fallback persona that produces conservative, low-conviction outputs when the LLM backend is unreachable (connection error, 401 invalid key, budget breach, or all retries exhausted in live mode). Produces a near-uniform `(0.34, 0.33, 0.33)` distribution with reasoning strings carrying a `SIMULATION ` prefix so downstream consumers can detect fallback vs. genuine LLM output. Live-mode fallback writes a HOLD-on-abort to `memos` + `decisions` so the cycle never silently loses the operator's view of the symbol. Triggered after 3 failed retries with temperature bumped +0.05 per retry (`pmacs/agents/base.py::_call_llm` retry policy). | Runs when LLM backend is unreachable
 
 The Gatekeeper is not a persona in the LLM sense. It is deterministic Python that runs in Phase 0. It is included in the roster for completeness.
 
@@ -155,7 +167,7 @@ Per-persona Python in `pmacs/agents/sanity/<persona>.py`. This catches what stru
 - Insider transaction dates fall within the data window
 - Financial ratios are within physically plausible bounds
 
-**On any layer failure:** log `GBNF_PARSE_FAILURE`, `JSON_SCHEMA_PARSE_FAILURE`, `SCHEMA_VALIDATION`, or `OUT_OF_RANGE_PROBABILITY` debug event. Retry up to 2 times with temperature +0.05 bump per retry. After 3 total attempts: abort persona output for this symbol, log `ABORTED_LLM`, contribute zero weight to arbitration.
+**On any layer failure:** log `GBNF_PARSE_FAILURE`, `JSON_SCHEMA_PARSE_FAILURE`, `SCHEMA_VALIDATION`, or `OUT_OF_RANGE_PROBABILITY` debug event. Retry up to 2 times with temperature +0.05 bump per retry. After 3 total attempts: fall through to the **safe-default** simulation path — see `_pre_validate` helpers in `pmacs/agents/base.py` (`_truncate_string_fields`, `_normalize_literal_enums`, `_rename_keys`, `_ensure_min_evidence_ids`, `_clamp_numeric_fields`). The helpers defensively rewrite the parsed JSON to recover from known LLM output quirks (deepseek-v4-flash enum-case drift, OpenRouter schema-drift, oversized strings, hallucinated evidence_ids) before re-validation. If even the safe-default fallback fails, abort the persona for this symbol, log `ABORTED_LLM`, and contribute zero weight to arbitration. In live mode the orchestrator writes a conservative HOLD-on-abort decision so the operator still sees the symbol cycle through.
 
 ---
 
@@ -779,6 +791,258 @@ class ForensicsOutput(BaseModel):
 
 ---
 
+## 11b. Persona: BullAdvocate
+
+**Files:** `pmacs/agents/bull_advocate.py`, `prompts/bull_advocate.md`, `grammars/bull_advocate.gbnf`, `sanity/bull_advocate.py`
+
+### 11b.1 Purpose
+
+A second-wave adversarial persona whose job is to argue the **bull** case — to surface evidence and reasoning the wave-1 consensus under-weighted, and to challenge bearish leans. It exists to apply directional pressure against consensus bias (BaseRate/optimism bias cuts both ways; a consensus can be uniformly bearish on a name for the wrong reasons). It runs **after** the 7 wave-1 personas have committed their outputs and **before** Arbitration, so it enters the pool as a normal voter.
+
+### 11b.2 Evidence consumed
+
+- All 7 wave-1 persona outputs (read-only; frozen by the time this persona runs — see §14.4)
+- The full `EvidencePacket` list (it may re-cite evidence the wave-1 personas ignored)
+
+### 11b.3 System prompt skeleton
+
+```markdown
+You are a bull-side advocate. The 7 analysis personas below have already given their
+independent reads. Your job is NOT to agree — it is to make the strongest possible BULL
+case that the consensus under-weighted.
+
+1. Find the evidence the bearish/neutral personas dismissed or did not cite.
+2. Identify where the consensus is anchored on a single pessimistic data point.
+3. State the bull thesis in 2-3 sentences, citing specific evidence_ids.
+4. Acknowledge the strongest bear counterpoint honestly (do not strawman it).
+
+You MUST cite at least one wave-1 persona you are pushing against (target_persona).
+You MUST NOT invent numbers — cite evidence_ids for any figure you reference.
+If the evidence genuinely supports the bear case, say so and emit a near-uniform
+distribution; advocacy is not fabrication.
+
+{episodic_context}
+```
+
+### 11b.4 Output schema
+
+```python
+class BullAdvocateOutput(BaseModel):
+    ticker: str
+    target_persona: PersonaName          # the wave-1 persona this argument pushes against
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bear_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_sum(self):
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"probabilities sum to {total}")
+        return self
+```
+
+### 11b.5 Sanity validator
+
+- `target_persona` is a real wave-1 persona (one of MacroRegime, CatalystSummarizer, MoatAnalyst, GrowthHunter, InsiderActivity, ShortInterest, Forensics)
+- `reasoning` references the target persona's thesis (not a generic bull pitch)
+- Distribution is non-degenerate *unless* `reasoning` explicitly concedes the bear case
+- `evidence_ids` resolve to real packets
+
+### 11b.6 Arbitration weight
+
+The BullAdvocate enters Arbitration like any other persona via `DirectionalProbability`. It starts **immature** (`historical_n=0`, `rolling_brier=0.667`) and is therefore Brier-inverse-dampened until it earns a calibration track record (`Architecture.md §9.1`). No special multiplier. If it is consistently right when it overrides bearish consensus, its Brier improves and it earns weight through the same mechanism as every other source.
+
+---
+
+## 11c. Persona: BearAdvocate
+
+**Files:** `pmacs/agents/bear_advocate.py`, `prompts/bear_advocate.md`, `grammars/bear_advocate.gbnf`, `sanity/bear_advocate.py`
+
+### 11c.1 Purpose
+
+The mirror of BullAdvocate. Argues the **bear** case — surfaces evidence and risks the consensus under-weighted, challenges bullish leans. Runs in the same wave-2 parallel batch as BullAdvocate and the CrossPersonaAuditor.
+
+### 11c.2 Evidence consumed
+
+- All 7 wave-1 persona outputs (read-only, frozen — §14.4)
+- The full `EvidencePacket` list
+
+### 11c.3 System prompt skeleton
+
+```markdown
+You are a bear-side advocate. The 7 analysis personas below have already given their
+independent reads. Your job is to make the strongest possible BEAR case that the
+consensus under-weighted.
+
+1. Find the evidence the bullish/neutral personas dismissed or did not cite.
+2. Identify where the consensus is anchored on a single optimistic data point.
+3. State the bear thesis in 2-3 sentences, citing specific evidence_ids.
+4. Acknowledge the strongest bull counterpoint honestly (do not strawman it).
+
+You MUST cite at least one wave-1 persona you are pushing against (target_persona).
+You MUST NOT invent numbers — cite evidence_ids for any figure you reference.
+If the evidence genuinely supports the bull case, say so and emit a near-uniform
+distribution; advocacy is not fabrication.
+
+{episodic_context}
+```
+
+### 11c.4 Output schema
+
+```python
+class BearAdvocateOutput(BaseModel):
+    ticker: str
+    target_persona: PersonaName
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bull_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_sum(self):
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"probabilities sum to {total}")
+        return self
+```
+
+### 11c.5 Sanity validator
+
+- `target_persona` is a real wave-1 persona
+- `reasoning` references the target persona's thesis
+- Distribution is non-degenerate *unless* `reasoning` explicitly concedes the bull case
+- `evidence_ids` resolve
+
+### 11c.6 Arbitration weight
+
+Same as BullAdvocate (§11b.6): immature, Brier-inverse-dampened until calibrated, no special multiplier.
+
+---
+
+## 11d. Persona: CrossPersonaAuditor
+
+**Files:** `pmacs/agents/cross_persona_auditor.py`, `prompts/cross_persona_auditor.md`, `grammars/cross_persona_auditor.gbnf`, `sanity/cross_persona_auditor.py`
+
+### 11d.1 Purpose
+
+A second-wave synthesis auditor. It does **not** produce a directional probability — it never touches the math (Five Non-Negotiable #2). Instead it reads all 7 wave-1 persona outputs plus the evidence packets and emits structured **flags** describing reasoning flaws: a conclusion that does not follow from its cited evidence, two personas citing the same evidence to opposite conclusions without acknowledging the conflict, an evidence ID that does not exist or is misquoted, or a narrative that misuses a canonical number from the ticker page (the source of truth — `Source.md §16.8`).
+
+This is hallucination/bad-reasoning detection at the synthesis layer. Per-persona sanity validators (`§3`) are *structural*; the Crucible (`§16`) attacks the *aggregated* thesis. The auditor is the only agent that checks whether each persona's **conclusion follows from the evidence it cited**.
+
+### 11d.2 Evidence consumed
+
+- All 7 wave-1 persona outputs
+- The full `EvidencePacket` list (to verify cited IDs exist and values are quoted correctly)
+- The canonical ticker-page numbers (to verify narratives are consistent with the source of truth — it does **not** recompute numbers, it checks agents *used* them correctly)
+
+### 11d.3 System prompt skeleton
+
+```markdown
+You are a cross-persona audit layer. You do NOT predict direction. You audit the 7
+analysis personas' outputs for reasoning integrity. For each flaw you find, emit one
+flag. A flag must name the offending persona, the flaw type, a severity in [0,1], and
+the evidence_ids involved.
+
+Flag types:
+- CITATION_GAP: a persona's conclusion is not supported by the evidence it cited
+- CONCLUSION_UNSUPPORTED: the reasoning does not follow from the cited evidence
+- CONFLICTING_CONCLUSIONS: two personas cite the same evidence to opposite conclusions
+  and neither acknowledges the conflict
+- NUMBER_MISUSE: a narrative misuses or contradicts a canonical number (cite the packet)
+- HALLUCINATED_EVIDENCE: a cited evidence_id does not exist or is misquoted
+
+Do NOT invent flaws to seem useful. If the outputs are clean, return an empty flag list.
+Severity reflects how much the flaw undermines the persona's contribution: 0.2 = minor,
+0.5 = moderate, 0.8 = the persona's conclusion is essentially unsupported.
+
+{episodic_context}
+```
+
+### 11d.4 Output schema
+
+```python
+class AuditorFlag(BaseModel):
+    flag_type: Literal[
+        "CITATION_GAP",
+        "CONCLUSION_UNSUPPORTED",
+        "CONFLICTING_CONCLUSIONS",
+        "NUMBER_MISUSE",
+        "HALLUCINATED_EVIDENCE",
+    ]
+    target_persona: PersonaName          # the wave-1 persona the flag applies to
+    severity: float = Field(ge=0.0, le=1.0)
+    description: str = Field(max_length=400)
+    evidence_ids: list[str] = Field(default_factory=list)
+    taxonomy_mapping: FailureTaxonomy    # projection into FDE for the flywheel (§15.4)
+
+class AuditorOutput(BaseModel):
+    ticker: str
+    flags: list[AuditorFlag] = Field(max_length=20)
+    summary: str = Field(max_length=600)
+    # NOTE: no p_up/p_flat/p_down. The auditor never produces probabilities.
+```
+
+### 11d.4a Persona narrative field map (auditor cascade)
+
+The auditor's prompt asks for each persona's *conclusion text* — but each
+wave-1 persona writes its narrative to a different field on its Pydantic
+schema (the schema name matches the persona's intent, e.g. `regime_reasoning`
+on `MacroRegimeOutput`). The GBNF grammar + Pydantic `model_dump()` strip the
+`analysis` field the prompt also produces, so the auditor's cascade must walk
+the persona-specific field FIRST before falling back to the universal
+`key_signal → analysis → reasoning` chain.
+
+| Wave-1 persona      | Primary narrative field               | Fallback fields                                       |
+|---------------------|---------------------------------------|-------------------------------------------------------|
+| `macro_regime`      | `regime_reasoning`                    | `sector_rotation_summary`, `key_signal`, `analysis`   |
+| `catalyst_summarizer` | `net_catalyst_outlook`              | `catalysts[].description` (aggregated), `key_signal`  |
+| `moat_analyst`      | `competitive_entry_reasoning`         | `moat_components[].reasoning` (aggregated), `key_signal` |
+| `growth_hunter`     | `growth_durability_reasoning`         | `key_risk_to_growth`, `key_signal`, `analysis`        |
+| `insider_activity`  | `signal_reasoning`                    | `key_signal`, `analysis`, `reasoning`                  |
+| `short_interest`    | `anomaly_reasoning`                   | `key_signal`, `analysis`, `reasoning`                  |
+| `forensics`         | `red_flags[].description` (aggregated) | `overall_accounting_quality`, `key_signal`, `analysis` |
+
+The auditor, bull advocate, and bear advocate all consume this cascade via
+`pmacs/agents/_peer_render.py::extract_narrative(name, body)`. Sharing the
+helper means all three wave-2 consumers see the same view of the wave-1
+narratives — no per-persona drift between the auditor's reasoning-integrity
+check and the advocates' case-construction prompt. Nested-list fields
+(`catalysts`, `moat_components`, `red_flags`) are aggregated into a single
+string under synthetic `*_aggregated_*` keys so the cascade reads them
+uniformly with the per-persona narrative field names. Universal fallback
+(`key_signal → analysis → reasoning`) applies for personas NOT in the map
+(e.g. wave-2 personas, edge cases).
+
+This map is the source of truth. Any schema rename (e.g.
+`regime_reasoning → macro_reasoning`) must update this table AND the
+`_PERSONA_NARRATIVE_FIELDS` dict in `pmacs/agents/_peer_render.py` in the
+same commit. CI lint: `tests/unit/test_auditor_flags.py::test_cascade_map_covers_all_seven_wave1_personas`
+fails if the dict keys drift from `PersonaName` enum values.
+
+### 11d.5 Sanity validator
+
+- Every `flag.target_persona` is a real wave-1 persona (not another wave-2 agent)
+- Every `evidence_id` resolves to a real packet (an auditor that hallucinates evidence IDs is itself a failure — abort + retry)
+- `severity` in [0,1]; `taxonomy_mapping` is a valid `FailureTaxonomy` member from the auditor-allowed set (§15.4)
+- An empty `flags` list is valid (clean outputs)
+- Output contains **no** probability fields (the schema enforces this; sanity double-checks)
+
+### 11d.6 What the orchestrator does with auditor flags
+
+The orchestrator consumes flags deterministically (Python — never the auditor itself touching math):
+
+1. **Arbitration weight cap.** For each flag, the offending persona's `ArbitrationSignal.weight_multiplier` is multiplied by `(1 - severity)` for this cycle. A severity-0.8 flag cuts the persona's arbitration weight by 80%. This is applied by the orchestrator before `arbitrate()` — the auditor does not call `arbitrate()`.
+2. **Crucible brief enrichment.** Flags are merged into the Crucible's cycle-2 revised evidence brief (`§16.4`) as an `auditor_flag_summary`, so the Crucible attacks the specific flaws the auditor found.
+3. **FDE feed.** Each flag is projected via `taxonomy_mapping` to a `FailedAssumption` node (KuzuDB) and a `failure_classifications` row (SQLite), so the Mutation Engine's cluster detection (`§15.3`, `§17.2`) picks them up unchanged.
+
+---
+
 ## 12. Persona: Crucible
 
 **Files:** `pmacs/agents/crucible.py`, `prompts/crucible.md`, `grammars/crucible.gbnf`, `sanity/crucible.py`
@@ -924,11 +1188,36 @@ Produce the operator-facing memo. The MemoWriter reads all persona outputs, the 
 
 ### 13.2 Evidence consumed
 
-- All persona outputs (as structured JSON)
+(*Memo accuracy scoring is documented separately as `§13.2a` below — added during Phase 13 to give the system a self-check on every emitted memo.*)
+
+- All wave-1 persona outputs (as structured JSON)
+- Wave-2 BullAdvocate + BearAdvocate outputs (debate arguments)
+- Wave-2 CrossPersonaAuditor flags (CITATION_GAP / etc.)
+- Reverse-DCF + ForwardValuationEngine outputs (`Source.md §16.9`)
 - Arbitrated output
 - Crucible output
 - Conviction score
 - Verdict tier
+- **Data-quality warnings** (Phase-13 post-cycle audit): a list of metrics the
+  source itself flagged as anomalous (e.g. `netProfitMarginTTM=251.9%`).
+  The memo MUST NOT cite flagged metrics as facts (`pmacs/agents/sanity/memo_scorer.py`
+  re-injects the warnings into the prompt for retry). The data-quality
+  warnings are the memo-side counterpart to `format_evidence_for_prompt`,
+  which already warns the analyst personas; the analyst layer never reaches
+  the operator, but the memo does.
+
+### 13.2a Memo accuracy scoring (Phase 13)
+
+`pmacs/agents/sanity/memo_scorer.py` cross-validates every emitted memo
+against its evidence and awards a 0-100 reliability score across six
+dimensions: numerical grounding (0-25), verdict consistency (0-15),
+evidence coverage (0-15), risk coverage (0-15), completeness (0-15),
+cross-source coherence (0-15). The score + letter grade (A/B/C/D/F) are
+persisted in `memos.memo_score` / `memos.memo_grade`. Memos scoring < 50 are
+retried with score feedback injected into the retry prompt. The score is
+not surfaced in the operator-facing memo — it's a system-internal
+self-check. `memos` columns were added in `_run_migrations` after the
+initial schema landed.
 
 ### 13.3 System prompt skeleton
 
@@ -979,6 +1268,126 @@ class MemoWriterOutput(BaseModel):
 
 ---
 
+## 13b. Persona: ValuationAgent
+
+**Files:** `pmacs/agents/valuation_agent.py`, `prompts/valuation_agent.md`, `grammars/valuation_agent.gbnf`, `sanity/valuation_agent.py`
+
+**Architecture ref:** `Architecture.md §9.4b` (ForwardValuationEngine). **This persona is post-arbitration and NOT wave-1.** It does NOT enter Arbitration, does NOT emit `p_up/p_flat/p_down`, and does NOT amend conviction. It is the operator's "predict valuation from scenarios and numbers" lens on a 6-12 month horizon.
+
+### 13b.1 Purpose
+
+Emit structured **bull/base/bear forward-valuation ASSUMPTIONS** — a revenue growth path to the horizon, a margin trajectory, an EBITDA margin at the horizon, an exit EV/EBITDA multiple, and (where supportable) an acquisition-revenue contribution — each with a rationale and a per-scenario `probability_of_occurrence`. The deterministic `ForwardValuationEngine` (`Architecture.md §9.4b`) consumes these assumptions and computes the price target.
+
+**The LLM never emits a price number** (Five Non-Negotiable #2 — LLMs never math, `§1.6`). It emits the inputs to the price math. The agent also double-checks its own assumptions for accuracy and consistency before emitting (self-critique is mandatory, see §13b.3).
+
+### 13b.2 Evidence consumed
+
+In priority order (mirrors the prompt):
+
+1. **Forward valuation / guidance proxy** (`yahoo_{ticker}_forward_valuation`): `eps_trend{current_q,next_q,current_year,next_year}`, `next_year_eps_growth_pct`, `ntm_revenue_consensus`, `current_year_revenue_growth_pct`, `next_year_revenue_consensus`, `forward_ps`, `earnings_growth_yoy`, `revenue_growth_yoy`. Structured management guidance is NOT fetched — analyst consensus is the guidance-growth proxy, declared in `data_gaps`.
+2. **Fundamentals annual series** (`fundamentals_{ticker}_metrics`): `annual_revenue`, `annual_ebitda`, `annual_freeCashFlow`, `annual_sbc`, `revenueGrowthTTMYoy`/`revenueGrowth3Y`/`revenueGrowth5Y`, the TTM margin series, `ebitdaMarginTTM`, and the Finnhub gap-fill `annual_{gross,net,operating,fcf}Margin_trend`. The agent derives the margin trajectory (COMPRESSING/EXPANDING/STABLE) and per-year EBITDA margin from these.
+3. **EDGAR financials** (`edgar_{ticker}_financials`): revenue/EPS/SBC/CapEx/FCF YoY — cross-checks the consensus growth path against reported actuals.
+4. **Press releases + IR pages**: the ONLY source for acquisition narrative. There is NO structured M&A feed. Acquisition impact is inferred narratively, flagged `LOW`/`MODERATE` confidence, with a `data_gaps` note. Never a fabricated hard deal number.
+5. **Analyst price targets** (`yahoo_{ticker}_price_target`): sanity check only — never the anchor for the exit multiple.
+
+Mapped in `evidence_router.py` `PERSONA_EVIDENCE_MAP["ValuationAgent"] = [FUNDAMENTALS, YAHOO, EDGAR, PRESS, IR_PAGES]`.
+
+### 13b.3 System prompt skeleton
+
+```markdown
+You are a forward-valuation analyst for {ticker} on {today_date}. You produce
+structured bull/base/bear ASSUMPTIONS for a 6-to-12-month forward valuation.
+A deterministic Python engine (ForwardValuationEngine, Architecture.md §9.4b)
+consumes your assumptions and computes the price target. YOU DO NOT EMIT A PRICE.
+You emit the inputs: revenue growth path to the horizon, margin trajectory,
+EBITDA margin at the horizon, exit EV/EBITDA multiple, and (where supportable)
+acquisition-revenue contribution. You also emit a probability_of_occurrence per
+scenario, and you double-check your own assumptions for accuracy and consistency
+before emitting.
+
+Scenario lens:
+- bull: growth at high end / accelerating, margin EXPANDING or STABLE, exit
+  multiple at/above peer median.
+- base: growth at consensus, margin STABLE, exit multiple at peer median.
+  Usually highest probability.
+- bear: growth at low end / contracting, margin COMPRESSING, exit multiple below
+  peer median.
+probability_of_occurrence across bull+base+bear MUST sum to ~1.0.
+
+INSUFFICIENT_DATA fallback (anti-hallucination, mandatory): if any input is N/A,
+emit a near-uniform distribution (e.g. 0.30/0.40/0.30), set acquisition_confidence
+NONE with contribution 0.0, populate data_gaps with one short string per N/A input.
+NEVER fabricate a number — a missing input degrades the engine gracefully, which
+is correct and preferred over a wrong number.
+
+Self-critique (mandatory, before emitting): re-read your assumptions. Verify
+revenue_growth_path_pct is bull>base>bear in fraction terms; ebitda_margin is
+plausible vs history and margin_trajectory agrees with margin_delta_pct sign;
+exit_multiple is plausible vs peers; probabilities sum ~1.0 and the highest-
+probability scenario has the strongest cited evidence; each rationale cites >=1
+evidence_id. If any answer is no, revise the assumption, not the evidence.
+
+{episodic_context}
+```
+
+### 13b.4 Output schema
+
+```python
+class ValuationScenarioAssumptions(BaseModel):
+    revenue_growth_path_pct: float            # ge -0.5, le 1.0 (fraction)
+    margin_trajectory: Literal["COMPRESSING", "EXPANDING", "STABLE"]
+    margin_delta_pct: float                    # ge -0.2, le 0.2 (signed fraction)
+    ebitda_margin_at_horizon_pct: float        # ge -0.1, le 0.9 (fraction)
+    acquisition_revenue_contribution_pct: float = 0.0   # ge 0, le 0.5
+    acquisition_confidence: Literal["HIGH", "MODERATE", "LOW", "NONE"]
+    exit_multiple: float                       # gt 0, le 100 (EV/EBITDA)
+    rationale: str = Field(max_length=800)     # cites >=1 evidence_id
+    probability_of_occurrence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(min_length=1)
+
+class ValuationAgentOutput(BaseModel):
+    ticker: str
+    horizon_months: int = Field(ge=6, le=12)
+    bull: ValuationScenarioAssumptions
+    base: ValuationScenarioAssumptions
+    bear: ValuationScenarioAssumptions
+    data_gaps: list[str]
+    evidence_ids: list[str] = Field(min_length=1)   # top-level
+
+    @model_validator(mode="after")
+    def _check_invariants(self):
+        total = bull.probability_of_occurrence + base.probability_of_occurrence
+                + bear.probability_of_occurrence
+        if abs(total - 1.0) > 0.10: raise ValueError(...)
+        if degenerate (all mass on bull or bear): raise ValueError(...)
+        if any scenario acquisition_revenue_contribution_pct > 0:
+            acquisition_confidence must be LOW/MODERATE
+            data_gaps must mention "acqui"
+        return self
+```
+
+Note: this persona does NOT emit `p_up/p_flat/p_down`. The per-scenario `probability_of_occurrence` is the agent's own scenario weighting (consumed by `ForwardValuationEngine.expected_price_usd`), NOT the Arbitrated vector.
+
+### 13b.5 Sanity validator
+
+- Every `bull`/`base`/`bear` + top-level `evidence_id` resolves to a real packet.
+- `horizon_months ∈ [6, 12]`.
+- `bull + base + bear probability_of_occurrence` sums to ~1.0 (±0.10).
+- Per scenario: `exit_multiple ∈ [0.5, 80]`; `ebitda_margin ∈ [-0.10, 0.85]`.
+- `margin_trajectory` agrees with `margin_delta_pct` sign (EXPANDING ⇒ ≥ -0.005, COMPRESSING ⇒ ≤ 0.005).
+- `acquisition_revenue_contribution_pct > 0` ⇒ `acquisition_confidence` ∈ {LOW, MODERATE} AND `data_gaps` mentions "acqui".
+- Each scenario `rationale` cites ≥1 of that block's `evidence_ids`.
+- Reject degenerate distributions (all mass on bull, or all on bear).
+- Ordering: `bull.revenue_growth_path_pct ≥ base ≥ bear` (reject if violated).
+
+### 13b.6 Integration (post-arbitration)
+
+Run by the orchestrator after Arbitration, alongside the reverse-DCF engine. The `ForwardValuationEngine` consumes the agent's `.model_dump()` scenario blocks and computes per-scenario forward prices. When `ForwardValuationResult.is_available` AND all three prices > 0, `ScenarioPriceEngine` uses the forward prices; otherwise it falls back to the reverse-DCF sensitivity grid unchanged (`VALUATION_SOURCE_CHOSEN` audit event records the source). The result surfaces in `MemoWriterOutput` only (`Source.md §16.9` "Forward valuation (6-12 month)" block) — never on the /ticker page, never as a dashboard tile, and never as a conviction amendment.
+
+**Current-valuation anchor injection.** Immediately before the ValuationAgent runs, the orchestrator builds `_build_current_valuation_anchor` (`Architecture.md §9.4b`) from the same evidence packets the agent will see. The anchor includes: current EV/Sales, current EV/EBITDA, current P/S, analyst price-target consensus mean. These are injected into the agent's `agent_context` so the agent sees, in its own prompt: "the market is currently paying X multiple; the analyst consensus implies Y; here is the multiple you are assuming at the horizon". This is the model-vs-market and model-vs-Wall-Street reconciliation. The anchor is the single biggest accuracy lever for the forward-valuation block — without it, the agent is free to assume a multiple that diverges from reality and the memo cannot surface the divergence. The orchestrator also populates `ForwardValuationResult.current_ev_sales` and `analyst_target_mean_usd` so the memo can render the gap inline.
+
+---
+
 ## 14. Inter-persona communication model
 
 ### 14.1 No lateral communication
@@ -989,12 +1398,14 @@ Evidence → [Persona 2] → DirectionalProbability
 Evidence → [Persona 3] → DirectionalProbability
 ...
 Evidence → [Persona 7] → DirectionalProbability
-                              ↓
-                    [ArbitrationEngine (Python)]
+                              ↓  (wave-1 outputs FROZEN here)
+                    [Wave 2: BullAdvocate + BearAdvocate + CrossPersonaAuditor]
+                              ↓         (advocates emit DP; auditor emits flags)
+                    [ArbitrationEngine (Python)]  ← 9 DPs + auditor weight caps
                               ↓
                        Arbitrated output
                               ↓
-                    [Crucible (LLM persona)]
+                    [Crucible (LLM persona)]  ← auditor flags injected into brief
                               ↓
                        CrucibleOutput
                               ↓
@@ -1007,7 +1418,7 @@ Evidence → [Persona 7] → DirectionalProbability
                        Operator-facing memo
 ```
 
-No persona reads another persona's output. The Arbitration Engine is the only combiner. The Crucible reads the combined output, not individual signals. The MemoWriter reads everything.
+Wave-1 personas (§4-§11) never read another persona's output. The Arbitration Engine is the only combiner of wave-1 signals. The wave-2 agents (BullAdvocate, BearAdvocate, CrossPersonaAuditor) read the **frozen** wave-1 outputs — this is the same exception class as the Crucible (reads the combined output) and MemoWriter (reads everything): they are *synthesis* agents, not analysis agents. The Crucible reads the combined output, not individual wave-1 signals. The MemoWriter reads everything.
 
 ### 14.2 What the Agents page shows (Source.md §15.5)
 
@@ -1027,11 +1438,31 @@ If GrowthHunter instead read MoatAnalyst's output and anchored on it, the halluc
 
 Independence prevents correlated hallucination. The Crucible is the last line of defense for hallucinations that survive independence (e.g., a base-model bias toward optimism on tech names).
 
+### 1.4 Persona roster — current vs. spec-origin
+
+The current implementation registers **14 LLM personas + 1 deterministic fallback**:
+
+- 10 analysis personas (wave-1): MacroRegime, CatalystSummarizer, MoatAnalyst, GrowthHunter, InsiderActivity, ShortInterest, Forensics (`§5`-`§11`), plus the deterministic Gatekeeper (`§4`).
+- 3 wave-2 personas: BullAdvocate (`§11b`), BearAdvocate (`§11c`), CrossPersonaAuditor (`§11d`).
+- 2 synthesis personas: Crucible (`§12`), MemoWriter (`§13`).
+- 1 post-arbitration valuation persona: ValuationAgent (`§13b`).
+- 1 deterministic fallback: Simulation (`pmacs/agents/simulation.py`) — fires when the LLM backend is unreachable after retries; produces a `(0.34, 0.33, 0.33)` near-uniform distribution marked with a `SIMULATION ` prefix.
+
+This is the spec-authoritative roster count; the cross-references in `§2` and `Architecture.md §1.4` should be kept in sync.
+
+### 14.4 Why wave-2 synthesis does not violate independence
+
+The independence principle (§14.1, §14.3) exists to stop a hallucination in one wave-1 persona from anchoring the others — if GrowthHunter read MoatAnalyst's output and parroted it, a fabricated moat would propagate as consensus. Wave-2 agents (BullAdvocate, BearAdvocate, CrossPersonaAuditor) read wave-1 outputs, so they look like a violation. They are not, for one structural reason:
+
+**Wave-1 outputs are frozen before wave-2 sees them.** Wave-1 personas commit their `DirectionalProbability` to the audit log and to the persona-results dict before wave-2 is dispatched. A wave-2 agent reading them cannot mutate them, cannot feed back into them, and cannot change what wave-1 already emitted. The independence that matters — wave-1-from-wave-1 anchoring — is preserved because wave-1 is already done.
+
+Wave-2 agents are *synthesis* agents in the same exception class as the Crucible and MemoWriter: their job is to react to committed outputs, not to produce independent analysis. The advocates add two more *voters* to Arbitration (dampened until calibrated, §11b.6); the auditor adds *flags* that cap weights and enrich the Crucible (§11d.6). None of them change a wave-1 probability after it is frozen. The hallucination-defense property that §14.3 relies on — "disagreement surfaces in Arbitration" — is strengthened, not weakened: the auditor explicitly surfaces unacknowledged disagreements (the `CONFLICTING_CONCLUSIONS` flag) that wave-1 independence produced but Arbitration alone would have silently averaged away.
+
 ---
 
-## 15. Failure Diagnostic Engine — the 18 taxonomy types
+## 15. Failure Diagnostic Engine — the 18 outcome + 5 reasoning-flaw taxonomy types
 
-The FDE runs on every terminal-state Holding (`Architecture.md §9.5`). Classification is deterministic Python, not LLM. **Canonical naming:** this table uses the DEFINITIVE taxonomy codes. `Architecture.md` must use these exact codes (e.g., `CATALYST_TIMEOUT`, not `RESOLUTION_TIMEOUT`). The taxonomy is exhaustive: every terminal state MUST map to exactly one type. If a holding's terminal state doesn't match any type, it's classified as `UNCLASSIFIED` and triggers an `INTERNAL_ASSERTION` debug event.
+The FDE runs on every terminal-state Holding (`Architecture.md §9.5`). Classification is deterministic Python, not LLM. **Canonical naming:** this table uses the DEFINITIVE taxonomy codes. `Architecture.md` must use these exact codes (e.g., `CATALYST_TIMEOUT`, not `RESOLUTION_TIMEOUT`). The 18 types below are exhaustive for **terminal-state outcomes**: every terminal state MUST map to exactly one of them. If a holding's terminal state doesn't match any type, it's classified as `UNCLASSIFIED` and triggers an `INTERNAL_ASSERTION` debug event. A separate set of **auditor-only reasoning-flaw types** (§15.4) is emitted by the CrossPersonaAuditor (§11d) at cycle time; `classify()` never emits them.
 
 ### 15.1 The 18 types
 
@@ -1137,6 +1568,20 @@ def _classify_stop(holding: Holding) -> FailureClassification:
 
 The Mutation Engine reads FDE classifications from KuzuDB FailedAssumption nodes. It aggregates by taxonomy type over rolling 30-cycle windows. When a taxonomy cluster reaches threshold (N≥5 for the same type), the Mutation Engine generates a candidate targeting the responsible component. See §17 for the mapping.
 
+### 15.4 Auditor-only reasoning-flaw types
+
+The CrossPersonaAuditor (§11d) emits flags at cycle time that describe *reasoning* flaws, not outcome failures. These map into the same `FailureTaxonomy` enum so the Mutation Engine's existing cluster detection consumes them unchanged, but they are a distinct set that `classify()` (§15.2) never produces. They persist as `FailedAssumption` nodes linked to the cycle, not to a terminal Holding.
+
+| # | Taxonomy code | Trigger condition (auditor-emitted) | What it means |
+|---|---|---|---|
+| 19 | `CITATION_GAP` | A persona cited evidence that does not support its conclusion | The persona's evidence and its conclusion are disconnected |
+| 20 | `CONCLUSION_UNSUPPORTED` | A persona's reasoning does not logically follow from its cited evidence | The argument is non-sequitur or missing a step |
+| 21 | `CONFLICTING_CONCLUSIONS` | Two personas cite the same evidence to opposite conclusions and neither acknowledges it | Unresolved disagreement that Arbitration would silently average |
+| 22 | `NUMBER_MISUSE` | A persona's narrative misuses or contradicts a canonical ticker-page number | The agent used a correct number incorrectly |
+| 23 | `HALLUCINATED_EVIDENCE` | A persona cited an `evidence_id` that does not exist or misquotes its packet | Fabricated or corrupted citation |
+
+These five are the **auditor-allowed set**: `AuditorFlag.taxonomy_mapping` (§11d.4) must be one of them. The original 18 remain exhaustive for terminal-state classification; the auditor-only five extend the enum for the flywheel only. CLAUDE.md's "18 taxonomy types" reference is updated to "18 outcome + 5 reasoning-flaw types". The Mutation Engine mapping for these clusters is in §17.2.
+
 ---
 
 ## 16. Crucible adversarial loop (inner state machine)
@@ -1198,6 +1643,12 @@ The Crucible's severity is the MAX of individual attack severities:
 
 The conviction formula (`Architecture.md §9.2`) applies `(1 - crucible_severity)` as a multiplier. A severity of 0.5 halves the conviction contribution from the Crucible factor.
 
+### 16.4 Auditor-flag injection into the revised brief
+
+When the CrossPersonaAuditor (§11d) emits flags, the orchestrator merges them into the cycle-2 revised evidence brief built by `_rebuild_evidence_brief` (`Architecture.md §12.2`). This is a deterministic Python merge — the auditor does not build the brief itself. The flags are appended as an `auditor_flag_summary` packet alongside the `crucible_rewrite_context` packet, so the Crucible's cycle-2 attack explicitly targets the reasoning flaws the auditor surfaced (a `CITATION_GAP` flag becomes a directed attack on the persona whose citation was gapped).
+
+The auditor flags also cap arbitration weights for this cycle (§11d.6) *before* the Crucible runs, so the Crucible sees an Arbitrated output that has already de-weighted flawed personas. The Crucible does not re-derive the auditor's findings; it attacks them adversarially. This keeps the auditor (deterministic flagger) and the Crucible (adversarial attacker) in their respective lanes — neither does the other's job.
+
 ---
 
 ## 17. Mutation Engine — candidate generation rules and rollback safety
@@ -1223,6 +1674,11 @@ Each rule maps an FDE taxonomy cluster to a specific mutation candidate:
 | `CATALYST_FALSE_POSITIVE` | `prompts` | `catalyst_summarizer.system_prompt` | Add "require >1 corroborating source for positive catalyst resolution" |
 | `SIZING_OVERLEVERAGED` | `thresholds` | `sizing.half_kelly_multiplier` | Reduce from 0.5 to 0.4 |
 | Persona Brier drift >0.05 over 30 cycles | `prompts` | `<persona>.system_prompt` | Add stronger evidence-citation requirements |
+| `CITATION_GAP` (auditor, N≥5 in 30 cycles) | `prompts` | `<target_persona>.system_prompt` | Add "explicitly state which evidence_id supports each conclusion; reject conclusions you cannot cite" directive |
+| `CONCLUSION_UNSUPPORTED` (auditor) | `prompts` | `<target_persona>.system_prompt` | Add "show the reasoning step between cited evidence and probability; do not leap" directive |
+| `CONFLICTING_CONCLUSIONS` (auditor) | `prompts` | `<both_personas>.system_prompt` | Add "if citing evidence another persona cited to the opposite conclusion, acknowledge and resolve the conflict" directive |
+| `NUMBER_MISUSE` (auditor) | `prompts` | `<target_persona>.system_prompt` | Add "quote canonical ticker-page numbers verbatim with the evidence_id; do not restate or round narratively" directive |
+| `HALLUCINATED_EVIDENCE` (auditor) | `sanity` | `<target_persona>.sanity` | Tighten evidence_id resolution check (reject IDs not in the packet set) — sanity-layer, not prompt |
 
 **All candidates are A/B tested in SHADOW, then surfaced to the operator. None are auto-applied.**
 | Persona-ticker affinity outlier | `persona_affinity` | `<persona>.<ticker>.weight` | Adjust ±10% based on observed Brier |
@@ -1351,7 +1807,7 @@ The operator can also propose candidates from Settings → Agent Personas → "P
 
 ### 17.7 Maximum concurrent mutations
 
-At most **3 A/B tests** can run simultaneously (across all dimensions). This caps the compute overhead at `3 × 5 tickers × 9 personas × 30s = ~4,050s` per cycle. Beyond 3, new proposals queue in `PROPOSED` status until a slot opens.
+At most **3 A/B tests** can run simultaneously (across all dimensions). This caps the compute overhead at `3 × 5 tickers × 13 personas × 30s = ~5,850s` per cycle. Beyond 3, new proposals queue in `PROPOSED` status until a slot opens.
 
 ---
 

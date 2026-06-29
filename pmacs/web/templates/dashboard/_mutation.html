@@ -1,0 +1,45 @@
+{# Mutation Engine summary region — SSE-driven partial (Source.md §14.7). #}
+<div class="card card-elevated {{ 'card-accent-purple' if mutation_summary is defined and mutation_summary.active else '' }}" data-stagger
+     id="dash-mutation"
+     hx-get="/api/dashboard/partials/mutation"
+     hx-trigger="pmacs:refresh from:body"
+     hx-swap="outerHTML">
+    <h3 class="text-sm font-semibold text-text-primary mb-5 flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full {{ 'bg-crucible anim-breathe' if mutation_summary is defined and mutation_summary.active else 'bg-text-muted' }}"></span>
+        Mutation Engine
+    </h3>
+    {% if mutation_summary is defined %}
+    <div class="space-y-3 text-sm">
+        <div class="flex justify-between">
+            <span class="text-text-secondary">Status</span>
+            <span class="font-mono {{ 'text-positive' if mutation_summary.active else 'text-text-muted' }}">
+                {{ "Active" if mutation_summary.active else "Dormant" }}
+            </span>
+        </div>
+        {% if not mutation_summary.active %}
+        <div class="mt-2 px-3 py-2.5 bg-surface-sunken rounded-xl text-xs text-text-muted">
+            {{ 50 - (mutation_summary.cycles_since_activation | default(0)) }} cycles until activation
+        </div>
+        {% else %}
+        {% if mutation_summary.pending_review > 0 %}
+        <div class="mt-2 flex items-center gap-2">
+            <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium bg-warning text-white rounded-lg">
+                {{ mutation_summary.pending_review }} pending
+            </span>
+            <a href="/settings" class="text-xs text-accent hover:opacity-80 transition-opacity">Review</a>
+        </div>
+        {% endif %}
+        {% endif %}
+        <div class="flex justify-between">
+            <span class="text-text-secondary">Candidates</span>
+            <span class="font-mono text-text-primary">{{ mutation_summary.candidates }}</span>
+        </div>
+        <div class="flex justify-between">
+            <span class="text-text-secondary">Cycles</span>
+            <span class="font-mono text-text-primary">{{ mutation_summary.cycles_since_activation }}</span>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-sm text-text-muted text-center py-6">Mutation state unavailable</p>
+    {% endif %}
+</div>

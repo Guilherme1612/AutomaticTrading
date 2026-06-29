@@ -5,8 +5,60 @@ Spec ref: Architecture.md §9.2
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pmacs.schemas.arbitration import Arbitrated
 from pmacs.schemas.conviction import ConvictionResult, VerdictTier
+
+
+# ── PASS verdict trigger thresholds ──────────────────────────────────────────
+# Allocator-grade memo: PASS is the *active* no-bid verdict. SKIP is the
+# passive one (conviction floor). PASS fires when analyst-derived signals
+# say the setup is real but the edge doesn't justify entry. The trigger
+# conditions live here so the orchestrator (Architecture.md §12) and the
+# memo route (web/routes/memo.py) can call them with consistent semantics.
+PASS_RR_THRESHOLD = 1.5       # R:R below this → R:R alone is a no-bid
+PASS_GROWTH_THRESHOLD = 0.10  # Growth below this AND no comps → no-bid
+
+
+@dataclass(frozen=True)
+class PassSignal:
+    """Carries a PASS trigger + the structured reason for the memo."""
+    triggered: bool
+    reason: str = ""
+    reason_code: str = ""  # machine-readable: "rr_below_threshold" | "comps_empty_growth_below_threshold"
+
+
+def evaluate_pass_signal(
+    rr_ratio: float | None,
+    comparable_transactions: list | None,
+    growth_pct: float | None,
+) -> PassSignal:
+    """Evaluate whether PASS is warranted (active no-bid verdict).
+
+    Returns a PassSignal whose `reason` field populates the memo's
+    pass_reason field. Two triggers:
+      - rr_ratio < PASS_RR_THRESHOLD and rr_ratio is not None
+      - comparable_transactions empty (or None) AND growth_pct < PASS_GROWTH_THRESHOLD
+    """
+    # Trigger 1: R:R below threshold
+    if rr_ratio is not None and rr_ratio < PASS_RR_THRESHOLD:
+        return PassSignal(
+            triggered=True,
+            reason=f"R:R {rr_ratio:.2f} below threshold {PASS_RR_THRESHOLD:.2f} — edge does not justify capital at risk",
+            reason_code="rr_below_threshold",
+        )
+
+    # Trigger 2: comps empty + growth below threshold
+    comps_empty = not comparable_transactions or len(comparable_transactions) == 0
+    if comps_empty and growth_pct is not None and growth_pct < PASS_GROWTH_THRESHOLD:
+        return PassSignal(
+            triggered=True,
+            reason=f"No comparable transactions and growth {growth_pct:.1%} below threshold {PASS_GROWTH_THRESHOLD:.0%} — setup lacks both edge and credibility",
+            reason_code="comps_empty_growth_below_threshold",
+        )
+
+    return PassSignal(triggered=False)
 
 
 def compute_conviction(
@@ -66,6 +118,10 @@ def verdict_tier(
     is_active_holding: bool = False,
     thesis_valid: bool = True,
     is_bootstrap: bool = False,
+    *,
+    rr_ratio: float | None = None,
+    comparable_transactions: list | None = None,
+    growth_pct: float | None = None,
 ) -> VerdictTier:
     """Maps conviction to verdict tier.
 
@@ -74,10 +130,21 @@ def verdict_tier(
     Negative conviction always SKIP (no shorting in v1).
     Active holding with valid thesis -> HOLD.
 
+    PASS triggers (allocator-grade memo): when ``rr_ratio`` < 1.5 OR
+    (no comparable transactions AND growth < 10%), the verdict is PASS
+    regardless of conviction floor. PASS is an *active* no-bid — operator
+    commits to ``pass_reason`` for the memo. See ``evaluate_pass_signal``.
+
     Bootstrap thresholds are lower because paper positions use virtual
     capital and generate needed trade data for Sharpe/drawdown/win-rate
     calculations required for mode promotion (Source.md §5, Phases.md §4).
     """
+    # PASS triggers fire BEFORE the conviction floor — operator-analyst
+    # judgment (R:R, comps presence) beats a raw number.
+    signal = evaluate_pass_signal(rr_ratio, comparable_transactions, growth_pct)
+    if signal.triggered:
+        return VerdictTier.PASS
+
     if is_active_holding and thesis_valid:
         return VerdictTier.HOLD  # Active position with valid thesis
     if is_bootstrap:

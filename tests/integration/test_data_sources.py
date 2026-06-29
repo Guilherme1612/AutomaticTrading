@@ -136,11 +136,12 @@ class TestEdgar:
         assert isinstance(packet, EvidencePacket)
         assert packet.ticker == "AAPL"
         assert packet.cycle_id == "c001"
-        assert len(packet.evidence) == 5
-        assert packet.evidence[0].source == DataSource.EDGAR
-        assert packet.evidence[0].type == EvidenceType.SEC_FILING
-        assert packet.evidence[0].data["form"] == "10-K"
-        assert packet.evidence[0].data["accession_number"] == "0001-24-000001"
+        assert len(packet.evidence) == 1
+        ev = packet.evidence[0]
+        assert ev.source == DataSource.EDGAR
+        assert ev.type == EvidenceType.SEC_FILING
+        assert ev.data["filings"][0]["form"] == "10-K"
+        assert ev.data["filings"][0]["accession"] == "0001-24-000001"
 
     def test_fetch_limits_to_five_filings(self, gateway, mock_response_factory):
         from pmacs.data.sources.edgar import fetch
@@ -156,7 +157,8 @@ class TestEdgar:
         }
         gateway._client.get.return_value = mock_response_factory(json_data=big_json)
         packet = fetch(cik="0001", ticker="MSFT", gateway=gateway)
-        assert len(packet.evidence) == 5
+        assert len(packet.evidence) == 1
+        assert len(packet.evidence[0].data["filings"]) == 10
 
     def test_fetch_handles_empty_filings(self, gateway, mock_response_factory):
         from pmacs.data.sources.edgar import fetch
@@ -166,7 +168,8 @@ class TestEdgar:
         )
         packet = fetch(cik="0001", ticker="TSLA", gateway=gateway)
         assert isinstance(packet, EvidencePacket)
-        assert len(packet.evidence) == 0
+        assert len(packet.evidence) == 1
+        assert packet.evidence[0].data.get("error") == "EDGAR fetch failed or CIK unknown"
 
     def test_fetch_handles_http_error(self, gateway, mock_response_factory):
         from pmacs.data.sources.edgar import fetch
@@ -174,8 +177,11 @@ class TestEdgar:
         gateway._client.get.return_value = mock_response_factory(
             status_code=403, json_data={"error": "forbidden"}
         )
-        with pytest.raises(httpx.HTTPStatusError):
-            fetch(cik="0001", ticker="AAPL", gateway=gateway)
+        packet = fetch(cik="0001", ticker="AAPL", gateway=gateway)
+        # CRITICAL source returns a stub evidence item on failure so the cycle can continue stale
+        assert isinstance(packet, EvidencePacket)
+        assert len(packet.evidence) == 1
+        assert packet.evidence[0].data.get("error") == "EDGAR fetch failed or CIK unknown"
 
     def test_fetch_sends_accept_header(self, gateway, mock_response_factory):
         from pmacs.data.sources.edgar import fetch
@@ -378,34 +384,60 @@ class TestOpenFDA:
 
 
 # ---------------------------------------------------------------------------
-# 6. FINRA -- short interest (static placeholder)
+# 6. FINRA -- short interest (via yfinance)
 # ---------------------------------------------------------------------------
+
+
+class _MockYfTicker:
+    def __init__(self, *, short_pct=0.05, short_ratio=2.5, shares_short=None, avg_volume=None):
+        self.info = {
+            "shortPercentOfFloat": short_pct,
+            "shortRatio": short_ratio,
+            "sharesShort": shares_short,
+            "sharesShortPriorMonth": None,
+            "shortPercentOfOutstanding": None,
+        }
+        self._avg_volume = avg_volume
+        self._history = None
+
+    def history(self, period="1mo"):
+        import pandas as pd
+        if self._history is not None:
+            return self._history
+        if self._avg_volume is not None:
+            self._history = pd.DataFrame({"Volume": [self._avg_volume] * 21})
+            return self._history
+        return pd.DataFrame({"Volume": []})
 
 
 class TestFinra:
     """pmacs.data.sources.finra -- fetch_short_interest(ticker, gateway, cycle_id).
 
-    FINRA currently returns a static placeholder and does not call gateway.fetch.
+    Uses yfinance (no gateway.fetch calls). Tests patch yfinance.Ticker.
     """
 
-    def test_fetch_returns_analyst_evidence(self, gateway):
+    def test_fetch_returns_short_interest_evidence(self, gateway):
         from pmacs.data.sources.finra import fetch_short_interest
 
-        packet = fetch_short_interest("AAPL", gateway, cycle_id="c006")
+        with patch("yfinance.Ticker", return_value=_MockYfTicker(short_pct=0.05, short_ratio=2.5)):
+            packet = fetch_short_interest("AAPL", gateway, cycle_id="c006")
 
         assert packet.ticker == "AAPL"
         assert len(packet.evidence) == 1
         ev = packet.evidence[0]
         assert ev.source == DataSource.FINRA
         assert ev.type == EvidenceType.ANALYST_DATA
-        assert "note" in ev.data
+        assert ev.data["short_pct_float"] == 5.0
+        assert ev.data["short_ratio"] == 2.5
+        assert ev.data["days_to_cover"] == 2.5
 
     def test_fetch_works_without_network(self, gateway):
         from pmacs.data.sources.finra import fetch_short_interest
 
         gateway._client.get.side_effect = Exception("no network")
-        # FINRA never calls gateway.fetch -- should succeed regardless
-        packet = fetch_short_interest("TSLA", gateway)
+        # FINRA uses yfinance, not gateway.fetch; patch to return no data
+        with patch("yfinance.Ticker", return_value=_MockYfTicker(short_pct=None, short_ratio=None, shares_short=None)):
+            packet = fetch_short_interest("TSLA", gateway)
         assert len(packet.evidence) == 1
 
 
@@ -417,27 +449,97 @@ class TestFinra:
 class TestForm4:
     """pmacs.data.sources.form4 -- fetch_insider_filings(cik, ticker, gateway, cycle_id)."""
 
-    FORM4_JSON = {
+    SUBMISSIONS_JSON = {
         "filings": {
             "recent": {
-                "form": ["4", "10-K", "4", "4", "8-K", "4"],
+                "form": ["4", "10-K"],
+                "filingDate": ["2025-03-15", "2025-02-20"],
+                "accessionNumber": ["0000320193-25-000123", "0000320193-25-000122"],
+                "primaryDocument": ["primary_doc.xml", "10k.pdf"],
             }
         }
     }
 
-    def test_fetch_counts_form4_correctly(self, gateway, mock_response_factory):
+    def _build_xml(self, transactions: list[dict] | None = None) -> str:
+        if transactions is None:
+            transactions = []
+        txn_xml = ""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for t in transactions:
+            code = t.get("code", "P")
+            ad = t.get("ad", "A")
+            shares = t.get("shares", 1000)
+            price = t.get("price", 50.0)
+            date = t.get("date", today)
+            txn_xml += f"""
+            <nonDerivativeTransaction>
+              <securityTitle><value>Common Stock</value></securityTitle>
+              <transactionDate><value>{date}</value></transactionDate>
+              <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>{code}</transactionCode>
+              </transactionCoding>
+              <transactionAmounts>
+                <transactionShares><value>{shares}</value></transactionShares>
+                <transactionPricePerShare><value>{price}</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>{ad}</value></transactionAcquiredDisposedCode>
+              </transactionAmounts>
+              <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>5000</value></sharesOwnedFollowingTransaction>
+              </postTransactionAmounts>
+              <ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature>
+            </nonDerivativeTransaction>
+            """
+
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<ownershipDocument xmlns="http://www.sec.gov/edgar/ownership/ownership XSD">
+  <schemaVersion>X0206</schemaVersion>
+  <documentType>4</documentType>
+  <periodOfReport>2025-03-15</periodOfReport>
+  <issuer>
+    <issuerCik>0000320193</issuerCik>
+    <issuerName>Apple Inc.</issuerName>
+    <issuerTradingSymbol>AAPL</issuerTradingSymbol>
+  </issuer>
+  <reportingOwner>
+    <reportingOwnerId>
+      <rptOwnerCik>0001234567</rptOwnerCik>
+      <rptOwnerName>Jane Doe</rptOwnerName>
+    </reportingOwnerId>
+    <reportingOwnerRelationship>
+      <isDirector>false</isDirector>
+      <isOfficer>true</isOfficer>
+      <isTenPercentOwner>false</isTenPercentOwner>
+      <isOther>false</isOther>
+      <officerTitle>Chief Financial Officer</officerTitle>
+    </reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>{txn_xml}</nonDerivativeTable>
+  <derivativeTable></derivativeTable>
+</ownershipDocument>
+"""
+
+    def test_fetch_parses_form4_transactions(self, gateway, mock_response_factory):
         from pmacs.data.sources.form4 import fetch_insider_filings
 
-        gateway._client.get.return_value = mock_response_factory(json_data=self.FORM4_JSON)
-        packet = fetch_insider_filings("0001", "AAPL", gateway, cycle_id="c007")
+        xml = self._build_xml(transactions=[{"code": "P", "shares": 1000, "price": 150.0}])
+
+        def _get(url, **kwargs):
+            if "submissions" in url:
+                return mock_response_factory(json_data=self.SUBMISSIONS_JSON)
+            return mock_response_factory(text=xml)
+
+        gateway._client.get.side_effect = _get
+        packet = fetch_insider_filings("0000320193", "AAPL", gateway, cycle_id="c007")
 
         assert packet.ticker == "AAPL"
-        assert len(packet.evidence) == 1
-        ev = packet.evidence[0]
-        assert ev.source == DataSource.FORM4
-        assert ev.type == EvidenceType.INSIDER_FILING
-        assert ev.data["form4_count"] == 4
-        assert ev.data["recent_forms"] == ["4", "10-K", "4", "4", "8-K"]
+        assert len(packet.evidence) >= 2  # summary + transaction
+        summary = packet.evidence[0]
+        assert summary.source == DataSource.FORM4
+        assert summary.type == EvidenceType.INSIDER_FILING
+        assert summary.data["form4_count"] == 1
+        assert summary.data["purchase_count"] == 1
+        assert "CEO_BUY" in summary.data["signals"]
 
     def test_fetch_handles_http_error_gracefully(self, gateway):
         from pmacs.data.sources.form4 import fetch_insider_filings
@@ -445,18 +547,27 @@ class TestForm4:
         gateway._client.get.side_effect = httpx.HTTPStatusError(
             "500", request=MagicMock(), response=MagicMock(status_code=500)
         )
-        packet = fetch_insider_filings("0001", "AAPL", gateway)
+        packet = fetch_insider_filings("0000320193", "AAPL", gateway)
         assert isinstance(packet, EvidencePacket)
-        assert len(packet.evidence) == 0
+        assert len(packet.evidence) == 1
+        assert packet.evidence[0].data.get("status") == "FETCH_ERROR"
 
     def test_fetch_sends_accept_header(self, gateway, mock_response_factory):
         from pmacs.data.sources.form4 import fetch_insider_filings
 
-        gateway._client.get.return_value = mock_response_factory(json_data=self.FORM4_JSON)
-        fetch_insider_filings("0001", "AAPL", gateway)
+        xml = self._build_xml()
 
-        call_args = gateway._client.get.call_args
-        headers = call_args.kwargs.get("headers") or call_args[1].get("headers") or {}
+        def _get(url, **kwargs):
+            if "submissions" in url:
+                return mock_response_factory(json_data=self.SUBMISSIONS_JSON)
+            return mock_response_factory(text=xml)
+
+        gateway._client.get.side_effect = _get
+        fetch_insider_filings("0000320193", "AAPL", gateway)
+
+        # First call is submissions JSON; subsequent calls are XML documents
+        submission_call = gateway._client.get.call_args_list[0]
+        headers = submission_call.kwargs.get("headers") or submission_call[1].get("headers") or {}
         assert headers.get("Accept") == "application/json"
 
 
@@ -491,7 +602,7 @@ class TestIRPages:
         long_html = "<html><body>" + "x" * 10000 + "</body></html>"
         gateway._client.get.return_value = mock_response_factory(text=long_html)
         packet = fetch_ir_page("NVDA", "https://ir.nvidia.com", gateway)
-        assert packet.evidence[0].data["content_length"] == 5000
+        assert packet.evidence[0].data["content_length"] == 4000
 
     def test_fetch_handles_network_error(self, gateway):
         from pmacs.data.sources.ir_pages import fetch_ir_page
@@ -512,9 +623,9 @@ class TestPress:
     """pmacs.data.sources.press -- fetch_press_releases(ticker, gateway, cycle_id)."""
 
     NEWS_JSON = [
-        {"id": 1001, "headline": "Apple announces Q4 results", "source": "Reuters"},
-        {"id": 1002, "headline": "Apple launches new product", "source": "Bloomberg"},
-        {"id": 1003, "headline": "Apple expands services", "source": "CNBC"},
+        {"id": 1001, "headline": "Apple reports Q4 earnings and revenue", "source": "Reuters", "datetime": 1700000300},
+        {"id": 1002, "headline": "Apple launches new product", "source": "Bloomberg", "datetime": 1700000200},
+        {"id": 1003, "headline": "Apple expands services", "source": "CNBC", "datetime": 1700000100},
     ]
 
     def test_fetch_returns_press_releases(self, gateway, mock_response_factory):
@@ -524,18 +635,19 @@ class TestPress:
         packet = fetch_press_releases("AAPL", gateway, cycle_id="c009")
 
         assert packet.ticker == "AAPL"
-        assert len(packet.evidence) == 3
+        # 3 news items + 1 catalyst timeline evidence
+        assert len(packet.evidence) == 4
         assert packet.evidence[0].source == DataSource.PRESS
         assert packet.evidence[0].type == EvidenceType.PRESS_RELEASE
-        assert packet.evidence[0].data["headline"] == "Apple announces Q4 results"
+        assert packet.evidence[0].data["headline"] == "Apple reports Q4 earnings and revenue"
 
-    def test_fetch_limits_to_three_items(self, gateway, mock_response_factory):
+    def test_fetch_limits_to_twenty_items(self, gateway, mock_response_factory):
         from pmacs.data.sources.press import fetch_press_releases
 
-        big_news = [{"id": i, "headline": f"News {i}", "source": "test"} for i in range(10)]
+        big_news = [{"id": i, "headline": f"News {i}", "source": "test", "datetime": 1700000000 + i} for i in range(30)]
         gateway._client.get.return_value = mock_response_factory(json_data=big_news)
         packet = fetch_press_releases("AAPL", gateway)
-        assert len(packet.evidence) == 3
+        assert len(packet.evidence) == 20  # 20 news items, no catalyst timeline because "News i" is GENERAL
 
     def test_fetch_handles_network_error(self, gateway):
         from pmacs.data.sources.press import fetch_press_releases
@@ -651,7 +763,7 @@ class TestFRED:
 
 
 # ---------------------------------------------------------------------------
-# 12. Fundamentals -- company profile (Finnub)
+# 12. Fundamentals -- company profile (Finnhub fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -683,13 +795,13 @@ class TestFundamentals:
         assert ev.data["name"] == "Apple Inc"
         assert ev.data["marketCapitalization"] == 2800000
 
-    def test_fetch_handles_error_returns_empty_data(self, gateway):
+    def test_fetch_handles_error_returns_empty_packet(self, gateway):
         from pmacs.data.sources.fundamentals import fetch_fundamentals
 
         gateway._client.get.side_effect = Exception("api error")
         packet = fetch_fundamentals("AAPL", gateway)
-        assert len(packet.evidence) == 1
-        assert packet.evidence[0].data == {}
+        assert isinstance(packet, EvidencePacket)
+        assert len(packet.evidence) == 0
 
     def test_api_key_injected_as_token_param(self, gateway, mock_response_factory):
         from pmacs.data.sources.fundamentals import fetch_fundamentals

@@ -117,6 +117,24 @@ async def universe_page(request: Request):
                 last_analyzed_map: dict[str, str] = {r[0]: r[1] for r in rows}
             except Exception:
                 last_analyzed_map = {}
+
+            # Determine which tickers have participated in at least one cycle.
+            # A ticker is considered cycled if it appears in decisions, queue, or holdings.
+            try:
+                cycled_rows = db.execute(
+                    """
+                    SELECT DISTINCT ticker FROM (
+                        SELECT ticker FROM decisions
+                        UNION
+                        SELECT ticker FROM queue
+                        UNION
+                        SELECT ticker FROM holdings WHERE cycle_id_opened IS NOT NULL
+                    )
+                    """
+                ).fetchall()
+                cycled_tickers: set[str] = {r[0] for r in cycled_rows}
+            except Exception:
+                cycled_tickers = set()
         finally:
             db.close()
 
@@ -133,6 +151,7 @@ async def universe_page(request: Request):
                 "status": _compute_status(t, t["ticker"] in active_tickers),
                 "has_position": t["ticker"] in active_tickers,
                 "is_pinned": t.get("pinned_priority") is not None,
+                "has_been_cycled": t["ticker"] in cycled_tickers,
                 "last_cycle": "--",
                 "last_analyzed": last_analyzed_map.get(t["ticker"]),
             }
@@ -144,7 +163,6 @@ async def universe_page(request: Request):
             name="universe.html",
             context={
                 "page": "universe",
-                "mode": "SHADOW + PAPER",
                 "tickers": tickers,
                 "groups": ["All", "Watchlist", "Portfolio", "Sectors"],
             },
@@ -155,7 +173,6 @@ async def universe_page(request: Request):
             name="universe.html",
             context={
                 "page": "universe",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("universe", exc),
             },
         )
@@ -222,7 +239,9 @@ async def universe_search(q: str = ""):
         except Exception:
             pass
 
-    # 2. Fallback: Finnhub symbol search (filter to US exchanges, prefix match only)
+    # 2. Fallback: Finnhub symbol search. Prefer symbol-prefix matches but also
+    #    accept name-substring matches so typing "NEBIUS" / "Apple" finds the
+    #    company by name when the operator doesn't know the ticker.
     if len(results) < 3:
         finnhub_key = _get_api_key("pmacs.data.finnhub", "api_key")
         if finnhub_key:
@@ -233,9 +252,14 @@ async def universe_search(q: str = ""):
                 _us_exchanges = {"", "US", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "OTC"}
                 for item in data.get("result", []):
                     sym = item.get("symbol", "")
-                    # Only include if ticker starts with query and looks like a US listing
-                    if (sym and sym.startswith(q) and sym not in existing
-                            and ("." not in sym) and ("-" not in sym)):
+                    desc = (item.get("description") or "").upper()
+                    if not sym or sym in existing or "." in sym or "-" in sym:
+                        continue
+                    sym_match = sym.startswith(q)
+                    # Case-insensitive name substring match for full-company-name
+                    # queries like "NEBIUS", "APPLE", "PALANTIR".
+                    name_match = (q in desc) and len(desc) >= len(q)
+                    if sym_match or name_match:
                         results.append({
                             "ticker": sym,
                             "name": item.get("description", ""),

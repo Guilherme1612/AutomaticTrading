@@ -7,11 +7,11 @@ PMACS uses macOS launchd to manage 8 processes in dependency order.
 ### Dependency Order
 
 ```
-1. pmacs-inference    (llama-server on :8080, pf-blocked from internet)
+1. pmacs-inference    (llama-server, pf-blocked from internet)
 2. pmacs-cortex       (health monitor, kill switch, boot detection)
 3. pmacs-cortex-self-check (meta-monitor, pings cortex every 60s)
 4. pmacs-execution    (Ed25519 signing + broker, Unix Domain Socket)
-5. pmacs-nervous      (orchestration on :8000, SSE, write API)
+5. pmacs-nervous      (orchestration, SSE, write API, dashboard UI on :8000)
 6. pmacs-stoploss     (RTH position monitoring every 30 min)
 7. pmacs-mutation     (active flywheel, dormant first 50 cycles)
 8. pmacs-dashboard    (read-only web UI on :8000, served by pmacs-nervous, loopback only)
@@ -77,7 +77,7 @@ python ops/backup_verify.py restore --backup-dir <backup-dir>
 On first launch, PMACS runs a 10-step wizard that configures:
 
 1. **Welcome** — system overview and prerequisites
-2. **Inference** — llama-server connection test (:8080)
+2. **Inference** — llama-server connection test
 3. **Model** — Qwen3.6-35B-A3B hash verification
 4. **Keychain** — Ed25519 signing key generation
 5. **Embedding** — bge-base-en-v1.5 availability check
@@ -359,7 +359,6 @@ Runs: backup → wipe → restore → verify → report
 |---|---|
 | Dashboard | `http://localhost:8000` |
 | Nervous API | `http://localhost:8000` |
-| Inference | `http://localhost:8080` (pf-blocked) |
 | SSE stream | `http://localhost:8000/events` |
 
 ## Key Constraints

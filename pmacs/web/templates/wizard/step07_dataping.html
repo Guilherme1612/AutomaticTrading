@@ -15,9 +15,9 @@
         {% macro source_row(name, criticality, result) %}
         <div class="flex items-center justify-between p-3 rounded border border-border
             {% if result and result.get("ok") %}
-                border-green-700/30
+                border-positive
             {% elif result %}
-                border-red-700/30
+                border-negative
             {% endif %}">
             <div class="flex items-center gap-3">
                 {% if result and result.get("ok") %}
@@ -87,7 +87,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Next
         </button>
         {% elif data_result and data_result.get("results") %}
@@ -95,7 +95,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Retry Ping
         </button>
         {% else %}
@@ -103,7 +103,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Ping All Sources
         </button>
         {% endif %}

@@ -11,7 +11,7 @@
 
     {% if smoke_result %}
     <div class="space-y-3 mb-8">
-        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.db_write %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.db_write %}border-positive bg-positive-soft{% else %}border-negative bg-negative-soft{% endif %}">
             <span class="text-lg">{% if smoke_result.checks.db_write %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
             <div>
                 <p class="text-sm font-medium text-text-primary">Database Read/Write</p>
@@ -21,7 +21,7 @@
             </div>
         </div>
 
-        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.inference %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.inference %}border-positive bg-positive-soft{% else %}border-negative bg-negative-soft{% endif %}">
             <span class="text-lg">{% if smoke_result.checks.inference %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
             <div>
                 <p class="text-sm font-medium text-text-primary">{% if is_cloud %}Cloud API Key{% else %}Inference Backend{% endif %}</p>
@@ -31,7 +31,7 @@
             </div>
         </div>
 
-        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.audit %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.audit %}border-positive bg-positive-soft{% else %}border-negative bg-negative-soft{% endif %}">
             <span class="text-lg">{% if smoke_result.checks.audit %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
             <div>
                 <p class="text-sm font-medium text-text-primary">Audit Chain</p>
@@ -41,7 +41,7 @@
             </div>
         </div>
 
-        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.embedding %}border-green-700/30 bg-green-900/20{% else %}border-red-700/30 bg-red-900/20{% endif %}">
+        <div class="flex items-center gap-3 p-3 rounded-lg border {% if smoke_result.checks.embedding %}border-positive bg-positive-soft{% else %}border-negative bg-negative-soft{% endif %}">
             <span class="text-lg">{% if smoke_result.checks.embedding %}<span class="text-positive">&#10003;</span>{% else %}<span class="text-negative">&#10007;</span>{% endif %}</span>
             <div>
                 <p class="text-sm font-medium text-text-primary">Embedding Model (768-dim)</p>
@@ -64,7 +64,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Promote to SHADOW + PAPER
         </button>
         {% else %}
@@ -72,7 +72,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Retry Smoke Test
         </button>
         {% endif %}
@@ -84,7 +84,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Run Smoke Test
         </button>
     </div>

@@ -112,6 +112,31 @@ class CostCapsRequest(BaseModel):
     monthly_cap: float
 
 
+class RiskConfigRequest(BaseModel):
+    """§20.6 Risk thresholds — operator-confirmed (writes risk.toml)."""
+    max_single_position_pct: float | None = None
+    max_concurrent_positions: int | None = None
+    daily_loss_pct: float | None = None
+    rolling_5d_loss_pct: float | None = None
+    reconciliation_tolerance_usd: float | None = None
+
+
+class CrucibleConfigRequest(BaseModel):
+    """§20.7 Crucible time budget — operator-confirmed (writes crucible.toml)."""
+    seconds_per_attack: int | None = None
+    max_cycles: int | None = None
+
+
+class BrokersConfigRequest(BaseModel):
+    """§20.3 Brokers — catastrophe-net stop % (writes risk.toml [pricing])."""
+    catastrophe_net_stop_pct: float | None = None
+
+
+class OperatorConfigRequest(BaseModel):
+    """§20.12 Operator — per-trade approval toggle (writes risk.toml [operator])."""
+    per_trade_approval: bool | None = None
+
+
 @router.get("/settings")
 async def settings_page(request: Request):
     """Render the settings configuration page."""
@@ -135,12 +160,18 @@ async def settings_page(request: Request):
         # Load inference provider state
         inference = _get_inference_state()
 
+        # §20 Settings expansion: risk / crucible / brokers / operator + persona display
+        risk_cfg = _risk_section(cfg)
+        crucible_cfg = _crucible_section(cfg)
+        brokers = {"catastrophe_net_stop_pct": risk_cfg["catastrophe_net_stop_pct"]}
+        operator_cfg = {"per_trade_approval": risk_cfg["per_trade_approval"]}
+        personas = _persona_display(cfg)
+
         return templates.TemplateResponse(
             request=request,
             name="settings.html",
             context={
                 "page": "settings",
-                "mode": "SHADOW + PAPER",
                 "config": config,
                 "mutation_candidates": mutation_candidates,
                 "recent_mutations": recent_mutations,
@@ -150,6 +181,11 @@ async def settings_page(request: Request):
                 "persona_costs": _get_persona_costs(cfg.duckdb_path),
                 "pricing_table": pricing_table,
                 "reconciliation": _get_reconciliation_status(cfg.duckdb_path),
+                "risk_cfg": risk_cfg,
+                "crucible_cfg": crucible_cfg,
+                "brokers": brokers,
+                "operator_cfg": operator_cfg,
+                "personas": personas,
             },
         )
     except Exception as exc:
@@ -158,7 +194,6 @@ async def settings_page(request: Request):
             name="settings.html",
             context={
                 "page": "settings",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("settings", exc),
             },
         )
@@ -211,6 +246,15 @@ async def get_notification_levels():
 
 class InferenceProviderRequest(BaseModel):
     provider: str
+    # Operator directive (Jun 29 2026): the active backend MUST never change
+    # without an explicit operator action. ``force=True`` is the operator's
+    # confirmation signal — it is set only by the radio ``onclick`` handler
+    # on /settings, which fires solely on real pointer interaction. Any other
+    # caller (page load, panel toggle, browser-driven radio change, programmatic
+    # ``.checked = true``, etc.) sends ``force=False`` and the request is
+    # rejected with 400. The idempotent same-provider path remains unconditional
+    # so harmless re-posts do not 400.
+    force: bool = False
 
 
 class InferenceApiKeyRequest(BaseModel):
@@ -231,13 +275,41 @@ async def get_inference_config():
 
 @router.post("/api/settings/inference/provider")
 async def set_inference_provider(req: InferenceProviderRequest):
-    """Switch the active LLM provider in model_registry.json."""
+    """Switch the active LLM provider in model_registry.json.
+
+    Operator directive (Jun 29 2026): only the operator may change the active
+    backend. Two safety nets:
+      1. Idempotency — if the requested provider is already active, return ok
+         without re-writing the file (prevents accidental double-fire).
+      2. Explicit-only — this endpoint is wired exclusively to the provider
+         radio buttons on /settings, which fire on a real user click. Any
+         other caller (the mode toggle, page load, dashboard, etc.) must NOT
+         invoke it; we don't add a route-side toggle here because the only
+         known offender was the front-end auto-select, which is now removed.
+    """
     registry = _load_registry()
     backends = registry.get("backends", {})
 
     if req.provider not in backends:
         return JSONResponse(
             {"ok": False, "error": f"Unknown provider: {req.provider}"},
+            status_code=400,
+        )
+
+    current = registry.get("active", "")
+    if current == req.provider:
+        # Idempotent — already active; don't rewrite the file.
+        return JSONResponse({"ok": True, "active": req.provider, "noop": True})
+
+    # Real switch — require explicit operator confirmation. Only the radio
+    # ``onclick`` handler on /settings sends ``force=True``; page loads,
+    # panel toggles, and any browser-driven ``change`` event do not. This
+    # is the second half of the "active must never change unless the
+    # operator clicked" guarantee (the front-end half moved onchange ->
+    # onclick on the radios so spurious change events cannot reach here).
+    if not req.force:
+        return JSONResponse(
+            {"ok": False, "error": "Active provider change requires explicit operator confirmation (force=true)"},
             status_code=400,
         )
 
@@ -289,52 +361,86 @@ async def set_inference_model(req: InferenceModelRequest):
             status_code=400,
         )
 
-    backends[req.provider]["default_model"] = req.model.strip()
-    _save_registry(registry)
-    return JSONResponse({"ok": True, "provider": req.provider, "model": req.model})
+    # Preservation guarantee (operator directive): switching the active backend
+    # must never silently clobber a previously-configured per-backend model. An
+    # empty/whitespace model is treated as "no change" — we keep the existing
+    # default_model and return it, rather than overwriting it with "".
+    model = req.model.strip()
+    if model:
+        backends[req.provider]["default_model"] = model
+        _save_registry(registry)
+    effective = backends[req.provider].get("default_model", "")
+    return JSONResponse({"ok": True, "provider": req.provider, "model": effective})
 
 
-@router.post("/api/settings/inference/test")
-async def test_inference_connection():
-    """Test the active LLM provider with a minimal prompt."""
-    state = _get_inference_state()
-    active = state["active"]
+def _classify_cloud_response(resp) -> tuple[str, str]:
+    """Classify a cloud provider HTTP response into (status, message).
 
+    status ∈ working | invalid_key | no_budget | not_working. Distinguishes a
+    valid-but-out-of-budget key (403/429 with a billing keyword — the provider IS
+    set up, just can't spend right now) from a genuinely invalid/forbidden key
+    (401 / bare 403). The body text is matched for keywords but never echoed
+    verbatim — only a sanitized message is returned (Architecture.md §16).
+    """
+    if resp.status_code == 200:
+        return "working", "connection successful"
+    if resp.status_code == 401:
+        return "invalid_key", "API key rejected (401)"
+    if resp.status_code in (402, 403, 429):
+        body = (resp.text or "").lower()[:400]
+        budget_keywords = (
+            "limit", "quota", "credit", "billing", "exceeded",
+            "insufficient", "payment", "balance", "spend", "funds",
+        )
+        if any(k in body for k in budget_keywords):
+            return "no_budget", f"key valid but no budget (HTTP {resp.status_code})"
+        if resp.status_code == 403:
+            return "invalid_key", "forbidden (403)"
+        return "not_working", f"HTTP {resp.status_code}"
+    return "not_working", f"HTTP {resp.status_code}"
+
+
+async def _test_provider(backend_id: str, backend: dict) -> dict:
+    """Test one inference backend with a minimal call. Returns {status, message}.
+
+    status ∈ working | invalid_key | no_budget | no_key | not_working.
+    Sanitized — the API key never appears in the returned message.
+
+    Local backends (llama_server / ollama) are pinged at their health/tags
+    endpoint; "working" means the process is up. Cloud backends make a minimal
+    chat completion so the response code reflects whether the key + model are
+    genuinely usable — keychain existence alone is NOT enough (a stale key still
+    "exists" but returns 401).
+    """
     import httpx
-    backend = _load_registry()["backends"].get(active, {})
-    api_key_ref = backend.get("api_key_ref", "")
-    is_local = not bool(api_key_ref)
 
-    if active == "llama_server":
-        url = "http://127.0.0.1:8080/health"
+    api_key_ref = backend.get("api_key_ref", "")
+
+    if backend_id == "llama_server":
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
+                resp = await client.get("http://127.0.0.1:8080/health")
                 if resp.status_code == 200:
-                    return JSONResponse({"ok": True, "message": "llama-server healthy"})
-                return JSONResponse({"ok": False, "error": f"HTTP {resp.status_code}"}, status_code=502)
-        except Exception as exc:
-            import logging
-            logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
-            return JSONResponse({"ok": False, "error": "Connection test failed"}, status_code=502)
+                    return {"status": "working", "message": "llama-server healthy"}
+                return {"status": "not_working", "message": f"HTTP {resp.status_code}"}
+        except Exception:
+            return {"status": "not_working", "message": "llama-server not running"}
 
-    if active == "ollama":
-        # Ollama is local — test via its /api/tags endpoint
+    if backend_id == "ollama":
         url = backend.get("url", "http://127.0.0.1:11434")
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{url}/api/tags")
                 if resp.status_code == 200:
-                    return JSONResponse({"ok": True, "message": "Ollama connected"})
-                return JSONResponse({"ok": False, "error": f"HTTP {resp.status_code}"}, status_code=502)
-        except Exception as exc:
-            import logging
-            logging.getLogger("pmacs.web").error("Inference test failed: %s", exc, exc_info=True)
-            return JSONResponse({"ok": False, "error": "Ollama not reachable — is it running?"}, status_code=502)
+                    return {"status": "working", "message": "Ollama connected"}
+                return {"status": "not_working", "message": f"HTTP {resp.status_code}"}
+        except Exception:
+            return {"status": "not_working", "message": "Ollama not running"}
 
-    # Cloud provider test
+    # Cloud provider
     base_url = backend.get("base_url", "").rstrip("/")
-    model = backend.get("default_model", "gpt-4o")
+    model = backend.get("default_model", "")
+    structured_output = backend.get("structured_output", "")
 
     api_key = ""
     if api_key_ref:
@@ -343,11 +449,12 @@ async def test_inference_connection():
             api_key = keyring.get_password("pmacs.credentials", api_key_ref) or ""
         except Exception:
             pass
-
     if not api_key:
-        return JSONResponse({"ok": False, "error": "API key not found in keychain"}, status_code=403)
-
-    structured_output = backend.get("structured_output", "")
+        return {"status": "no_key", "message": "no API key in keychain"}
+    if not model:
+        return {"status": "not_working", "message": "no model configured"}
+    if structured_output not in ("json_schema", "tool_use"):
+        return {"status": "not_working", "message": f"unknown output type: {structured_output}"}
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -366,8 +473,7 @@ async def test_inference_connection():
                         "Content-Type": "application/json",
                     },
                 )
-            elif structured_output == "tool_use":
-                # Anthropic
+            else:  # tool_use — Anthropic
                 resp = await client.post(
                     f"{base_url}/v1/messages",
                     json={
@@ -381,23 +487,59 @@ async def test_inference_connection():
                         "Content-Type": "application/json",
                     },
                 )
-            else:
-                return JSONResponse({"ok": False, "error": f"Unknown output type: {structured_output}"}, status_code=400)
-
-            if resp.status_code == 200:
-                return JSONResponse({"ok": True, "message": f"{active} connection successful"})
-            return JSONResponse(
-                {"ok": False, "error": f"Provider returned HTTP {resp.status_code}"},
-                status_code=502,
-            )
+            status, message = _classify_cloud_response(resp)
+            return {"status": status, "message": message}
     except Exception as exc:
-        # Sanitize error message to prevent API key leakage (Architecture.md §16)
+        # Sanitize — never leak the key (Architecture.md §16)
         err_msg = str(exc)
-        for secret_keyword in ("key", "token", "bearer", "authorization", "api_key", "apikey"):
-            if secret_keyword.lower() in err_msg.lower():
-                err_msg = "Connection failed — check provider settings and API key"
+        for kw in ("key", "token", "bearer", "authorization", "api_key", "apikey"):
+            if kw in err_msg.lower():
+                err_msg = "connection failed — check provider settings and API key"
                 break
-        return JSONResponse({"ok": False, "error": err_msg}, status_code=502)
+        return {"status": "not_working", "message": err_msg}
+
+
+@router.post("/api/settings/inference/test")
+async def test_inference_connection():
+    """Test the active LLM provider with a minimal prompt."""
+    state = _get_inference_state()
+    active = state["active"]
+    backend = _load_registry()["backends"].get(active, {})
+    res = await _test_provider(active, backend)
+    if res["status"] == "working":
+        return JSONResponse({"ok": True, "message": res["message"], "status": res["status"]})
+    return JSONResponse(
+        {"ok": False, "error": res["message"], "status": res["status"]},
+        status_code=502,
+    )
+
+
+@router.post("/api/settings/inference/test-all")
+async def test_all_inference():
+    """Test every configured backend in parallel; return per-provider status.
+
+    Used by the Settings page to render a real per-provider 'Working' badge
+    instead of just 'Key set' (keychain existence ≠ key works — a stale key
+    still exists in the keychain but returns 401). Returns {results: {id:
+    {status, message}}} where status ∈ working | invalid_key | no_budget |
+    no_key | not_working.
+    """
+    import asyncio
+
+    registry = _load_registry()
+    backends = registry.get("backends", {})
+    ids = list(backends.keys())
+    gathered = await asyncio.gather(
+        *[_test_provider(bid, backends[bid]) for bid in ids],
+        return_exceptions=True,
+    )
+    results: dict[str, dict] = {}
+    for bid, res in zip(ids, gathered):
+        if isinstance(res, Exception):
+            results[bid] = {"status": "not_working", "message": "test error"}
+        else:
+            results[bid] = res
+    return JSONResponse({"ok": True, "results": results})
 
 
 # ---------------------------------------------------------------------------
@@ -562,67 +704,11 @@ async def mutation_diff(candidate_id: str):
 
 
 def _get_cost_state(cfg) -> dict:
-    """Get current budget period state for the cost widget and settings."""
-    daily_cap = 2.00
-    monthly_cap = 30.00
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-redef]
+    """Get current budget period state for the cost widget and settings.
 
-    risk_path = _Path(cfg.config_dir) / "risk.toml"
-    if risk_path.exists():
-        try:
-            with open(risk_path, "rb") as f:
-                risk_cfg = tomllib.load(f)
-            daily_cap = risk_cfg.get("billing", {}).get("daily_cap_usd", daily_cap)
-            monthly_cap = risk_cfg.get("billing", {}).get("monthly_cap_usd", monthly_cap)
-        except Exception:
-            pass
-
-    today_cost = 0.0
-    month_cost = 0.0
-    last_cycle_cost = 0.0
-    avg_cycle_cost = 0.0
-
-    try:
-        db = data_layer.get_readonly_db(cfg.sqlite_path)
-        try:
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE date(called_at) = date('now')"
-            ).fetchone()
-            today_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT COALESCE(SUM(body_cost_usd), 0) FROM api_usage "
-                "WHERE strftime('%Y-%m', called_at) = strftime('%Y-%m', 'now')"
-            ).fetchone()
-            month_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT body_cost_usd FROM api_usage ORDER BY called_at DESC LIMIT 1"
-            ).fetchone()
-            last_cycle_cost = float(row[0]) if row else 0.0
-
-            row = db.execute(
-                "SELECT AVG(body_cost_usd) FROM api_usage "
-                "WHERE called_at >= datetime('now', '-7 days')"
-            ).fetchone()
-            avg_cycle_cost = float(row[0]) if row and row[0] else 0.0
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-    return {
-        "today_cost": today_cost,
-        "month_cost": month_cost,
-        "daily_cap": daily_cap,
-        "monthly_cap": monthly_cap,
-        "last_cycle_cost": last_cycle_cost,
-        "avg_cycle_cost": avg_cycle_cost,
-    }
+    Delegates to the shared ``data_layer.get_cost_state`` (DuckDB-backed).
+    """
+    return data_layer.get_cost_state(cfg)
 
 
 def _get_persona_costs(duckdb_path: str) -> list[dict]:
@@ -776,8 +862,6 @@ async def save_cost_caps(req: CostCapsRequest):
     except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
 
-    import tomli_w
-
     # Read existing risk.toml
     risk_cfg = {}
     if risk_path.exists():
@@ -793,17 +877,11 @@ async def save_cost_caps(req: CostCapsRequest):
     risk_cfg["billing"]["daily_cap_usd"] = req.daily_cap
     risk_cfg["billing"]["monthly_cap_usd"] = req.monthly_cap
 
-    # Atomic write
-    tmp_path = risk_path.with_suffix(".tmp")
+    # Atomic write — _write_toml_atomic prefers tomli_w and falls back to a
+    # flat-section serializer (tomli_w is not a declared dependency; without the
+    # fallback this route 500s on ImportError). risk.toml is flat tables of scalars.
     try:
-        with open(tmp_path, "wb") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                tomli_w.dump(risk_cfg, f)
-                f.flush()
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        tmp_path.replace(risk_path)
+        _write_toml_atomic(risk_path, risk_cfg)
     except Exception as exc:
         return JSONResponse(
             {"ok": False, "error": f"Failed to write config: {exc}"},
@@ -906,10 +984,9 @@ async def reset_progress():
         finally:
             db.close()
 
-        # Clear in-memory caches so the UI reflects the reset immediately
-        from pmacs.web.routes.pipeline import _clear_cycle_caches
-        _clear_cycle_caches()
-
+        # No in-memory cycle caches to clear — the agents/memo/ticker pages now
+        # read persisted memos (Task #8 Part D), so deleting the memos/decisions/
+        # cycles rows above is sufficient for the UI to reflect the reset.
         log.info("Progress reset: holdings, decisions, memos, cycles cleared; portfolio reset to $5,000")
         return JSONResponse({"ok": True})
 
@@ -919,3 +996,321 @@ async def reset_progress():
             {"ok": False, "error": "Reset failed — check server logs"},
             status_code=500,
         )
+
+
+# ---------------------------------------------------------------------------
+# §20 Settings expansion — Risk / Crucible / Brokers / Operator config surfaces
+# (Source.md §20.3/§20.6/§20.7/§20.12). Each operator-confirmed change writes the
+# relevant TOML atomically (flocked), audit-logs the change, and is gated by the
+# typed-confirm modal client-side (see test_operator_confirm_gates.py).
+# Mirrors the save_cost_caps pattern (settings.py:707).
+# ---------------------------------------------------------------------------
+
+
+def _read_toml(path: _Path) -> dict:
+    """Read a TOML file, returning {} if missing/invalid."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except Exception:
+        return {}
+
+
+def _write_toml_atomic(path: _Path, data: dict) -> None:
+    """Atomic flocked TOML write (mirrors save_cost_caps).
+
+    Prefers ``tomli_w`` when installed; falls back to a minimal flat-section
+    serializer for the {section: {key: scalar}} shape that risk.toml/crucible.toml
+    use (so the route works without an extra dependency — tomli_w is not declared
+    in pyproject and the existing cost-caps route is latent-broken without it).
+    """
+    tmp_path = path.with_suffix(".tmp")
+    with open(tmp_path, "wb") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                import tomli_w
+                tomli_w.dump(data, f)
+            except ImportError:
+                f.write(_dump_toml_flat(data))
+            f.flush()
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    tmp_path.replace(path)
+
+
+def _toml_scalar(v) -> str:
+    """Serialize a scalar to its TOML representation."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(v, float):
+        return repr(v)
+    if isinstance(v, int):
+        return str(v)
+    # Fallback — quote anything else as a string.
+    return f'"{str(v)}"'
+
+
+def _dump_toml_flat(data: dict) -> bytes:
+    """Minimal TOML serializer for {section: {key: scalar}} + top-level scalars.
+
+    Covers risk.toml / crucible.toml exactly (flat tables of scalars). Not a
+    general TOML serializer — nested tables/arrays are out of scope.
+    """
+    out: list[str] = []
+    for section, kv in data.items():
+        if isinstance(kv, dict):
+            out.append(f"[{section}]")
+            for k, v in kv.items():
+                out.append(f"{k} = {_toml_scalar(v)}")
+            out.append("")
+        else:
+            # top-level scalar
+            out.append(f"{section} = {_toml_scalar(kv)}")
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
+def _audit_config_change(cfg, event: str, payload: dict) -> None:
+    """Append a hash-chained audit entry for a config change (Non-Negotiable #3)."""
+    try:
+        from pmacs.storage.audit import AuditWriter
+        writer = AuditWriter(cfg.audit_path)
+        try:
+            writer.append(event, payload, cycle_id="settings")
+        finally:
+            writer.close()
+    except Exception:
+        # Audit failure must not silently pass; log to stderr but don't crash the response.
+        import logging
+        logging.getLogger("pmacs.web").warning("audit log write failed for %s", event, exc_info=True)
+
+
+def _risk_section(cfg) -> dict:
+    """Current §20.6 Risk + §20.3 catastrophe-net values from risk.toml."""
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    pos = data.get("position", {})
+    ks = data.get("kill_switch", {})
+    pr = data.get("pricing", {})
+    op = data.get("operator", {})
+    return {
+        "max_single_position_pct": pos.get("max_single_position_pct", 0.20),
+        "max_concurrent_positions": pos.get("max_concurrent_positions", 5),
+        "daily_loss_pct": ks.get("daily_loss_pct", 0.05),
+        "rolling_5d_loss_pct": ks.get("rolling_5d_loss_pct", 0.10),
+        "reconciliation_tolerance_usd": ks.get("reconciliation_tolerance_usd", 100.0),
+        "catastrophe_net_stop_pct": pr.get("default_stop_loss_pct", 0.15),
+        "per_trade_approval": op.get("per_trade_approval", False),
+    }
+
+
+def _crucible_section(cfg) -> dict:
+    """Current §20.7 Crucible time-budget values from crucible.toml."""
+    data = _read_toml(_Path(cfg.config_dir) / "crucible.toml")
+    tb = data.get("time_budget", {})
+    return {
+        "seconds_per_attack": tb.get("seconds_per_attack", 90),
+        "max_cycles": tb.get("max_cycles", 2),
+    }
+
+
+def _persona_display(cfg) -> list[dict]:
+    """§20.9 — read-only persona roster with rolling Brier (persona_ticker_affinity).
+
+    Enable/disable is a Mutation Engine concern (§20.9 "Propose mutation"), not a
+    direct toggle here — so this surface is read-only display + a link to #mutations.
+    """
+    roster = [
+        {"id": "catalyst_summarizer", "name": "Catalyst Summarizer", "role": "Event classification"},
+        {"id": "growth_hunter", "name": "Growth Hunter", "role": "Fundamental growth"},
+        {"id": "moat_analyst", "name": "Moat Analyst", "role": "Competitive moat"},
+        {"id": "macro_regime", "name": "Macro Regime", "role": "Macro environment"},
+        {"id": "insider_activity", "name": "Insider Activity", "role": "Insider signals"},
+        {"id": "short_interest", "name": "Short Interest", "role": "Short thesis"},
+        {"id": "forensics", "name": "Forensics", "role": "Accounting quality"},
+        {"id": "crucible", "name": "Crucible", "role": "Adversarial testing"},
+        {"id": "gatekeeper", "name": "Gatekeeper", "role": "Final gate check"},
+    ]
+    # Avg rolling Brier per persona across tickers (DuckDB persona_ticker_affinity).
+    brier: dict[str, float] = {}
+    try:
+        from pmacs.storage.duckdb import DuckDBAdapter
+        adapter = DuckDBAdapter(db_path=_Path(cfg.duckdb_path))
+        try:
+            rows = adapter.execute(
+                "SELECT persona, AVG(avg_brier) as brier FROM persona_ticker_affinity GROUP BY persona"
+            )
+            brier = {r["persona"]: float(r["brier"]) for r in rows if r["brier"] is not None}
+        finally:
+            adapter.close()
+    except Exception:
+        pass
+    out = []
+    for p in roster:
+        out.append({**p, "brier": brier.get(p["id"])})
+    return out
+
+
+@router.get("/api/settings/risk")
+async def get_risk_config():
+    """§20.6 — current risk thresholds (read-only JSON for the Settings card)."""
+    return JSONResponse({"ok": True, "risk": _risk_section(get_config())})
+
+
+@router.post("/api/settings/risk")
+async def save_risk_config(req: RiskConfigRequest):
+    """§20.6 — operator-confirmed risk thresholds. Writes risk.toml [position]/
+    [kill_switch], audit-logs the change. Client-side typed-confirm gate required
+    (test_operator_confirm_gates.py)."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+
+    changes: dict[str, object] = {}
+    if "position" not in data:
+        data["position"] = {}
+    if "kill_switch" not in data:
+        data["kill_switch"] = {}
+
+    if req.max_single_position_pct is not None:
+        v = float(req.max_single_position_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "max_single_position_pct must be in (0, 1.0]"}, status_code=400)
+        data["position"]["max_single_position_pct"] = v
+        changes["max_single_position_pct"] = v
+    if req.max_concurrent_positions is not None:
+        v = int(req.max_concurrent_positions)
+        if not 1 <= v <= 20:
+            return JSONResponse({"ok": False, "error": "max_concurrent_positions must be 1..20"}, status_code=400)
+        data["position"]["max_concurrent_positions"] = v
+        changes["max_concurrent_positions"] = v
+    if req.daily_loss_pct is not None:
+        v = float(req.daily_loss_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "daily_loss_pct must be in (0, 1.0]"}, status_code=400)
+        data["kill_switch"]["daily_loss_pct"] = v
+        changes["daily_loss_pct"] = v
+    if req.rolling_5d_loss_pct is not None:
+        v = float(req.rolling_5d_loss_pct)
+        if not 0 < v <= 1.0:
+            return JSONResponse({"ok": False, "error": "rolling_5d_loss_pct must be in (0, 1.0]"}, status_code=400)
+        data["kill_switch"]["rolling_5d_loss_pct"] = v
+        changes["rolling_5d_loss_pct"] = v
+    if req.reconciliation_tolerance_usd is not None:
+        v = float(req.reconciliation_tolerance_usd)
+        if v < 0:
+            return JSONResponse({"ok": False, "error": "reconciliation_tolerance_usd must be >= 0"}, status_code=400)
+        data["kill_switch"]["reconciliation_tolerance_usd"] = v
+        changes["reconciliation_tolerance_usd"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_risk_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/crucible")
+async def save_crucible_config(req: CrucibleConfigRequest):
+    """§20.7 — operator-confirmed Crucible time budget. Writes crucible.toml
+    [time_budget], audit-logs. Typed-confirm gated."""
+    cfg = get_config()
+    path = _Path(cfg.config_dir) / "crucible.toml"
+    data = _read_toml(path)
+    if "time_budget" not in data:
+        data["time_budget"] = {}
+
+    changes: dict[str, object] = {}
+    if req.seconds_per_attack is not None:
+        v = int(req.seconds_per_attack)
+        if not 10 <= v <= 600:
+            return JSONResponse({"ok": False, "error": "seconds_per_attack must be 10..600"}, status_code=400)
+        data["time_budget"]["seconds_per_attack"] = v
+        changes["seconds_per_attack"] = v
+    if req.max_cycles is not None:
+        v = int(req.max_cycles)
+        if not 1 <= v <= 5:
+            return JSONResponse({"ok": False, "error": "max_cycles must be 1..5"}, status_code=400)
+        data["time_budget"]["max_cycles"] = v
+        changes["max_cycles"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write crucible.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_crucible_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/brokers")
+async def save_brokers_config(req: BrokersConfigRequest):
+    """§20.3 — operator-confirmed catastrophe-net stop %. Writes risk.toml
+    [pricing] default_stop_loss_pct (broker-side catastrophe net), audit-logs."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    if "pricing" not in data:
+        data["pricing"] = {}
+
+    changes: dict[str, object] = {}
+    if req.catastrophe_net_stop_pct is not None:
+        v = float(req.catastrophe_net_stop_pct)
+        # Catastrophe net is a wide stop (15% default); allow 1..50%.
+        if not 0.01 <= v <= 0.50:
+            return JSONResponse({"ok": False, "error": "catastrophe_net_stop_pct must be in [0.01, 0.50]"}, status_code=400)
+        data["pricing"]["default_stop_loss_pct"] = v
+        changes["catastrophe_net_stop_pct"] = v
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_brokers_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})
+
+
+@router.post("/api/settings/operator")
+async def save_operator_config(req: OperatorConfigRequest):
+    """§20.12 — operator-confirmed per-trade approval toggle. Writes risk.toml
+    [operator] per_trade_approval, audit-logs. Note: enforcement is wired in the
+    execution phase; this persists the operator's configured preference."""
+    cfg = get_config()
+    risk_path = _Path(cfg.config_dir) / "risk.toml"
+    data = _read_toml(risk_path)
+    if "operator" not in data:
+        data["operator"] = {}
+
+    changes: dict[str, object] = {}
+    if req.per_trade_approval is not None:
+        data["operator"]["per_trade_approval"] = bool(req.per_trade_approval)
+        changes["per_trade_approval"] = bool(req.per_trade_approval)
+
+    if not changes:
+        return JSONResponse({"ok": False, "error": "No fields supplied"}, status_code=400)
+    try:
+        _write_toml_atomic(risk_path, data)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed to write risk.toml: {exc}"}, status_code=500)
+
+    _audit_config_change(cfg, "settings_operator_change", {"changes": changes})
+    return JSONResponse({"ok": True, "changes": changes})

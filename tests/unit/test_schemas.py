@@ -231,8 +231,12 @@ class TestQueue:
 
 class TestFailure:
     def test_failure_taxonomy_count(self):
-        from pmacs.schemas.failure import FailureTaxonomy
-        assert len(FailureTaxonomy) == 18
+        from pmacs.schemas.failure import FailureTaxonomy, AUDITOR_ALLOWED_TAXONOMY
+        # 18 outcome types (emitted by classify) + 5 auditor-only reasoning-flaw
+        # types (emitted by CrossPersonaAuditor, Agents.md §15.4).
+        assert len(FailureTaxonomy) == 23
+        assert len(AUDITOR_ALLOWED_TAXONOMY) == 5
+        assert all(t in FailureTaxonomy for t in AUDITOR_ALLOWED_TAXONOMY)
 
     def test_failed_assumption_creates(self):
         from pmacs.schemas.failure import FailedAssumption, FailureTaxonomy

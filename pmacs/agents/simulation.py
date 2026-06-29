@@ -40,6 +40,12 @@ def make_simulation_output(
         "insider_activity": _simulate_insider_activity,
         "short_interest": _simulate_short_interest,
         "forensics": _simulate_forensics,
+        # Wave-2 debate + audit personas (Agents.md §11b-§11d)
+        "bull_advocate": _simulate_bull_advocate,
+        "bear_advocate": _simulate_bear_advocate,
+        "cross_persona_auditor": _simulate_cross_persona_auditor,
+        # Post-arbitration forward-valuation persona (Agents.md §13b)
+        "valuation_agent": _simulate_valuation_agent,
     }
 
     gen = generators.get(persona_name)
@@ -193,4 +199,129 @@ def _simulate_forensics(ticker: str, ev_ids: list[str]) -> dict:
         "p_flat": 0.4,
         "p_down": 0.3,
         "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_bull_advocate(ticker: str, ev_ids: list[str]) -> dict:
+    """Conservative simulation: near-uniform, no fabricated bull conviction.
+
+    Targets growth_hunter by default (a wave-1 persona always exists). Advocacy
+    is not fabrication — simulation emits a near-flat distribution and concedes
+    the bear case so sanity accepts the degenerate-leaning distribution.
+    """
+    return {
+        "ticker": ticker,
+        "target_persona": "growth_hunter",
+        "p_up": 0.34,
+        "p_flat": 0.36,
+        "p_down": 0.30,
+        "reasoning": (
+            "SIMULATION — llama-server unavailable; no bull conviction can be "
+            "supported without the wave-1 reads. Conceding the bear case is "
+            "not warranted either; emitting a near-uniform distribution against "
+            "growth_hunter."
+        ),
+        "strongest_bear_counterpoint": "SIMULATION — no evidence available to evaluate",
+        "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_bear_advocate(ticker: str, ev_ids: list[str]) -> dict:
+    return {
+        "ticker": ticker,
+        "target_persona": "growth_hunter",
+        "p_up": 0.30,
+        "p_flat": 0.36,
+        "p_down": 0.34,
+        "reasoning": (
+            "SIMULATION — llama-server unavailable; no bear conviction can be "
+            "supported without the wave-1 reads. Emitting a near-uniform, "
+            "slightly bear-leaning distribution against growth_hunter."
+        ),
+        "strongest_bull_counterpoint": "SIMULATION — no evidence available to evaluate",
+        "evidence_ids": ev_ids[:1],
+    }
+
+
+def _simulate_cross_persona_auditor(ticker: str, ev_ids: list[str]) -> dict:
+    """Conservative simulation: empty flags (clean output).
+
+    An auditor that fabricates flags would cap real personas' arbitration
+    weights on invented flaws — a math-leak. Simulation returns an empty flag
+    list so it contributes no weight caps and no FDE writes.
+    """
+    return {
+        "ticker": ticker,
+        "flags": [],
+        "summary": "SIMULATION — llama-server unavailable; no audit performed (clean by default)",
+    }
+
+
+def _simulate_valuation_agent(ticker: str, ev_ids: list[str]) -> dict:
+    """Conservative simulation: near-uniform bull/base/bear, no fabrication.
+
+    The LLM never emits a price (§1.6) — only assumptions. Simulation emits a
+    near-uniform scenario distribution with no acquisition impact and explicit
+    data_gaps, so the ForwardValuationEngine can still compute a price from
+    plausible base-case assumptions when llama-server is down. Growth path is
+    ordered bull > base > bear; margins are STABLE with ~0 delta; exit multiple
+    is a conservative 15x. Every rationale cites an evidence_id and carries a
+    self-critique note so the sanity validator accepts it.
+    """
+    eid = ev_ids[:1] or ["sim-evidence-001"]
+    return {
+        "ticker": ticker,
+        "horizon_months": 12,
+        "bull": {
+            "revenue_growth_path_pct": 0.20,
+            "margin_trajectory": "STABLE",
+            "margin_delta_pct": 0.01,
+            "ebitda_margin_at_horizon_pct": 0.25,
+            "acquisition_revenue_contribution_pct": 0.0,
+            "acquisition_confidence": "NONE",
+            "exit_multiple": 18.0,
+            "rationale": (
+                "SIMULATION — llama-server unavailable; bull assumes high-end "
+                f"consensus growth and a stable margin. Self-critique: growth 0.20 "
+                f"> base > bear; e1 cited. evidence={eid[0]}"
+            ),
+            "probability_of_occurrence": 0.30,
+            "evidence_ids": eid,
+        },
+        "base": {
+            "revenue_growth_path_pct": 0.12,
+            "margin_trajectory": "STABLE",
+            "margin_delta_pct": 0.0,
+            "ebitda_margin_at_horizon_pct": 0.22,
+            "acquisition_revenue_contribution_pct": 0.0,
+            "acquisition_confidence": "NONE",
+            "exit_multiple": 15.0,
+            "rationale": (
+                "SIMULATION — base case at consensus growth, stable margin, peer-"
+                f"median exit multiple. Self-critique: highest probability. evidence={eid[0]}"
+            ),
+            "probability_of_occurrence": 0.40,
+            "evidence_ids": eid,
+        },
+        "bear": {
+            "revenue_growth_path_pct": 0.04,
+            "margin_trajectory": "COMPRESSING",
+            "margin_delta_pct": -0.02,
+            "ebitda_margin_at_horizon_pct": 0.18,
+            "acquisition_revenue_contribution_pct": 0.0,
+            "acquisition_confidence": "NONE",
+            "exit_multiple": 10.0,
+            "rationale": (
+                "SIMULATION — bear assumes low-end growth and margin compression "
+                f"with a below-median exit multiple. Self-critique: ordered lowest. evidence={eid[0]}"
+            ),
+            "probability_of_occurrence": 0.30,
+            "evidence_ids": eid,
+        },
+        "data_gaps": [
+            "SIMULATION — llama-server unavailable; assumptions are conservative defaults",
+            "management guidance: N/A, using analyst consensus proxy",
+            "acquisitions: N/A, not inferred this cycle",
+        ],
+        "evidence_ids": eid,
     }

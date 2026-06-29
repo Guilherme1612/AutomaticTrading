@@ -145,6 +145,11 @@ CONFIDENCE CALIBRATION:
   Confidence reflects DATA COMPLETENESS, not moat strength. A company with a weak moat
   assessed from strong evidence should have HIGH confidence (you are confident it's weak).
 
+  DEFAULT NEUTRAL SIGNAL: When no moat evidence is available or data is insufficient to form
+  an opinion, output a default neutral signal: p_up: 0.33, p_flat: 0.34, p_down: 0.33 with
+  confidence < 0.30. This ensures the system never produces a directional bias from absence
+  of evidence.
+
 DETERMINISM RULE: Given identical evidence, you MUST produce identical moat_strength scores
 and probability outputs. Anchor your moat_strength to QUANTITATIVE metrics first (gross margin
 level, NRR, churn rate), then adjust for qualitative factors. Do not let narrative framing

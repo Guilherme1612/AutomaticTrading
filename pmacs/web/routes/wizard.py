@@ -331,15 +331,20 @@ async def _execute_step(request: Request, step: int) -> dict:
             except Exception as exc:
                 return {"ok": False, "context": {"error": {"code": "REGISTRY_WRITE_FAIL", "message": str(exc)}}}
 
-            # Store API key in keychain
+            # Store API key in keychain under the canonical config-driven slot.
+            # model_registry.json backends.<provider>.api_key_ref uses the form
+            # "pmacs.credentials.<provider>_api_key" — write to that slot only.
+            # Earlier wizard versions also wrote a short-name slot ("openrouter_key"
+            # etc.) as a fallback; that duplication was removed in favor of a single
+            # canonical slot so keys cannot drift out of sync.
             if api_key:
                 try:
                     import keyring
-                    # Store with both naming conventions for compatibility:
-                    # 1. Short name: {provider}_key (e.g., openrouter_key)
-                    keyring.set_password("pmacs.credentials", f"{provider}_key", api_key)
-                    # 2. Full ref: pmacs.credentials.{provider}_api_key (matches model_registry.json api_key_ref)
-                    keyring.set_password("pmacs.credentials", f"pmacs.credentials.{provider}_api_key", api_key)
+                    keyring.set_password(
+                        "pmacs.credentials",
+                        f"pmacs.credentials.{provider}_api_key",
+                        api_key,
+                    )
                 except Exception:
                     pass
 
@@ -634,15 +639,40 @@ async def _execute_step(request: Request, step: int) -> dict:
             # 2. Verify inference backend responds (local only — cloud uses API key)
             backend_type = _get_backend_type()
             if backend_type == "cloud":
-                # Cloud users: verify Anthropic API key is stored
+                # Cloud users: verify the active backend's API key is stored under
+                # the canonical keychain slot. Read model_registry.json for the
+                # active backend's api_key_ref — same source of truth as the LLM
+                # caller in pmacs.agents.base. No short-name fallback: any key
+                # stored only at the legacy "{provider}_key" slot will not be
+                # detected here, which is the desired fail-loud behavior.
                 try:
                     import keyring
-                    api_key = keyring.get_password("pmacs.credentials", "anthropic_key")
-                    smoke_result["checks"]["inference"] = bool(api_key)
-                    if api_key:
-                        checks_passed += 1
+                    from pmacs.web.routes.settings import _load_registry
+                    registry = _load_registry()
+                    active_backend_name = registry.get("active", "llama_server")
+                    api_key_ref = (
+                        registry.get("backends", {})
+                        .get(active_backend_name, {})
+                        .get("api_key_ref", "")
+                    )
+                    if api_key_ref:
+                        api_key = keyring.get_password(
+                            "pmacs.credentials", api_key_ref
+                        ) or ""
+                        smoke_result["checks"]["inference"] = bool(api_key)
+                        if api_key:
+                            checks_passed += 1
+                        else:
+                            smoke_result["checks"]["inference_error"] = (
+                                f"{active_backend_name} API key not found in Keychain "
+                                f"(expected at slot {api_key_ref!r})"
+                            )
                     else:
-                        smoke_result["checks"]["inference_error"] = "Anthropic API key not found in Keychain"
+                        smoke_result["checks"]["inference"] = False
+                        smoke_result["checks"]["inference_error"] = (
+                            f"Active backend '{active_backend_name}' has no api_key_ref "
+                            f"configured in model_registry.json"
+                        )
                 except Exception:
                     smoke_result["checks"]["inference"] = False
                     smoke_result["checks"]["inference_error"] = "Could not verify API key in Keychain"

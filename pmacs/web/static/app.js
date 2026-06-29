@@ -18,6 +18,17 @@ function escapeHtml(str) {
         .replace(/'/g, "&#x27;");
 }
 
+function setModalHidden(el, hidden) {
+    if (!el) return;
+    if (hidden) {
+        el.classList.add("hidden");
+        el.inert = true;
+    } else {
+        el.classList.remove("hidden");
+        el.inert = false;
+    }
+}
+
 // ─── Relative Time ──────────────────────────────────────────────────────────
 
 /**
@@ -113,15 +124,72 @@ function updateNavActive() {
     });
 }
 
+// ─── Header Health Strip (Source.md §18 at-a-glance health) ───────────────
+// Polls /api/health/detail ~30s and updates the inference + last-cycle chip
+// in the header so the operator can tell the system is alive without opening Cortex.
+
+function _updateHealthStrip(d) {
+    var inf = document.getElementById("health-inference");
+    if (!inf) return;
+    var be = (d && d.inference) || {};
+    var txt = "Inference: " + (be.backend || "unknown");
+    if (be.local) txt += " (local)";
+    else txt += be.key_present ? " ✓" : " ⚠ no key";
+    inf.textContent = txt;
+    var lc = document.getElementById("health-last-cycle");
+    if (lc) lc.textContent = (d && d.last_cycle_at) ? ("Last cycle: " + timeAgo(d.last_cycle_at)) : "Last cycle: —";
+    var dot = document.getElementById("health-dot");
+    if (dot) {
+        var ok = be.local || be.key_present;
+        dot.className = "w-1.5 h-1.5 rounded-full " + (ok ? "bg-positive live-dot" : "bg-warning anim-breathing");
+    }
+}
+
+function _pollHealth() {
+    fetch("/api/health/detail", { headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) _updateHealthStrip(d); })
+        .catch(function () { /* strip stays on last known state */ });
+}
+
+/**
+ * Mark responsive-only controls as aria-hidden + tabindex=-1 when CSS hides them,
+ * so they are not focusable on viewports where they are not displayed.
+ */
+function initResponsiveInert() {
+    document.querySelectorAll("[data-responsive-hidden]").forEach(function (el) {
+        var style = window.getComputedStyle(el);
+        var isHidden = style.display === "none" || style.visibility === "hidden";
+        if (isHidden) {
+            el.setAttribute("aria-hidden", "true");
+            el.setAttribute("tabindex", "-1");
+        } else {
+            el.removeAttribute("aria-hidden");
+            el.removeAttribute("tabindex");
+        }
+    });
+}
+
+var _responsiveInertTimer = null;
+window.addEventListener("resize", function () {
+    clearTimeout(_responsiveInertTimer);
+    _responsiveInertTimer = setTimeout(initResponsiveInert, 150);
+});
+
 document.addEventListener("DOMContentLoaded", function () {
     initTimeAgo();
     setInterval(initTimeAgo, 60000);
     updateNavActive();
+    _pollHealth();
+    setInterval(_pollHealth, 30000);
+    initResponsiveInert();
 });
 // Re-run after HTMX content swaps (hx-boost navigation skips DOMContentLoaded)
 document.addEventListener("htmx:afterSettle", function () {
     initTimeAgo();
     updateNavActive();
+    _pollHealth();
+    initResponsiveInert();
 });
 
 // ─── CSRF Token (Architecture.md §18) ─────────────────────────────────────────
@@ -212,6 +280,22 @@ function onSSE(stream, handler) {
     eventHandlers[stream].push(handler);
 }
 
+// Update the SSE connection pill (text + colored dot) — tone: ok|warn|err|idle.
+function _setSseStatus(text, tone) {
+    var el = document.getElementById("sse-status");
+    if (!el) return;
+    var toneText = tone === "ok" ? "text-positive" : tone === "warn" ? "text-warning" :
+        tone === "err" ? "text-negative" : "text-text-muted";
+    el.textContent = text;
+    el.className = "text-[9px] font-mono " + toneText;
+    var dot = document.getElementById("sse-status-dot");
+    if (dot) {
+        var dotCls = "w-1.5 h-1.5 rounded-full " + (tone === "ok" ? "bg-positive live-dot" :
+            tone === "warn" ? "bg-warning anim-breathing" : tone === "err" ? "bg-negative" : "bg-text-muted");
+        dot.className = dotCls;
+    }
+}
+
 function connectSSE() {
     if (sseReconnectTimer) {
         clearTimeout(sseReconnectTimer);
@@ -223,11 +307,7 @@ function connectSSE() {
 
     if (sseRetryCount >= SSE_MAX_RETRIES) {
         showToast("SSE connection permanently lost. Reload the page.", "error", 0);
-        var sseStatus = document.getElementById("sse-status");
-        if (sseStatus) {
-            sseStatus.textContent = "Disconnected";
-            sseStatus.className = "text-[9px] text-negative font-mono";
-        }
+        _setSseStatus("Disconnected", "err");
         return;
     }
 
@@ -242,11 +322,7 @@ function connectSSE() {
         eventSource.onopen = function () {
             sseRetryCount = 0;
             // IMP-8: Update SSE status indicator
-            var sseStatus = document.getElementById("sse-status");
-            if (sseStatus) {
-                sseStatus.textContent = "Connected";
-                sseStatus.className = "text-[9px] text-positive font-mono";
-            }
+            _setSseStatus("Connected", "ok");
         };
 
         eventSource.onmessage = function (event) {
@@ -270,11 +346,7 @@ function connectSSE() {
             var delay = Math.min(5000 * Math.pow(1.5, sseRetryCount), 60000);
             console.warn("SSE connection lost, reconnecting in", delay, "ms (attempt", sseRetryCount + 1, "/", SSE_MAX_RETRIES, ")");
             // IMP-8: Update SSE status indicator
-            var sseStatus = document.getElementById("sse-status");
-            if (sseStatus) {
-                sseStatus.textContent = "Reconnecting...";
-                sseStatus.className = "text-[9px] text-warning font-mono";
-            }
+            _setSseStatus("Reconnecting…", "warn");
             var es = eventSource;
             if (es) { es.close(); }
             sseRetryCount++;
@@ -315,16 +387,16 @@ function showToast(message, type, duration) {
     }
 
     var colorMap = {
-        info: "bg-blue-600",
-        success: "bg-green-600",
-        warning: "bg-amber-500",
-        error: "bg-red-600",
-        critical: "bg-red-700",
+        info: "bg-accent text-white",
+        success: "bg-accent text-white",
+        warning: "bg-warning text-text-primary",
+        error: "bg-negative text-white",
+        critical: "bg-negative text-white",
     };
 
     var toast = document.createElement("div");
     toast.className =
-        "toast-enter px-4 py-3 rounded-lg shadow-lg text-white text-sm flex items-center gap-2 " +
+        "toast-enter px-4 py-3 rounded-lg shadow-lg text-sm flex items-center gap-2 " +
         (colorMap[type] || colorMap.info);
     toast.setAttribute("role", "status");
 
@@ -336,7 +408,7 @@ function showToast(message, type, duration) {
     if (duration === 0) {
         var dismiss = document.createElement("button");
         dismiss.textContent = "✕";
-        dismiss.className = "ml-2 text-white/70 hover:text-white text-sm";
+        dismiss.className = "ml-2 text-current/70 hover:text-current text-sm";
         dismiss.setAttribute("aria-label", "Dismiss");
         dismiss.onclick = function () {
             removeToast(toast);
@@ -380,15 +452,15 @@ function showBlockingModal(title, message, buttons) {
         var button = document.createElement("button");
         button.textContent = btn.label;
         button.type = "button";
-        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-red-600 text-white hover:bg-red-700" : "bg-surface-sunken text-text-primary hover:bg-border");
+        button.className = "px-4 py-2 text-sm rounded " + (btn.primary ? "bg-negative text-white hover:bg-negative/90" : "bg-surface-sunken text-text-primary hover:bg-border");
         button.onclick = function () {
-            modal.classList.add("hidden");
+            setModalHidden(modal, true);
             if (btn.action) btn.action();
         };
         actionsDiv.appendChild(button);
     });
 
-    modal.classList.remove("hidden");
+    setModalHidden(modal, false);
 }
 
 // ─── Notification Policy (Source.md §13.5 event→surface mapping) ────────────
@@ -520,6 +592,7 @@ var CMD_K_PAGES = [
     { name: "Cortex", href: "/cortex", category: "page" },
     { name: "Debug", href: "/debug", category: "page" },
     { name: "Settings", href: "/settings", category: "page" },
+    { name: "Compare cycles", href: "/compare", category: "page" },
 ];
 
 var CMD_K_ACTIONS = [
@@ -553,7 +626,7 @@ function toggleCmdK() {
     var el = document.getElementById("cmd-k");
     if (!el) return;
     var isHidden = el.classList.contains("hidden");
-    el.classList.toggle("hidden");
+    setModalHidden(el, !isHidden);
     if (isHidden) {
         var input = document.getElementById("cmd-k-input");
         if (input) {
@@ -567,8 +640,12 @@ function toggleCmdK() {
 
 function closeCmdK() {
     var el = document.getElementById("cmd-k");
-    if (el) el.classList.add("hidden");
+    if (el) setModalHidden(el, true);
 }
+
+// Cache for ticker API results by query (debounce + stale-request guard)
+var _cmdKTickerCache = {};
+var _cmdKTickerSeq = 0;
 
 function renderCmdKResults(query) {
     var results = document.getElementById("cmd-k-results");
@@ -579,17 +656,18 @@ function renderCmdKResults(query) {
         return item.name.toLowerCase().indexOf(q) >= 0;
     });
 
-    // If query looks like a ticker (1-5 uppercase letters), add ticker search
-    if (/^[A-Z]{1,5}$/i.test(query)) {
+    // Static "Go to Pipeline filtered" entry for ticker-shaped queries (1-5 letters)
+    var tickerLike = /^[A-Z]{1,5}$/i.test(query);
+    if (tickerLike) {
         var safeQuery = query.toUpperCase().replace(/[^A-Z]/g, "");
         filtered.unshift({
-            name: 'Go to Pipeline filtered: ' + safeQuery,
-            href: '/pipeline?ticker=' + encodeURIComponent(safeQuery),
+            name: 'Open ticker: ' + safeQuery,
+            href: '/ticker/' + encodeURIComponent(safeQuery),
             category: "ticker",
         });
     }
 
-    // If query looks like audit/cycle search
+    // Audit/cycle search
     if (/^(cycle|c-|CYCLE)/i.test(query)) {
         filtered.unshift({
             name: 'Search audit: ' + query.replace(/[<>"'&]/g, ""),
@@ -598,7 +676,7 @@ function renderCmdKResults(query) {
         });
     }
 
-    // If query looks like error code search (E followed by digits)
+    // Error code search
     if (/^E\d{1,3}$/i.test(query)) {
         filtered.unshift({
             name: 'Search debug events: ' + query.toUpperCase(),
@@ -607,9 +685,6 @@ function renderCmdKResults(query) {
         });
     }
 
-    results.innerHTML = "";
-    cmdKActiveIndex = -1;
-
     var categoryLabel = {
         page: "Page",
         action: "Action",
@@ -617,37 +692,98 @@ function renderCmdKResults(query) {
         audit: "Audit",
     };
 
-    filtered.forEach(function (item, idx) {
-        var li = document.createElement("li");
-        li.setAttribute("role", "option");
-        li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-surface-sunken text-sm text-text-primary";
+    function renderItems(items) {
+        results.innerHTML = "";
+        cmdKActiveIndex = -1;
 
-        li.innerHTML =
-            '<span class="text-xs font-mono mr-3 px-1.5 py-0.5 rounded ' +
-            (item.category === "page" ? "bg-blue-50 text-blue-500" : "") +
-            (item.category === "action" ? "bg-green-50 text-green-600" : "") +
-            (item.category === "ticker" ? "bg-amber-50 text-amber-600" : "") +
-            (item.category === "audit" ? "bg-purple-50 text-purple-600" : "") +
-            '">' + (categoryLabel[item.category] || "") + '</span>' +
-            '<span class="flex-1">' + escapeHtml(item.name) + '</span>';
+        items.forEach(function (item, idx) {
+            var li = document.createElement("li");
+            li.setAttribute("role", "option");
+            li.dataset.idx = idx;
+            li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-surface-sunken text-sm text-text-primary";
 
-        li.addEventListener("click", function () {
-            executeCmdKItem(item);
+            var badgeClass =
+                item.category === "page" ? "bg-accent-soft text-accent" :
+                item.category === "action" ? "bg-positive-soft text-positive" :
+                item.category === "ticker" ? "bg-warning-soft text-warning" :
+                item.category === "audit" ? "bg-crucible-soft text-crucible" : "";
+
+            var secondary = item.subtitle ? '<span class="text-xs text-text-muted ml-2 truncate">' + escapeHtml(item.subtitle) + '</span>' : '';
+
+            li.innerHTML =
+                '<span class="text-[10px] font-mono mr-3 px-1.5 py-0.5 rounded ' + badgeClass + '">' +
+                (categoryLabel[item.category] || "") + '</span>' +
+                '<span class="flex-1 flex items-center min-w-0"><span class="font-mono font-semibold shrink-0">' + escapeHtml(item.name) + '</span>' + secondary + '</span>';
+
+            li.addEventListener("click", function () {
+                executeCmdKItem(item);
+            });
+            li.addEventListener("mouseenter", function () {
+                cmdKActiveIndex = idx;
+                updateCmdKActiveItem(results);
+            });
+            results.appendChild(li);
         });
-        li.addEventListener("mouseenter", function () {
-            cmdKActiveIndex = idx;
-            updateCmdKActiveItem(results);
-        });
-        results.appendChild(li);
-    });
 
-    // No results state
-    if (filtered.length === 0) {
-        var empty = document.createElement("li");
-        empty.className = "px-4 py-3 text-sm text-text-muted text-center";
-        empty.textContent = 'No results for "' + query + '"';
-        results.appendChild(empty);
+        if (items.length === 0) {
+            var empty = document.createElement("li");
+            empty.className = "px-4 py-3 text-sm text-text-muted text-center";
+            empty.textContent = 'No results for "' + query + '"';
+            results.appendChild(empty);
+        }
     }
+
+    renderItems(filtered);
+
+    // Live ticker search via /api/universe/search — runs in parallel, appends results
+    // when query has at least 1 letter. Debounced via seq-token to ignore stale fetches.
+    if (query && query.trim().length >= 1) {
+        var seq = ++_cmdKTickerSeq;
+        var cacheKey = query.toLowerCase();
+        if (_cmdKTickerCache[cacheKey]) {
+            mergeTickerResults(_cmdKTickerCache[cacheKey], filtered, renderItems, categoryLabel);
+            return;
+        }
+        fetch('/api/universe/search?q=' + encodeURIComponent(query), {
+            headers: { 'Accept': 'application/json' },
+        })
+        .then(function (r) { return r.ok ? r.json() : { results: [] }; })
+        .then(function (data) {
+            if (seq !== _cmdKTickerSeq) return; // stale
+            var matches = (data && Array.isArray(data.results)) ? data.results.slice(0, 12) : [];
+            _cmdKTickerCache[cacheKey] = matches;
+            mergeTickerResults(matches, filtered, renderItems, categoryLabel);
+        })
+        .catch(function () {
+            if (seq !== _cmdKTickerSeq) return;
+            mergeTickerResults([], filtered, renderItems, categoryLabel);
+        });
+    }
+}
+
+function mergeTickerResults(matches, baseFiltered, renderItems, categoryLabel) {
+    var results = document.getElementById("cmd-k-results");
+    if (!results) return;
+    if (!matches.length) return; // base render already shown
+    var tickerItems = matches.map(function (m) {
+        return {
+            name: m.ticker,
+            subtitle: m.name || '',
+            href: '/ticker/' + encodeURIComponent(m.ticker),
+            category: "ticker",
+        };
+    });
+    // Place ticker API results after the static "Open ticker: XXXX" entry if
+    // one was prepended by the tickerLike branch (1-5 letter queries only).
+    // For longer queries (e.g. full company name "NEBIUS") the static entry
+    // is absent — guard the splice so baseFiltered[0] is never undefined.
+    var merged;
+    if (baseFiltered.length > 0) {
+        merged = [baseFiltered[0]].concat(tickerItems).concat(baseFiltered.slice(1));
+    } else {
+        merged = tickerItems;
+    }
+    renderItems(merged);
 }
 
 function updateCmdKActiveItem(results) {
@@ -751,7 +887,7 @@ function runSmokeTest() {
     }).then(function (data) {
         showToast(data.message || "Smoke-test passed", "success");
         if (data.reload) {
-            setTimeout(function () { window.location.reload(); }, 1500);
+            setTimeout(_partialRefreshMain, 1500);
         }
     }).catch(function (err) {
         showToast("Smoke-test failed: " + err.message, "error");
@@ -820,7 +956,7 @@ function fetchCycleComparison() {
         }).catch(function(err) {
             resultDiv.textContent = "";
             var errP = document.createElement("p");
-            errP.className = "text-sm text-red-600";
+            errP.className = "text-sm text-negative";
             errP.textContent = "Comparison failed: " + err.message;
             resultDiv.appendChild(errP);
         });
@@ -844,7 +980,8 @@ function promoteAllP1Global() {
 }
 
 function showShortcuts() {
-    document.getElementById("shortcut-overlay").classList.remove("hidden");
+    var el = document.getElementById("shortcut-overlay");
+    if (el) setModalHidden(el, false);
 }
 
 // ─── Keyboard Shortcuts (Source.md §13.6) ───────────────────────────────────
@@ -888,14 +1025,15 @@ document.addEventListener("keydown", function (e) {
     // Cmd-R: refresh current page
     if (isCmd && e.key === "r") {
         e.preventDefault();
-        window.location.reload();
+        _partialRefreshMain();
         return;
     }
 
     // Cmd-/: show keyboard shortcut overlay
     if (isCmd && e.key === "/") {
         e.preventDefault();
-        document.getElementById("shortcut-overlay").classList.toggle("hidden");
+        var el = document.getElementById("shortcut-overlay");
+        if (el) setModalHidden(el, !el.classList.contains("hidden"));
         return;
     }
 
@@ -915,7 +1053,7 @@ document.addEventListener("keydown", function (e) {
         }
         closeCmdK();
         var _shortcutOverlay = document.getElementById("shortcut-overlay");
-        if (_shortcutOverlay) _shortcutOverlay.classList.add("hidden");
+        if (_shortcutOverlay) setModalHidden(_shortcutOverlay, true);
         // blocking-modal: Don't close with Esc (requires explicit acknowledgment)
         return;
     }
@@ -980,7 +1118,7 @@ document.addEventListener("click", function (e) {
     }
     var overlay = document.getElementById("shortcut-overlay");
     if (overlay && e.target === overlay) {
-        overlay.classList.add("hidden");
+        setModalHidden(overlay, true);
     }
 });
 
@@ -1005,7 +1143,7 @@ function handleKillSwitch() {
                     }).then(function () {
                         var btn = document.getElementById("kill-switch-btn");
                         if (btn) {
-                            btn.classList.add("bg-red-600");
+                            btn.classList.add("bg-negative");
                             btn.classList.remove("bg-surface-sunken");
                         }
                         showToast("Kill switch ENGAGED. To disengage: Cortex page.", "error", 0);
@@ -1022,31 +1160,89 @@ function handleKillSwitch() {
 //
 // Single-operator, loopback-only system: there is no second-factor gate.
 // Sensitive actions still require an explicit operator action (a click, plus a
-// typed confirmation for destructive ones). confirmAction() executes the action
-// directly; every action is recorded in the hash-chained audit log server-side.
+// typed confirmation for destructive ones — Source.md §13.2). confirmAction()
+// shows a typed-confirm modal when `confirmSymbol` is provided (destructive /
+// §6 operator-confirmed actions); otherwise it POSTs directly (low-stakes).
+// Every action is recorded in the hash-chained audit log server-side.
+
+function _postConfirmedAction(opts) {
+    var body = Object.assign({}, opts.extra || opts.extraPayload || {}, { action_id: opts.actionId || "" });
+    fetch(opts.callbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+        if (data.ok || data.verified) {
+            if (opts.onSuccess) opts.onSuccess(data);
+            show_toast(data.message || "Action completed", "success");
+            if (data.reload) _partialRefreshMain();
+        } else {
+            show_toast(data.error || "Action failed", "error");
+        }
+    }).catch(function (err) {
+        show_toast("Request failed: " + err.message, "error");
+    });
+}
+
+function _showTypedConfirm(opts) {
+    var modal = document.getElementById("confirm-modal");
+    if (!modal) { _postConfirmedAction(opts); return; } // graceful fallback
+    var symbol = String(opts.confirmSymbol);
+    document.getElementById("confirm-modal-title").textContent = opts.description || "Confirm action";
+    document.getElementById("confirm-modal-description").textContent = opts.consequences || "";
+    document.getElementById("confirm-modal-consequences").textContent = opts.danger || "";
+    document.getElementById("confirm-modal-symbol").textContent = symbol;
+    var input = document.getElementById("confirm-modal-input");
+    var confirmBtn = document.getElementById("confirm-modal-confirm");
+    var cancelBtn = document.getElementById("confirm-modal-cancel");
+    input.value = "";
+    confirmBtn.disabled = true;
+
+    function onInput() { confirmBtn.disabled = input.value.trim() !== symbol; }
+    function close() {
+        setModalHidden(modal, true);
+        input.removeEventListener("input", onInput);
+        input.removeEventListener("keydown", onKey);
+        confirmBtn.removeEventListener("click", onConfirm);
+        cancelBtn.removeEventListener("click", close);
+    }
+    function onKey(e) {
+        if (e.key === "Enter" && !confirmBtn.disabled) { close(); _postConfirmedAction(opts); }
+        else if (e.key === "Escape") { close(); }
+    }
+    function onConfirm() { if (confirmBtn.disabled) return; close(); _postConfirmedAction(opts); }
+
+    input.addEventListener("input", onInput);
+    input.addEventListener("keydown", onKey);
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", close);
+    setModalHidden(modal, false);
+    setTimeout(function () { input.focus(); }, 50);
+}
 
 function confirmAction(opts) {
     opts = opts || {};
-    if (opts.callbackUrl) {
-        var body = Object.assign({}, opts.extra || {}, { action_id: opts.actionId || "" });
-        fetch(opts.callbackUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        }).then(function (r) { return r.json(); }).then(function (data) {
-            if (data.ok || data.verified) {
-                if (opts.onSuccess) opts.onSuccess(data);
-                show_toast(data.message || "Action completed", "success");
-                if (data.reload) window.location.reload();
-            } else {
-                show_toast(data.error || "Action failed", "error");
-            }
-        }).catch(function (err) {
-            show_toast("Request failed: " + err.message, "error");
-        });
-        return;
-    }
+    if (opts.confirmSymbol) { _showTypedConfirm(opts); return; }
+    if (opts.callbackUrl) { _postConfirmedAction(opts); return; }
     if (opts.onSuccess) opts.onSuccess({ ok: true });
+}
+
+// Operator-confirmed force-exit of an active position (Source.md §15/§16.4, §13.2).
+// Typed-confirm gate: operator must type the ticker symbol before the POST fires
+// (Non-Negotiable #5 — operator owns disengagement; force-exit is the per-position
+// equivalent). Available on every page so the dashboard + pipeline cards can both
+// call it without per-template script duplication.
+function forceExit(ticker) {
+    confirmAction({
+        actionId: "pipeline.force_exit." + ticker,
+        description: "Force exit " + ticker,
+        consequences: "Transition " + ticker + " to EXIT_THESIS_INVALIDATED. The position leaves the active set; stop-loss monitoring ceases for it.",
+        danger: "This is an operator-confirmed, audit-logged state change.",
+        confirmSymbol: ticker,
+        callbackUrl: "/api/pipeline/force-exit",
+        extra: { ticker: ticker },
+        onSuccess: function () { _partialRefreshMain(); _dashRefresh("force_exit"); }
+    });
 }
 
 
@@ -1218,6 +1414,15 @@ onSSE("system", function (data) {
     if (data.event_type === "system.kill_switch_disengaged") {
         handleNotification("kill_switch_disengaged", data);
     }
+    // Audit-chain failure — health card must reflect it immediately.
+    if (data.event_type === "system.audit_chain_failure" || data.event === "audit_chain_failure") {
+        _dashRefresh("audit_chain_failure");
+    }
+    // Stop-loss triggered by the stoploss daemon (async, not mid-cycle) — refresh
+    // positions + decisions so the operator sees the exit without a manual reload.
+    if (data.event_type === "stop_loss_triggered" || data.event === "stop_loss_triggered") {
+        _dashRefresh("stop_loss_triggered");
+    }
     // System heartbeat
     if (data.event_type === "system.heartbeat") {
         var indicator = document.getElementById("system-status");
@@ -1248,6 +1453,51 @@ function _hideCycleTicker() {
     var running = document.getElementById("cycle-running-label");
     if (idle) idle.style.display = "none";
     if (running) running.style.display = "none";
+}
+
+// Morph a live-updating value element with a tween+flash (respects prefers-reduced-motion).
+// Falls back to a plain textContent swap when the animation module is unavailable.
+function _morphVerdict(elementId, value, opts) {
+    var el = document.getElementById(elementId);
+    if (!el) return;
+    if (window.PMACS_ANIM && typeof PMACS_ANIM.sseUpdate === "function") {
+        PMACS_ANIM.sseUpdate(elementId, value, opts || {});
+    } else {
+        el.textContent = value;
+    }
+}
+
+// Partial refresh of #main-content via htmx — no full-page reload, no white flash.
+// Falls back to a hard reload only when htmx is unavailable.
+function _partialRefreshMain() {
+    if (typeof htmx === "undefined" || !document.getElementById("main-content")) {
+        window.location.reload();
+        return;
+    }
+    htmx.ajax("GET", window.location.pathname, {
+        target: "#main-content",
+        select: "#main-content",
+        swap: "outerHTML transition:200ms"
+    });
+}
+
+// ─── SSE-triggered dashboard region refresh (Source.md §14, Architecture.md §4.4) ──
+// Dispatches a `pmacs:refresh` custom event on <body>. Dashboard region containers
+// carry hx-trigger="pmacs:refresh from:body" + hx-get=<partial>, so htmx fetches
+// and outerHTML-swaps just that region — no full-page reload, no bespoke JS per
+// region (generalises the existing sparkline pattern). No-op when no dashboard
+// region is on the page (e.g. on /agents). cycle_complete keeps its own debounced
+// #main-content refresh; this covers the async events that don't fire mid-cycle:
+// trade fills, stop-loss, audit-chain failure, mutation.
+function _dashRefresh(reason) {
+    if (typeof document === "undefined" || !document.body) return;
+    if (!document.getElementById("dash-positions") &&
+        !document.getElementById("dash-decisions") &&
+        !document.getElementById("dash-health") &&
+        !document.getElementById("dash-mutation")) return;
+    try {
+        document.body.dispatchEvent(new CustomEvent("pmacs:refresh", { detail: { reason: reason || "" } }));
+    } catch (e) { /* CustomEvent unsupported — silently skip */ }
 }
 
 onSSE("cycle", function (data) {
@@ -1282,7 +1532,7 @@ onSSE("cycle", function (data) {
                 htmx.ajax("GET", window.location.pathname, {
                     target: "#main-content",
                     select: "#main-content",
-                    swap: "outerHTML"
+                    swap: "outerHTML transition:200ms"
                 });
             }, 800);
         }
@@ -1308,6 +1558,7 @@ onSSE("cycle", function (data) {
 onSSE("trade", function (data) {
     if (data.event_type === "trade.filled" || data.event === "filled") {
         handleNotification(data.mode === "LIVE" ? "trade_filled_live" : "trade_filled_paper", data);
+        _dashRefresh("trade_filled");
     }
     if (data.event_type === "trade.signed") {
         showToast("Trade signed: " + (data.ticker || ""), "info");
@@ -1326,11 +1577,9 @@ onSSE("trade", function (data) {
 // Decision events
 onSSE("decision", function (data) {
     if (data.event_type === "decision.arbitrated") {
-        var verdictEl = document.getElementById("latest-verdict");
-        if (verdictEl) {
-            verdictEl.textContent = (data.ticker || "") + ": " + (data.decision || "") +
-                " (p\u2191" + (data.p_up || "\u2014") + " p\u2193" + (data.p_down || "\u2014") + ")";
-        }
+        var arbText = (data.ticker || "") + ": " + (data.decision || "") +
+            " (p\u2191" + (data.p_up || "\u2014") + " p\u2193" + (data.p_down || "\u2014") + ")";
+        _morphVerdict("latest-verdict", arbText);
     }
     if (data.event_type === "decision.final") {
         // Only show toast for actionable decisions — SKIP is expected and noisy
@@ -1338,10 +1587,11 @@ onSSE("decision", function (data) {
             var cPct = ((data.conviction || 0) * 100).toFixed(0);
             showToast((data.ticker || "") + ": " + data.verdict + " (" + cPct + "% conviction)", "info");
         }
-        // Always update the verdict display element
-        var verdictEl2 = document.getElementById("latest-verdict");
-        if (verdictEl2) {
-            verdictEl2.textContent = (data.ticker || "") + ": " + (data.verdict || "—");
+        // Always update the verdict display element (morph + flash when motion allowed)
+        _morphVerdict("latest-verdict", (data.ticker || "") + ": " + (data.verdict || "—"));
+        // Live conviction tween when a numeric element is present on the page
+        if (typeof data.conviction === "number") {
+            _morphVerdict("latest-conviction", Math.round((data.conviction || 0) * 100), { suffix: "%" });
         }
     }
     if (data.event_type) {
@@ -1406,9 +1656,11 @@ onSSE("agent", function (data) {
 onSSE("mutation", function (data) {
     if (data.event === "candidate_ready" || data.event_type === "mutation.candidate_ready") {
         handleNotification("mutation_candidate_ready", data);
+        _dashRefresh("mutation_candidate_ready");
     }
     if (data.event === "mutation_approved" || data.event_type === "mutation.promoted") {
         handleNotification("mutation_approved", data);
+        _dashRefresh("mutation_approved");
     }
     if (data.event_type) {
         handleNotification(data.event_type, data);
@@ -1443,7 +1695,7 @@ onSSE("cycle", function (data) {
 function refreshSparkline(metric) {
     var container = document.querySelector('[data-sparkline-metric="' + metric + '"]');
     if (!container) return;
-    var activeBtn = document.querySelector(".sparkline-window-btn.bg-blue-50");
+    var activeBtn = document.querySelector(".sparkline-window-btn.bg-accent-soft");
     var windowParam = activeBtn ? (activeBtn.getAttribute("data-window") || "1W") : "1W";
     fetch("/api/dashboard/sparkline?metric=" + encodeURIComponent(metric) + "&window=" + encodeURIComponent(windowParam))
         .then(function (resp) {
@@ -1485,13 +1737,13 @@ function renderSparklineSVG(points) {
     var trendClass = 'sparkline-' + trend;
     // Area fill polygon: line points + bottom corners
     var areaPoints = pts.join(" ") + " 100," + VB_H + " 0," + VB_H;
-    return '<div class="sparkline-container ' + trendClass + '">' +
+    return '<div class="sparkline-container sparkline-fade-in ' + trendClass + '">' +
         '<svg viewBox="0 0 100 ' + VB_H + '" preserveAspectRatio="none" class="w-full" style="height:40px">' +
         '<polygon class="sparkline-area" points="' + areaPoints + '"/>' +
         '<polyline class="sparkline-line" points="' + pts.join(" ") + '"/>' +
         '</svg>' +
         '<div class="sparkline-point absolute w-1.5 h-1.5 rounded-full' +
-        (trend === 'positive' ? ' bg-green-600' : ' bg-red-500') +
+        (trend === 'positive' ? ' bg-positive' : ' bg-negative') +
         '" style="left:100%;top:' + lastY + 'px;transform:translate(-50%,-50%)"></div>' +
         '</div>';
 }
@@ -1509,13 +1761,13 @@ function refreshAllSparklines(window, clickedBtn) {
     var container = document.getElementById("sparkline-window-btns");
     if (container) {
         container.querySelectorAll(".sparkline-window-btn").forEach(function (btn) {
-            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.remove("bg-accent-soft", "text-accent");
             btn.classList.add("text-text-muted");
         });
     }
     if (clickedBtn) {
         clickedBtn.classList.remove("text-text-muted");
-        clickedBtn.classList.add("bg-blue-50", "text-blue-600");
+        clickedBtn.classList.add("bg-accent-soft", "text-accent");
     }
 
     // Fetch all sparkline metrics in parallel
@@ -1648,7 +1900,8 @@ onSSE("cycle", function (data) {
         var last = cycleTimings[cycleTimings.length - 1];
         if (!last) return;
         var duration = ((Date.now() - last.start) / 1000).toFixed(1);
-        el.textContent = duration + "s";
+        // Tween + flash the cycle-duration readout (falls back to plain swap)
+        _morphVerdict("cycle-timing", parseFloat(duration), { suffix: "s", decimals: 1 });
         // Keep last 20
         if (cycleTimings.length > 20) cycleTimings.shift();
     }
@@ -1744,11 +1997,11 @@ document.addEventListener("htmx:afterSwap", function (event) {
         navLinks.forEach(function (link) {
             var href = link.getAttribute("href");
             if (href === currentPath) {
-                link.classList.add("bg-blue-50", "text-blue-600", "font-medium");
-                link.style.borderLeft = "2px solid #2563eb";
+                link.classList.add("bg-accent-soft", "text-accent", "font-medium");
+                link.style.borderLeft = "2px solid var(--accent)";
                 link.setAttribute("aria-current", "page");
             } else {
-                link.classList.remove("bg-blue-50", "text-blue-600", "font-medium");
+                link.classList.remove("bg-accent-soft", "text-accent", "font-medium");
                 link.style.borderLeft = "";
                 link.removeAttribute("aria-current");
             }
@@ -1775,10 +2028,86 @@ document.addEventListener("htmx:afterRequest", function (event) {
         if (!container) return;
         var buttons = container.querySelectorAll(".sparkline-window-btn");
         buttons.forEach(function (btn) {
-            btn.classList.remove("bg-blue-50", "text-blue-600");
+            btn.classList.remove("bg-accent-soft", "text-accent");
             btn.classList.add("text-text-muted");
         });
         elt.classList.remove("text-text-muted");
-        elt.classList.add("bg-blue-50", "text-blue-600");
+        elt.classList.add("bg-accent-soft", "text-accent");
     }
 });
+
+/* ─── Memo page: reveal-once-per-session + mobile bottom-sheet ────────── */
+
+(function () {
+    "use strict";
+
+    var memoDeck = document.querySelector(".memo-deck");
+    if (memoDeck) {
+        // Reveal-once-per-session gate (per ticker key).
+        // First visit in session: sections animate in. Subsequent visits: render
+        // immediately so the page feels fast (no re-animation on each refresh).
+        var tickerEl = memoDeck.querySelector("[data-memo-ticker]") || memoDeck;
+        var tickerKey = memoDeck.getAttribute("data-memo-ticker") || "default";
+        var storageKey = "pmacs-memo-revealed-" + tickerKey;
+
+        var sections = memoDeck.querySelectorAll(".memo-reveal-once");
+        if (sections.length) {
+            var alreadyRevealed = false;
+            try {
+                alreadyRevealed = !!sessionStorage.getItem(storageKey);
+            } catch (e) {
+                alreadyRevealed = false;
+            }
+
+            if (alreadyRevealed) {
+                sections.forEach(function (s) { s.classList.add("is-revealed"); });
+            } else {
+                var delay = 0;
+                sections.forEach(function (s) {
+                    s.style.transitionDelay = delay + "ms";
+                    s.classList.add("is-revealed");
+                    delay += 70;
+                });
+                try {
+                    sessionStorage.setItem(storageKey, "1");
+                } catch (e) {
+                    // Ignore quota/privacy errors.
+                }
+            }
+        }
+    }
+
+    /* Mobile bottom-sheet for the memo sidebar — always wired (the toggle
+       only shows on <1200px, but the handler is harmless on larger screens). */
+    var toggle = document.querySelector(".memo-sidebar-toggle");
+    var sidebar = document.querySelector(".memo-sidebar");
+    var scrim = document.querySelector(".memo-sidebar__scrim");
+
+    if (toggle && sidebar) {
+        var open = function () {
+            sidebar.classList.add("is-open");
+            if (scrim) scrim.classList.add("is-open");
+            toggle.setAttribute("aria-expanded", "true");
+        };
+        var close = function () {
+            sidebar.classList.remove("is-open");
+            if (scrim) scrim.classList.remove("is-open");
+            toggle.setAttribute("aria-expanded", "false");
+        };
+        toggle.addEventListener("click", function () {
+            if (sidebar.classList.contains("is-open")) {
+                close();
+            } else {
+                open();
+            }
+        });
+        if (scrim) {
+            scrim.addEventListener("click", close);
+        }
+        document.addEventListener("keydown", function (ev) {
+            if (ev.key === "Escape" && sidebar.classList.contains("is-open")) {
+                close();
+            }
+        });
+    }
+})();

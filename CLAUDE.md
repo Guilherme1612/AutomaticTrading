@@ -2,7 +2,7 @@
 
 ## Identity
 
-PMACS is a single-operator, local-only, catalyst-driven, LLM-assisted decision engine with deterministic arbitration. It runs local LLMs (Qwen3.6-35B-A3B) for narrative analysis and Python for math, sizing, arbitration, and execution. LLMs never decide, never math, never sign. The system trades paper money ($5K) from day 1 and graduates to live capital only after empirical performance gates pass.
+PMACS is a single-operator, mode-pure (local or API inference), catalyst-driven, LLM-assisted decision engine with deterministic arbitration. In local mode it runs local LLMs (Qwen3.6-35B-A3B) for narrative analysis; in API mode it calls the configured cloud provider (OpenAI/OpenRouter/Anthropic/other). Python does the math, sizing, arbitration, and execution. LLMs never decide, never math, never sign. The system trades paper money ($5K) from day 1 and graduates to live capital only after empirical performance gates pass.
 
 ## The Four-File Spec
 
@@ -14,7 +14,7 @@ The canonical specification lives in `spec/`. **These files are the source of tr
 
 2. **`spec/Architecture.md`** — Read second. Tells you HOW it's built. 7-layer architecture, process topology, IPC, storage schemas (5 stores), deterministic engines, cycle orchestration sequence, kill switch, Mutation Engine process, anti-patterns. **If you're writing code, the answer is here.**
 
-3. **`spec/Agents.md`** — Read when touching LLM code. Per-persona prompts, GBNF grammars, Pydantic output schemas, sanity validators, the Crucible adversarial loop, Failure Diagnostic Engine (18 taxonomy types), Mutation Engine candidate generation rules, episodic context injection, prompt-injection defense, hallucination defense. **If you're working with LLM outputs, the answer is here.**
+3. **`spec/Agents.md`** — Read when touching LLM code. Per-persona prompts, GBNF grammars, Pydantic output schemas, sanity validators, the Crucible adversarial loop, Failure Diagnostic Engine (18 outcome + 5 auditor reasoning-flaw taxonomy types), Mutation Engine candidate generation rules, episodic context injection, prompt-injection defense, hallucination defense. **If you're working with LLM outputs, the answer is here.**
 
 4. **`spec/Phases.md`** — Read to decide what to build next. 15 numbered build phases with explicit exit tests, file-by-file dependency graph, mode promotion/demotion gates with numerical thresholds, risk checkpoints. **If you're unsure whether to start a task, check here first.**
 
@@ -41,7 +41,7 @@ These are absolute. They are not guidelines. Violating any of them is a bug.
 1. **LLMs never sign trades.** Trades are Ed25519-signed by `pmacs-execution`. An LLM cannot directly cause a trade.
 2. **LLMs never math.** Probabilities are combined, sized, and arbitrated by Python. LLMs produce structured outputs only.
 3. **Every state transition is hash-chained.** Audit log with `prev_sha256`. Tampering with one line breaks the chain.
-4. **Local-only execution.** No cloud LLM calls. No telemetry. The inference process is pf-blocked from internet.
+4. **Mode-pure inference.** The active backend sets the mode for the whole cycle. *Local mode* (llama-server/Ollama): no cloud LLM calls; inference `pf`-blocked from internet. *API mode* (OpenAI/OpenRouter/Anthropic/other): inference calls the configured cloud provider (no `pf`-block on inference). No telemetry in either mode. No per-persona backend mixing — all personas use the active backend. Data fetching uses the internet in both modes.
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
 ## Anti-Patterns (enforce via pre-commit + CI)
@@ -84,7 +84,7 @@ PMACS has 15 build phases defined in `spec/Phases.md §2`. Map them to GSD phase
 | Phase 3 | Phase 5-6 (Personas) | All 7 analysis personas operational |
 | Phase 4 | Phase 7-8 (Pipeline + Paper) | Full pipeline, paper trading, wizard — **PAPER-READY** |
 | Phase 5 | Phase 9-10 (Monitoring + Dashboard) | Stop-loss, re-eval, all 7 UI pages |
-| Phase 6 | Phase 11-12 (Calibration + FDE) | Flywheel passive components, 18 taxonomy types |
+| Phase 6 | Phase 11-12 (Calibration + FDE) | Flywheel passive components, 18 outcome + 5 reasoning-flaw taxonomy types |
 | Phase 7 | Phase 13-14 (Episodic + Mutation) | Active flywheel — **FLYWHEEL-READY** |
 | Phase 8 | Phase 15 (Polish) | Production-quality — **LIVE-READY** |
 
@@ -170,11 +170,11 @@ All in `config/`:
 
 | Process | Port | Responsibility |
 |---|---|---|
-| pmacs-inference | :8080 | llama-server (pf-blocked from internet) |
+| pmacs-inference | internal | llama-server (local mode, pf-blocked from internet) or the configured cloud provider (API mode) |
 | pmacs-cortex | daemon | Health monitoring, kill switch, boot detection |
 | pmacs-cortex-self-check | daemon | Meta-monitor: pings cortex every 60s |
 | pmacs-execution | UDS | Trade signing (Ed25519) + broker submission |
-| pmacs-nervous | :8000 | Orchestration, SSE, write API |
+| pmacs-nervous | :8000 | Orchestration, SSE, write API, dashboard UI |
 | pmacs-stoploss | daemon | RTH position monitoring every 30 min |
 | pmacs-mutation | daemon | Active flywheel (dormant first 50 cycles) |
 | pmacs-dashboard | :8000 | Read-only web UI, served by pmacs-nervous (loopback only) |

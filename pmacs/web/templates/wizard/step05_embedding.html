@@ -20,7 +20,7 @@
                 <span>{{ embedding_result.get("progress_pct", 0) }}%</span>
             </div>
             <div class="w-full bg-surface-overlay rounded-full h-2">
-                <div class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                <div class="bg-accent h-2 rounded-full transition-all duration-300"
                      style="width: {{ embedding_result.get("progress_pct", 0) }}%"></div>
             </div>
         </div>
@@ -58,7 +58,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Next
         </button>
         {% else %}
@@ -66,7 +66,7 @@
                 hx-target="#wizard-content"
                 hx-swap="innerHTML transition:200ms"
                 hx-indicator="#wizard-loader"
-                class="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors">
+                class="px-6 py-2.5 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent transition-colors">
             Download &amp; Verify
         </button>
         {% endif %}

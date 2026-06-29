@@ -31,11 +31,11 @@
                 <div class="min-w-0">
                     <h3 id="current-ticker-heading" class="text-[10px] sm:text-xs font-semibold text-text-muted uppercase tracking-widest mb-0.5">{{ 'Analyzing' if is_cycle_running else 'Last Analyzed' if last_analyzed_ticker else 'Ready' }}</h3>
                     {% if current_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ current_ticker }}</span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem]"><a href="/ticker/{{ current_ticker }}" class="hover:underline hover:text-accent">{{ current_ticker }}</a></span>
                     {% elif last_analyzed_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ last_analyzed_ticker }}</span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem]"><a href="/ticker/{{ last_analyzed_ticker }}" class="hover:underline hover:text-accent">{{ last_analyzed_ticker }}</a></span>
                     {% else %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight hidden"></span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem] hidden"></span>
                     <span class="text-xs sm:text-sm text-text-muted">Start a cycle to begin analysis</span>
                     {% endif %}
                 </div>
@@ -44,7 +44,7 @@
                 {% if next_ticker %}
                 <div id="next-up-panel" class="text-right hidden sm:block">
                     <span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Next</span>
-                    <span id="next-ticker" class="font-mono text-sm font-semibold text-text-secondary block">{{ next_ticker }}</span>
+                    <span id="next-ticker" class="font-mono text-sm font-semibold text-text-secondary block"><a href="/ticker/{{ next_ticker }}" class="hover:underline hover:text-accent">{{ next_ticker }}</a></span>
                 </div>
                 {% else %}
                 <div id="next-up-panel" class="hidden"><span id="next-ticker" class="hidden"></span></div>
@@ -61,21 +61,30 @@
 <!-- Quick Research + Solo Analysis -->
 <div class="card card-elevated rounded-2xl mb-4 sm:mb-6 reveal" data-stagger>
     <div class="flex items-center gap-2 sm:gap-3">
-        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0">
-            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-crucible-soft flex items-center justify-center shrink-0">
+            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-crucible" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
         </div>
-        <input id="solo-ticker-input" type="text" placeholder="Research a ticker... (e.g. AAPL, NVDA)"
-               class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm font-mono bg-transparent border-none text-text-primary placeholder-text-muted/50 focus:outline-none"
-               maxlength="10" autocomplete="off" spellcheck="false"
-               onkeydown="if(event.key==='Enter')runSoloAnalysis()">
+        {# Picker chip — opens the autocomplete overlay (Universe-style).
+           Renders an empty placeholder until _onSoloTickerPicked() selects a row. #}
+        <button type="button" id="solo-picker-btn" onclick="_openSoloTickerPicker()"
+                aria-haspopup="dialog"
+                aria-label="Choose a ticker to research"
+                class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm bg-transparent border border-dashed border-border-subtle rounded-xl text-left text-text-muted hover:border-crucible/40 hover:text-text-primary transition-colors flex items-center justify-between gap-2">
+            <span id="solo-picker-label" class="font-mono truncate">Choose a ticker to research</span>
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </button>
         <button type="button" id="solo-run-btn"
                 onclick="runSoloAnalysis()"
-                class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-violet-500/10 text-violet-500 rounded-xl hover:bg-violet-500/20 transition-colors whitespace-nowrap">
+                class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-crucible-soft text-crucible rounded-xl hover:bg-crucible/20 transition-colors whitespace-nowrap">
             Analyze
         </button>
     </div>
+    {# Inline helper — shown only when Analyze is pressed with no selection. Persists until a ticker is picked. #}
+    <p id="solo-needs-selection" class="hidden mt-2 text-xs text-warning">
+        Pick a ticker above to start research.
+    </p>
     <div id="solo-status" class="hidden mt-2 pt-2 border-t border-border/30">
         <p class="text-xs text-text-muted" id="solo-status-text">Preparing...</p>
     </div>
@@ -85,7 +94,7 @@
 <div id="result-cards-section" class="hidden mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="w-2 h-2 rounded-full bg-positive"></span>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Completed</h3>
             <span id="result-cards-counter" class="px-2 py-0.5 text-[10px] font-mono bg-surface-sunken rounded-lg text-text-muted"></span>
         </div>
@@ -129,7 +138,27 @@
     'short_interest': {'icon': 'arrow-down', 'color': 'rose'},
     'forensics': {'icon': 'search', 'color': 'cyan'},
     'crucible': {'icon': 'fire', 'color': 'purple'},
-    'gatekeeper': {'icon': 'lock', 'color': 'slate'}
+    'gatekeeper': {'icon': 'lock', 'color': 'slate'},
+    'bull_advocate': {'icon': 'trending', 'color': 'amber'},
+    'bear_advocate': {'icon': 'arrow-down', 'color': 'orange'},
+    'cross_persona_auditor': {'icon': 'search', 'color': 'violet'},
+    'valuation_agent': {'icon': 'globe', 'color': 'emerald'},
+    'memo_writer': {'icon': 'bolt', 'color': 'slate'},
+    'simulation': {'icon': 'shield', 'color': 'blue'},
+    'episodic_context': {'icon': 'eye', 'color': 'cyan'}
+} %}
+{# Idle-state hint per agent — non-signal personas show their role instead of
+   the generic "waiting for cycle" so the full roster is self-explanatory. #}
+{% set agent_idle_text = {
+    'gatekeeper': 'Runs after all agents finish',
+    'crucible': 'Runs after arbitration',
+    'bull_advocate': 'Runs in wave-2 debate',
+    'bear_advocate': 'Runs in wave-2 debate',
+    'cross_persona_auditor': 'Runs in wave-2 debate',
+    'valuation_agent': 'Runs after arbitration (memo-only)',
+    'memo_writer': 'Runs after decision',
+    'simulation': 'Deterministic fallback only',
+    'episodic_context': 'Pre-cycle context build'
 } %}
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
     {% for persona in personas %}
@@ -187,7 +216,7 @@
                         </span>
                         {% endif %}
                     </div>
-                    <p class="text-[10px] text-text-muted/70 truncate">{{ persona.role }}</p>
+                    <p class="text-[10px] text-text-muted/80 truncate">{{ persona.role }}</p>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
                     {% if persona.status == 'complete' and persona.confidence is defined and persona.confidence > 0 %}
@@ -242,7 +271,7 @@
                 <div class="persona-progress mb-1.5">
                     <div class="persona-progress-fill" style="width: 0%" data-progress-bar></div>
                 </div>
-                <p class="text-[11px] text-text-muted" data-status-text>{{ 'Runs after all agents finish' if persona.id == 'gatekeeper' else 'Idle — waiting for cycle' }}</p>
+                <p class="text-[11px] text-text-muted" data-status-text>{% if agent_idle_text is defined and agent_idle_text %}{{ agent_idle_text.get(persona.id, 'Idle — waiting for cycle') }}{% else %}Idle — waiting for cycle{% endif %}</p>
             {% endif %}
             </div>
 
@@ -268,15 +297,32 @@
                     {% endif %}
                     {% if persona.analysis|length > 150 or (persona.evidence_cited and persona.evidence_cited|length > 3) %}
                     <button type="button"
-                        onclick='openAgentModal({{ persona.name | tojson | safe }}, {{ persona.analysis | tojson | safe }}, {{ (persona.evidence_cited or []) | tojson | safe }}, {{ persona.confidence | default(0) | tojson | safe }})'
+                        data-persona-name="{{ persona.name | e }}"
+                        data-analysis="{{ persona.analysis | e }}"
+                        data-evidence="{{ (persona.evidence_cited or []) | tojson }}"
+                        data-confidence="{{ persona.confidence | default(0) }}"
+                        onclick="openAgentModal(this.dataset.personaName, this.dataset.analysis, JSON.parse(this.dataset.evidence), Number(this.dataset.confidence))"
                         class="mt-1 text-[10px] text-accent hover:underline font-medium">
                         View full analysis →
                     </button>
                     {% endif %}
                 {% endif %}
             </div>
+            {# Audit-failure chip: surfaces a CITATION_GAP / CONCLUSION_UNSUPPORTED
+               warning when a persona completed but produced no narrative so the
+               operator sees WHY the card body is empty without diving into the
+               audit log. #}
+            {% if persona.status == 'complete' and not (persona.key_signal or persona.analysis or persona.evidence_cited) %}
+            <div class="mt-2 pt-2 border-t border-border-subtle">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                      title="Persona completed but produced no narrative — auditor flagged CITATION_GAP / CONCLUSION_UNSUPPORTED. Check the audit log for details.">
+                    <span aria-hidden="true">⚠</span>
+                    <span>Audit: no narrative</span>
+                </span>
+            </div>
+            {% endif %}
             {% if persona.completed_at %}
-            <p class="text-[9px] text-text-muted/50 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
+            <p class="text-[9px] text-text-muted/80 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
             {% endif %}
         </div>
         </div>
@@ -288,8 +334,8 @@
 <div id="comm-layer" class="rounded-2xl border border-border/40 bg-surface-elevated mb-8 reveal" data-stagger>
     <div class="flex flex-wrap items-center justify-between gap-2 p-4 pb-0 mb-3">
         <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                <svg class="w-3.5 h-3.5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <div class="w-7 h-7 rounded-lg bg-crucible-soft flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-crucible" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             </div>
             <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">Signal Flow</h3>
         </div>
@@ -309,7 +355,7 @@
 
     <!-- Process tab: 5-step pipeline timeline -->
     <div id="viz-process" class="space-y-2 py-2">
-        <p id="process-idle-hint" class="text-[11px] text-text-muted text-center py-1 pb-2 opacity-60">Waiting for a cycle to start — stages will animate live</p>
+        <p id="process-idle-hint" class="text-[11px] text-text-muted text-center py-1 pb-2">Waiting for a cycle to start — stages will animate live</p>
         <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-xl bg-surface-sunken/30" data-pipeline-step="data_fetch">
             <span class="w-2 h-2 rounded-full bg-surface-sunken border border-border-strong shrink-0" data-step-dot></span>
             <span class="text-xs font-medium text-text-primary w-28 sm:w-36 shrink-0">Data Fetch</span>
@@ -358,7 +404,7 @@
             Run a cycle to see agent signals.
         </div>
         <div id="signals-table" class="hidden">
-            <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
+            <div class="overflow-x-auto" tabindex="0" style="-webkit-overflow-scrolling:touch">
             <div class="grid grid-cols-[1fr_80px_80px_70px_50px] gap-x-3 gap-y-0 text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 pb-1.5 border-b border-border-subtle mb-1 min-w-[400px]">
                 <span>Persona</span><span class="text-center">Bullish</span><span class="text-center">Bearish</span><span class="text-center">Vote</span><span class="text-right">Evid</span>
             </div>
@@ -412,8 +458,8 @@
 <div class="rounded-2xl border border-border/40 bg-surface-elevated p-4 mb-8 reveal" data-stagger>
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                <svg class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            <div class="w-7 h-7 rounded-lg bg-warning-soft flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
             </div>
             <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Session Stats</h3>
         </div>
@@ -427,7 +473,7 @@
             {% set total = [vc.STRONG_BUY + vc.BUY + vc.HOLD + vc.SKIP, 1]|max %}
             <div class="bg-positive transition-all duration-500" style="width: {{ (vc.STRONG_BUY / total * 100)|int }}%" title="{{ vc.STRONG_BUY }} STRONG_BUY"></div>
             <div class="bg-accent transition-all duration-500" style="width: {{ (vc.BUY / total * 100)|int }}%" title="{{ vc.BUY }} BUY"></div>
-            <div class="bg-amber-400 transition-all duration-500" style="width: {{ (vc.HOLD / total * 100)|int }}%" title="{{ vc.HOLD }} HOLD"></div>
+            <div class="bg-warning transition-all duration-500" style="width: {{ (vc.HOLD / total * 100)|int }}%" title="{{ vc.HOLD }} HOLD"></div>
             <div class="bg-negative transition-all duration-500" style="width: {{ (vc.SKIP / total * 100)|int }}%" title="{{ vc.SKIP }} SKIP"></div>
         </div>
         <div class="flex justify-between mt-1.5">
@@ -440,7 +486,7 @@
                 <span class="text-[10px] font-mono text-text-muted">BUY {{ vc.BUY }}</span>
             </div>
             <div class="flex items-center gap-1">
-                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span class="w-2 h-2 rounded-full bg-warning"></span>
                 <span class="text-[10px] font-mono text-text-muted">HOLD {{ vc.HOLD }}</span>
             </div>
             <div class="flex items-center gap-1">
@@ -478,8 +524,8 @@
             <span class="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Live Activity</span>
             <span id="session-pipeline-stage" class="text-[10px] font-mono font-medium text-text-muted px-2 py-0.5 bg-surface-sunken rounded-lg">{{ 'Idle' if not is_cycle_running else 'Running' }}</span>
         </div>
-        <div id="cycle-log-entries" class="max-h-24 overflow-y-auto space-y-0.5">
-            <p id="cycle-log-empty" class="text-[10px] text-text-muted/50 text-center py-2">Activity will appear here during cycles</p>
+        <div id="cycle-log-entries" class="max-h-24 overflow-y-auto space-y-0.5" tabindex="0">
+            <p id="cycle-log-empty" class="text-[10px] text-text-muted/80 text-center py-2">Activity will appear here during cycles</p>
         </div>
     </div>
 </div>
@@ -487,7 +533,7 @@
 <!-- Bottom section: decision summary -->
 <div class="card card-elevated reveal" data-stagger>
     <div class="flex items-center gap-2 mb-4">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+        <span class="w-2 h-2 rounded-full bg-positive"></span>
         <h3 class="text-xs font-semibold text-text-primary uppercase tracking-widest">Decision Summary</h3>
     </div>
     <div id="decision-summary-content">
@@ -570,7 +616,7 @@ function _verdictStyle(verdict) {
     var map = {
         "STRONG_BUY": {bg: "bg-positive-soft", text: "text-positive"},
         "BUY":        {bg: "bg-accent-soft",   text: "text-accent"},
-        "HOLD":       {bg: "bg-amber-400/10",  text: "text-amber-400"},
+        "HOLD":       {bg: "bg-warning-soft",  text: "text-warning"},
         "SKIP":       {bg: "bg-negative-soft", text: "text-negative"},
     };
     return map[verdict] || {bg: "bg-surface-sunken", text: "text-text-muted"};
@@ -580,7 +626,7 @@ function _buildResultCard(result) {
     var v = _verdictStyle(result.verdict);
     var convPct = Math.round((result.conviction || 0) * 100);
     var convWidth = Math.min(convPct, 100);
-    var convColor = convPct >= 60 ? "bg-positive" : convPct >= 30 ? "bg-accent" : convPct >= 10 ? "bg-amber-400" : "bg-negative";
+    var convColor = convPct >= 60 ? "bg-positive" : convPct >= 30 ? "bg-accent" : convPct >= 10 ? "bg-warning" : "bg-negative";
 
     // Agent vote summary
     var bulls = 0, bears = 0, neutrals = 0;
@@ -651,8 +697,8 @@ function _buildResultCard(result) {
 
         crucibleHtml +
 
-        '<a href="/memo/' + escapeHtml(result.ticker) + '" ' +
-        'class="mt-1 text-[11px] text-accent hover:underline font-medium self-start">→ View memo</a>';
+        '<a href="/ticker/' + escapeHtml(result.ticker) + '#personas" ' +
+        'class="mt-1 text-[11px] text-accent hover:underline font-medium self-start">→ View in workspace</a>';
 
     return card;
 }
@@ -816,7 +862,7 @@ function openAgentModal(personaName, analysis, evidence, confidence) {
     }
     if (modal) {
         document.getElementById("read-more-modal-title").textContent = title;
-        document.getElementById("read-more-modal-content").innerHTML = html || '<p class="text-text-muted">No data available.</p>';
+        document.getElementById("read-more-modal-content").innerHTML = html || '<p class="text-text-muted">No signal data for this persona yet — it has not produced output in a recorded cycle.</p>';
         modal.classList.remove("hidden");
         modal.focus();
     }
@@ -992,7 +1038,7 @@ function _updateReadyPanelActive(ticker) {
     var panel = document.getElementById("current-ticker-panel");
     if (tickerEl) { tickerEl.textContent = ticker; tickerEl.classList.remove("hidden"); }
     if (btn) btn.classList.add("hidden");
-    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-blue-500 anim-breathing";
+    if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-accent anim-breathing";
     if (heading) heading.textContent = "Current Ticker";
     if (panel) panel.classList.add("card-accent-blue");
 }
@@ -1007,7 +1053,7 @@ function _resetReadyPanel() {
     var lastTicker = tickerEl ? tickerEl.textContent.trim() : "";
     if (lastTicker) {
         // Keep the ticker visible but change styling to "last analyzed" state
-        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-green-500";
+        if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-positive";
         if (heading) heading.textContent = "Last Analyzed";
         if (tickerEl) tickerEl.className = "font-mono text-2xl font-bold text-text-secondary truncate max-w-xs";
         if (btn) { btn.classList.remove("hidden"); btn.textContent = "Re-analyze"; }
@@ -1083,8 +1129,8 @@ function _renderConviction(arb, crucible) {
 
     // Bootstrap thresholds (conviction.py L79-85)
     var verdict = conviction >= 0.40 ? "STRONG_BUY" : conviction >= 0.15 ? "BUY" : conviction >= 0.05 ? "HOLD" : "SKIP";
-    var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
-    var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-amber-400" : "text-negative";
+    var verdictColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-warning" : "text-negative";
+    var convColor = verdict === "STRONG_BUY" ? "text-positive" : verdict === "BUY" ? "text-accent" : verdict === "HOLD" ? "text-warning" : "text-negative";
 
     var dirEl = document.getElementById("cv-direction");
     var matEl = document.getElementById("cv-maturity");
@@ -1107,7 +1153,7 @@ function _renderConviction(arb, crucible) {
     var evSubEl = document.getElementById("cv-ev-sub");
     if (evEl) {
         evEl.textContent = evFactor.toFixed(2);
-        evEl.className = "text-lg font-mono font-bold " + (evFactor >= 0.5 ? "text-positive" : evFactor > 0 ? "text-amber-400" : "text-negative");
+        evEl.className = "text-lg font-mono font-bold " + (evFactor >= 0.5 ? "text-positive" : evFactor > 0 ? "text-warning" : "text-negative");
     }
     if (evSubEl) {
         evSubEl.textContent = arb.ev_multiple !== undefined ? "ev=" + arb.ev_multiple.toFixed(2) : "estimated";
@@ -1257,19 +1303,179 @@ function _applyAgentResultToCard(card, data) {
 
 // ─── Solo Research Runner ──────────────────────────────────────────────────
 var _soloResearchTicker = null;  // Track active solo research ticker
+var _selectedSoloTicker = null;  // {ticker, name} selected from the picker overlay, or null
+var _soloAcTimer = null;
+var _soloAcActiveIdx = -1;
+
+// Open the Universe-style picker overlay. Re-uses /api/universe/search and the
+// .ticker-autocomplete-* CSS classes already loaded globally from style.css.
+function _openSoloTickerPicker() {
+    var existing = document.getElementById("solo-ticker-ac-overlay");
+    if (existing) { existing.classList.remove("hidden"); }
+    else {
+        var overlay = document.createElement("div");
+        overlay.id = "solo-ticker-ac-overlay";
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-label", "Choose a ticker to research");
+        overlay.className = "fixed inset-0 z-40 flex items-start justify-center pt-24";
+        overlay.style.background = "rgba(0,0,0,0.35)";
+        overlay.innerHTML =
+            '<div class="ticker-autocomplete-wrap">' +
+            '  <input id="solo-ticker-ac-input" class="ticker-autocomplete-input" type="text" placeholder="Type ticker (e.g. NBIS, AAPL)..." autocomplete="off" spellcheck="false" aria-label="Search ticker">' +
+            '  <div id="solo-ticker-ac-dropdown" class="ticker-autocomplete-dropdown hidden card card-glass rounded-xl"></div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener("click", function(e) {
+            if (e.target === overlay) _closeSoloTickerPicker();
+        });
+
+        var input = document.getElementById("solo-ticker-ac-input");
+        input.addEventListener("input", function() {
+            _soloAcActiveIdx = -1;
+            _soloAcDebounce(input.value);
+        });
+        input.addEventListener("keydown", function(e) {
+            var dd = document.getElementById("solo-ticker-ac-dropdown");
+            var items = dd ? dd.querySelectorAll(".ticker-autocomplete-item") : [];
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                _soloAcActiveIdx = Math.min(_soloAcActiveIdx + 1, items.length - 1);
+                _soloAcHighlight(items);
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                _soloAcActiveIdx = Math.max(_soloAcActiveIdx - 1, -1);
+                _soloAcHighlight(items);
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (_soloAcActiveIdx >= 0 && items[_soloAcActiveIdx]) {
+                    var idx = _soloAcActiveIdx;
+                    items[idx].click();
+                } else if (input.value.trim()) {
+                    // Free-typed value: select it as {ticker, name: ""}
+                    _onSoloTickerPicked(input.value.trim().toUpperCase(), "");
+                }
+            } else if (e.key === "Escape") {
+                _closeSoloTickerPicker();
+            }
+        });
+    }
+    // Pre-fill with current selection (so the user can see what's picked)
+    var pre = _selectedSoloTicker ? _selectedSoloTicker.ticker : "";
+    var input = document.getElementById("solo-ticker-ac-input");
+    if (input) { input.value = pre; }
+    // Refresh dropdown now if we pre-filled
+    if (pre) { _soloAcDebounce(pre); }
+    setTimeout(function() { if (input) input.focus(); if (input) input.select(); }, 50);
+}
+
+function _closeSoloTickerPicker() {
+    var overlay = document.getElementById("solo-ticker-ac-overlay");
+    if (overlay) overlay.classList.add("hidden");
+    // Dropdown stays mounted (reused on next open); just hide it
+    var dd = document.getElementById("solo-ticker-ac-dropdown");
+    if (dd) dd.classList.add("hidden");
+}
+
+function _soloAcDebounce(val) {
+    clearTimeout(_soloAcTimer);
+    if (!val || val.trim().length < 1) {
+        _soloAcShowDropdown([]);
+        return;
+    }
+    _soloAcTimer = setTimeout(function() { _soloAcSearch(val.trim()); }, 200);
+}
+
+function _soloAcSearch(q) {
+    fetch("/api/universe/search?q=" + encodeURIComponent(q))
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _soloAcShowDropdown(data.results || []); })
+        .catch(function() { _soloAcShowDropdown([]); });
+}
+
+function _soloAcShowDropdown(results) {
+    _soloAcActiveIdx = -1;
+    var dd = document.getElementById("solo-ticker-ac-dropdown");
+    if (!dd) return;
+    if (results.length === 0) {
+        dd.innerHTML = '<div class="ticker-autocomplete-empty">No matches found</div>';
+        dd.classList.remove("hidden");
+        return;
+    }
+    var html = "";
+    for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        var src = r.source === "finnhub" ? '<span class="ticker-source">API</span>' : "";
+        html += '<div class="ticker-autocomplete-item" data-ticker="' + escapeHtml(r.ticker) + '" data-name="' + escapeHtml(r.name || "") + '">' +
+            '<span class="ticker-symbol">' + escapeHtml(r.ticker) + src + '</span>' +
+            '<span class="ticker-name">' + escapeHtml(r.name || "") + '</span>' +
+            '</div>';
+    }
+    dd.innerHTML = html;
+    dd.classList.remove("hidden");
+
+    dd.querySelectorAll(".ticker-autocomplete-item").forEach(function(item) {
+        item.addEventListener("click", function() {
+            _onSoloTickerPicked(item.dataset.ticker, item.dataset.name || "");
+        });
+    });
+}
+
+function _soloAcHighlight(items) {
+    items.forEach(function(item, i) {
+        if (i === _soloAcActiveIdx) item.classList.add("active");
+        else item.classList.remove("active");
+    });
+}
+
+function _onSoloTickerPicked(ticker, name) {
+    _selectedSoloTicker = { ticker: ticker.toUpperCase(), name: name || "" };
+    _closeSoloTickerPicker();
+    var helper = document.getElementById("solo-needs-selection");
+    if (helper) helper.classList.add("hidden");
+    var btn = document.getElementById("solo-picker-btn");
+    var label = document.getElementById("solo-picker-label");
+    if (btn) {
+        btn.classList.remove("border-dashed", "border-border-subtle", "text-text-muted");
+        btn.classList.add("border-crucible/30", "bg-crucible-soft/40", "text-text-primary");
+        btn.setAttribute("aria-label", "Selected " + _selectedSoloTicker.ticker + " — click to change");
+    }
+    if (label) {
+        var displayName = _selectedSoloTicker.name || "";
+        label.innerHTML =
+            '<span class="font-mono font-bold">' + escapeHtml(_selectedSoloTicker.ticker) + '</span>' +
+            (displayName ? '<span class="text-text-muted"> · ' + escapeHtml(displayName) + '</span>' : '') +
+            '<span class="ml-2 text-text-muted hover:text-negative" onclick="event.stopPropagation();_clearSoloSelection();" title="Clear selection" aria-label="Clear selection">✕</span>';
+    }
+}
+
+function _clearSoloSelection() {
+    _selectedSoloTicker = null;
+    var helper = document.getElementById("solo-needs-selection");
+    if (helper) helper.classList.add("hidden");
+    var btn = document.getElementById("solo-picker-btn");
+    var label = document.getElementById("solo-picker-label");
+    if (btn) {
+        btn.classList.add("border-dashed", "border-border-subtle", "text-text-muted");
+        btn.classList.remove("border-crucible/30", "bg-crucible-soft/40", "text-text-primary");
+        btn.setAttribute("aria-label", "Choose a ticker to research");
+    }
+    if (label) label.textContent = "Choose a ticker to research";
+}
 
 function runSoloAnalysis() {
-    var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
     var statusDiv = document.getElementById("solo-status");
     var statusText = document.getElementById("solo-status-text");
-    if (!input) return;
 
-    var ticker = (input.value || "").trim().toUpperCase();
-    if (!ticker || !/^[A-Z]{1,10}$/.test(ticker)) {
-        if (typeof showToast === "function") showToast("Enter a valid ticker (1-10 letters)", "warning");
+    // Gate: nothing picked → inline helper, no fetch, no toast.
+    if (!_selectedSoloTicker || !_selectedSoloTicker.ticker) {
+        var helper = document.getElementById("solo-needs-selection");
+        if (helper) helper.classList.remove("hidden");
         return;
     }
+    var ticker = _selectedSoloTicker.ticker;
 
     _soloResearchTicker = ticker;
 
@@ -1277,7 +1483,6 @@ function runSoloAnalysis() {
     if (btn) { btn.disabled = true; btn.classList.add("opacity-60", "cursor-not-allowed"); btn.textContent = "Running..."; }
     if (statusDiv) statusDiv.classList.remove("hidden");
     if (statusText) statusText.textContent = "Analyzing " + ticker + "...";
-    input.disabled = true;
 
     _activeHistoryTicker = null;
     _renderTickerHistoryPills();
@@ -1319,10 +1524,8 @@ function runSoloAnalysis() {
 }
 
 function _resetSoloUI() {
-    var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
     var statusDiv = document.getElementById("solo-status");
-    if (input) { input.disabled = false; input.value = ""; }
     if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); btn.textContent = "Analyze"; }
     if (statusDiv) statusDiv.classList.add("hidden");
     _soloResearchTicker = null;
@@ -1378,7 +1581,7 @@ function _cycleLogAdd(eventType, description) {
     var row = document.createElement("div");
     row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
     row.innerHTML =
-        '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(ts.slice(0, 5)) + '</span>' +
+        '<span class="font-mono text-text-muted/80 shrink-0">' + escapeHtml(ts.slice(0, 5)) + '</span>' +
         '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(description) + '</span>';
     var firstChild = feed.querySelector(":not(#cycle-log-empty)");
     feed.insertBefore(row, firstChild || null);
@@ -1398,7 +1601,7 @@ function _cycleLogRender() {
         var row = document.createElement("div");
         row.className = "flex items-start gap-2 py-0.5 px-1 rounded-lg text-[10px]";
         row.innerHTML =
-            '<span class="font-mono text-text-muted/60 shrink-0">' + escapeHtml(entry.ts.slice(0, 5)) + '</span>' +
+            '<span class="font-mono text-text-muted/80 shrink-0">' + escapeHtml(entry.ts.slice(0, 5)) + '</span>' +
             '<span class="text-text-secondary leading-snug truncate">' + escapeHtml(entry.desc) + '</span>';
         feed.appendChild(row);
     });
@@ -1424,13 +1627,9 @@ function _initAgentsPageUI() {
         };
     }
 
-    // Solo runner Enter key
-    var soloInput = document.getElementById("solo-ticker-input");
-    if (soloInput) {
-        soloInput.onkeydown = function(e) {
-            if (e.key === "Enter") { e.preventDefault(); runSoloAnalysis(); }
-        };
-    }
+    // Solo ticker picker: the picker overlay has its own keydown handler
+    // (Enter picks the highlighted row), and Analyze calls runSoloAnalysis().
+    // No input-level Enter binding needed since the free-text input was replaced.
 
     // Fetch sankey-data to populate Signals + Conviction (runs on load AND HTMX nav)
     fetch("/agents/sankey-data")
@@ -1881,4 +2080,10 @@ _registerAgentsSSE();
 document.addEventListener("DOMContentLoaded", _registerAgentsSSE);
 </script>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{# Sankey diagram module: drives the Communication Layer "Signals" tab.
+   Loaded lazily; guards on PMACS_SANKEY so duplicate loads are no-ops. #}
+<script src="/static/sankey.js?v=1" defer></script>
 {% endblock %}

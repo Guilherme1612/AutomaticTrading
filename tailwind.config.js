@@ -26,6 +26,7 @@ module.exports = {
         'negative': 'var(--negative)',
         'negative-soft': 'var(--negative-soft)',
         'warning': 'var(--warning)',
+        'warning-soft': 'var(--warning-soft)',
         'strong-buy': 'var(--strong-buy)',
         'crucible': 'var(--crucible)',
         'crucible-soft': 'var(--crucible-soft)',

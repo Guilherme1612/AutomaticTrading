@@ -1,0 +1,1063 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ticker }} — Data{% endblock %}
+
+{% block content %}
+{# ── Universe status macro — always-visible identity metadata for the ticker.
+   Renders a one-line strip with catalyst_type / pinned_priority / halted /
+   delisted badges, or "not in universe" if the ticker is not in the
+   operator's active universe. Invoked from BOTH the populated and empty
+   branches so it appears regardless of whether a workspace exists. #}
+{% macro universe_status(meta) -%}
+    {% set _um = meta or {} %}
+    {% set _um_in = _um.in_universe %}
+    <div class="card card-elevated p-3 mb-5 reveal flex flex-wrap items-center gap-x-6 gap-y-2 text-sm"
+         role="region"
+         aria-label="{{ ticker }} universe status"
+         data-ws-universe>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Universe</span>
+            {% if _um_in %}
+                {% if _um.catalyst_type %}
+                <span class="font-mono tabular-nums text-text-primary">{{ _um.catalyst_type }}</span>
+                {% endif %}
+                {% if _um.pinned_priority is not none %}
+                <span class="font-mono tabular-nums text-text-secondary">p{{ _um.pinned_priority }}</span>
+                {% endif %}
+                {% if _um.sector %}
+                <span class="text-text-secondary">{{ _um.sector }}{% if _um.subsector %} &middot; {{ _um.subsector }}{% endif %}</span>
+                {% endif %}
+                {% if _um.halted %}
+                <span class="px-1.5 py-0.5 rounded-md bg-warning-soft text-warning font-medium" role="status">HALTED</span>
+                {% endif %}
+                {% if _um.delisted %}
+                <span class="px-1.5 py-0.5 rounded-md bg-negative-soft text-negative font-medium" role="status">DELISTED</span>
+                {% endif %}
+                {% if _um.added_at %}
+                <span class="text-text-muted text-xs">added {{ _um.added_at[:10] }}</span>
+                {% endif %}
+            {% else %}
+                <span class="text-text-muted italic">not in universe</span>
+            {% endif %}
+        </span>
+        <a href="/universe" class="text-accent hover:underline text-xs ml-auto">view universe &rarr;</a>
+    </div>
+{%- endmacro %}
+
+{# ── Header (hero card) — always rendered for screen-reader H1 ── #}
+{# Operator directive: present the ticker identity as a single elevated hero
+   card. Symbol + sector chip on the top row, company name as a subtitle,
+   "View memo" aligned right. The "View memo" link is hidden on the empty-
+   state and error branches since memos require a cycle and would 404. #}
+<header class="mb-6 reveal">
+    <div class="card card-elevated p-5">
+        <div class="flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-3 flex-wrap min-w-0">
+                <h1 class="text-4xl font-bold text-text-primary font-mono tracking-tight leading-none">{{ ticker }}</h1>
+                {% if sector %}
+                <span class="text-[10px] text-text-muted bg-surface-sunken/60 px-2 py-0.5 rounded-md uppercase tracking-widest font-medium">{{ sector }}</span>
+                {% endif %}
+            </div>
+            {% if not no_data and not error %}
+            <a href="/memo/{{ ticker }}" class="text-sm text-accent hover:underline whitespace-nowrap">View memo &rarr;</a>
+            {% endif %}
+        </div>
+        {% if company_name %}
+        <p class="mt-2 text-base text-text-secondary truncate">{{ company_name }}</p>
+        {% endif %}
+        {% if derived and derived.has_stale_data %}
+        <div class="mt-3">
+            <span class="px-2 py-0.5 rounded-lg bg-warning-soft text-warning font-medium" role="status">
+                Stale data &mdash; underlying filings are over 15 months old
+            </span>
+        </div>
+        {% endif %}
+    </div>
+</header>
+
+{{ universe_status(universe_meta) }}
+
+{% if error %}
+{% set error_code = error.code %}
+{% set error_description = error.description %}
+{% set error_explanation = error.get("explanation", "") %}
+{% set error_actions = error.get("actions", []) %}
+{% set error_spec_ref = error.get("spec_ref", "") %}
+{% include "components/error_state.html" %}
+{% elif no_data %}
+<section class="card card-elevated reveal" aria-labelledby="nd-heading">
+    <h2 id="nd-heading" class="text-lg font-semibold text-text-primary mb-2">No data for {{ ticker }} yet</h2>
+    {%- if warming -%}
+    {# §13.4: no bare spinner — shared loading_state with WHAT + ETA + cancel.
+       First evidence fetch for a ticker takes ~8-15s (yfinance + EDGAR). #}
+    {% set loading_what = "Fetching evidence for " ~ ticker %}
+    {% set loading_eta_seconds = 12 %}
+    {% set loading_cancel = true %}
+    {% include "components/loading_state.html" %}
+    <p class="text-xs text-text-muted text-center mb-4">This page will populate once the first fetch completes. The skeleton matches the workspace shape.</p>
+    {%- else -%}
+    <p class="text-sm text-text-secondary mb-4">
+        This ticker hasn't been analyzed in a cycle, so no evidence has been collected.
+        Once {{ ticker }} runs through a cycle, its fundamentals appear here.
+    </p>
+    {%- endif -%}
+</section>
+{% else %}
+{# ── Unified ticker workspace (Source.md §16.6 single-ticker drawer) ── #}
+{% set _ws_has = (ws_memo is not none) or (ws_holding is not none) %}
+{% if _ws_has %}
+<div class="card card-elevated p-4 mb-5 reveal" role="region" aria-label="{{ ticker }} workspace summary">
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        {% set _ws_verdict = (ws_memo._verdict if ws_memo else none) or (ws_holding.verdict if ws_holding else none) %}
+        {% if _ws_verdict %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Verdict</span>
+            <span class="font-mono font-semibold
+                         {{ 'text-positive' if _ws_verdict in ('STRONG_BUY','BUY') else '' }}
+                         {{ 'text-negative' if _ws_verdict == 'SKIP' else '' }}
+                         {{ 'text-text-secondary' if _ws_verdict == 'HOLD' else '' }}">{{ _ws_verdict }}</span>
+        </span>
+        {% endif %}
+        {% set _ws_conv = (ws_memo._conviction_score if ws_memo else none) if ws_memo else (ws_holding.conviction_score if ws_holding else none) %}
+        {% if _ws_conv is not none %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Conviction</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ "%.2f"|format(_ws_conv|float) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_holding and ws_holding.entry_price_usd %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Entry</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.entry_price_usd) }}</span>
+        </span>
+        {% endif %}
+        {% if current_price %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Current</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(current_price) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_holding and ws_holding.price_target_usd %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Target</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.price_target_usd) }}</span>
+        </span>
+        {% endif %}
+        {% if ws_days_held is not none %}
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Held</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ ws_days_held }}d</span>
+        </span>
+        {% endif %}
+        {% if ws_memo and ws_memo._decided_at %}
+        <span class="inline-flex items-center gap-1.5 ml-auto">
+            <span class="text-[10px] text-text-muted">Last analyzed {{ ws_memo._decided_at[:10] }}</span>
+        </span>
+        {% endif %}
+    </div>
+</div>
+<div class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
+    <button type="button" role="tab" id="ws-tab-fundamentals" aria-controls="ws-fundamentals" tabindex="0" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
+    <button type="button" role="tab" id="ws-tab-memo"       aria-controls="ws-memo"       tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo"       aria-selected="false">Memo</button>
+    <button type="button" role="tab" id="ws-tab-personas"   aria-controls="ws-personas"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas"   aria-selected="false">Personas</button>
+    <button type="button" role="tab" id="ws-tab-lineage"    aria-controls="ws-lineage"    tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage"    aria-selected="false">Lineage</button>
+    <button type="button" role="tab" id="ws-tab-failures"   aria-controls="ws-failures"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures"   aria-selected="false">Failures</button>
+</div>
+{% endif %}
+<div id="ws-fundamentals" class="ws-panel">
+{% macro fmt(value, unit="") -%}
+    {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
+    {%- elif unit == "$" -%}${{ "%.2f"|format(value) }}
+    {%- elif unit == "%" -%}{{ "%.1f"|format(value) }}%
+    {%- elif value is number -%}{{ "%.2f"|format(value) }}
+    {%- else -%}{{ value }}{%- endif -%}
+{%- endmacro %}
+
+{# Format a dollar value in human-readable B/M. #}
+{% macro fmt_money(value) -%}
+    {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
+    {%- elif value >= 1e12 -%}${{ "%.2f"|format(value/1e12) }}T
+    {%- elif value >= 1e9 -%}${{ "%.2f"|format(value/1e9) }}B
+    {%- elif value >= 1e6 -%}${{ "%.2f"|format(value/1e6) }}M
+    {%- else -%}${{ "%.2f"|format(value) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{# Tone class for a number. ``kind`` is "multiple" (P/E, P/FCF — bands cheap/fair/expensive)
+   or "yield" (FCF yields, margins — only the negative case differs from default). #}
+{% macro tone_class(value, kind="multiple") -%}
+    {%- if value is none -%}text-text-muted italic
+    {%- elif kind == "multiple" -%}
+        {%- if value < 0 -%}text-negative
+        {%- elif value <= 15 -%}text-positive
+        {%- elif value <= 30 -%}text-warning
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif kind == "nrr" -%}
+        {%- if value >= 115 -%}text-positive
+        {%- elif value >= 105 -%}text-accent
+        {%- elif value >= 100 -%}text-warning
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif kind == "rule40" -%}
+        {%- if value >= 40 -%}text-positive
+        {%- elif value >= 30 -%}text-accent
+        {%- else -%}text-negative
+        {%- endif -%}
+    {%- elif value < 0 -%}text-negative font-semibold
+    {%- elif value == 0 -%}text-text-secondary
+    {%- else -%}text-text-primary
+    {%- endif -%}
+{%- endmacro %}
+
+{# Human-readable band label for a valuation multiple. #}
+{%- macro mult_label(value) -%}
+    {%- if value is none -%}&mdash;
+    {%- elif value < 0 -%}Loss
+    {%- elif value <= 15 -%}Cheap
+    {%- elif value <= 30 -%}Fair
+    {%- else -%}Expensive
+    {%- endif -%}
+{%- endmacro %}
+
+{# Context label for SaaS KPIs. #}
+{%- macro kpi_label(value, kind) -%}
+    {%- if value is none -%}Not disclosed
+    {%- elif kind == "nrr" -%}
+        {%- if value >= 115 -%}Excellent
+        {%- elif value >= 105 -%}Good
+        {%- elif value >= 100 -%}Okay
+        {%- else -%}Concerning
+        {%- endif -%}
+    {%- elif kind == "rule40" -%}
+        {%- if value >= 40 -%}Excellent
+        {%- elif value >= 30 -%}Healthy
+        {%- else -%}Weak
+        {%- endif -%}
+    {%- elif kind == "arr" -%}
+        {%- if value >= 1e9 -%}Substantial
+        {%- elif value >= 1e8 -%}Meaningful
+        {%- else -%}Reported
+        {%- endif -%}
+    {%- elif kind == "rpo" -%}
+        {%- if value >= 1e9 -%}Substantial backlog
+        {%- elif value >= 1e8 -%}Meaningful backlog
+        {%- else -%}Reported
+        {%- endif -%}
+    {%- else -%}Reported
+    {%- endif -%}
+{%- endmacro %}
+
+{#
+  Inline-SVG sparkline WITH labeled data points.
+  values        — list of numbers, oldest first → newest last.
+  periods       — list of period strings (e.g. "FY2022"), same length as values.
+  lower_better  — true for P/E and P/FCF (rising = red); false for yields/margins.
+#}
+{% macro sparkline_svg(values, periods, lower_better, height_px=140) -%}
+    {%- set pairs = [] -%}
+    {%- for v in values -%}
+        {%- if v is not none -%}
+            {%- set p = (periods[loop.index0] if (periods is defined and periods and loop.index0 < periods|length) else loop.index|string) -%}
+            {%- set _ = pairs.append({"v": v, "p": p}) -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {%- if pairs|length < 2 -%}
+    <div class="h-[{{ height_px }}px] flex items-center justify-center text-[10px] text-text-muted" aria-hidden="true">No trend data</div>
+    {%- else -%}
+        {%- set vals = pairs|map(attribute='v')|list -%}
+        {%- set ps = pairs|map(attribute='p')|list -%}
+        {%- set vmin = vals|min -%}
+        {%- set vmax = vals|max -%}
+        {%- set vrange = (vmax - vmin) or 1 -%}
+        {%- set n = vals|length -%}
+        {%- if vals[-1] > vals[0] -%}
+            {%- set line_color = "var(--negative)" if lower_better else "var(--positive)" -%}
+            {%- set dir_color = line_color -%}
+        {%- elif vals[-1] < vals[0] -%}
+            {%- set line_color = "var(--positive)" if lower_better else "var(--negative)" -%}
+            {%- set dir_color = line_color -%}
+        {%- else -%}
+            {%- set line_color = "var(--accent)" -%}
+            {%- set dir_color = line_color -%}
+        {%- endif -%}
+        {# Reserve top 22px for the value labels and bottom 14px for the period labels. #}
+        {%- set plot_top = 22 -%}
+        {%- set plot_height = 100 -%}
+        {%- set plot_bottom = plot_top + plot_height -%}
+        {%- set points = [] -%}
+        {%- for v in vals -%}
+            {%- set x = (loop.index0 / (n - 1) * 100) -%}
+            {%- set y = plot_bottom - ((v - vmin) / vrange * plot_height) -%}
+            {%- set _ = points.append({"x": x, "y": y, "v": v, "p": ps[loop.index0]}) -%}
+        {%- endfor -%}
+        {%- set poly_pts = points|map('format_xy_poly')|join(' ') -%}
+    <svg viewBox="0 0 100 {{ plot_bottom + 16 }}" preserveAspectRatio="none"
+         class="w-full h-[{{ height_px }}px]" role="img"
+         aria-label="Trend from {{ "%.1f"|format(vals[0]) }} to {{ "%.1f"|format(vals[-1]) }} across {{ n }} periods">
+        {# Horizontal gridline at the average for quick visual anchoring. #}
+        {%- set vavg = (vals|sum / n) -%}
+        {%- set yavg = plot_bottom - ((vavg - vmin) / vrange * plot_height) -%}
+        <line x1="0" y1="{{ '%.2f'|format(yavg) }}" x2="100" y2="{{ '%.2f'|format(yavg) }}"
+              stroke="var(--border-subtle)" stroke-width="0.4" stroke-dasharray="2 2"/>
+        <polyline fill="none" stroke="{{ line_color }}" stroke-width="0.8"
+                  stroke-linecap="round" stroke-linejoin="round"
+                  points="{{ poly_pts }}"/>
+        {%- for pt in points -%}
+            {%- set _ = pt.update({"above": pt.y < (plot_top + 12)}) -%}
+            {%- if pt.above -%}
+                {%- set label_y = pt.y - 4 -%}
+            {%- else -%}
+                {%- set label_y = pt.y + 8 -%}
+            {%- endif -%}
+            {%- set year_y = pt.y + 12 -%}
+            <circle cx="{{ '%.2f'|format(pt.x) }}" cy="{{ '%.2f'|format(pt.y) }}"
+                    r="1.2" fill="{{ line_color }}"/>
+            <text x="{{ '%.2f'|format(pt.x) }}" y="{{ '%.2f'|format(label_y) }}"
+                  font-size="3.6" fill="var(--text-secondary)"
+                  text-anchor="middle" font-family="ui-monospace, monospace" font-weight="600">{{ "%.1f"|format(pt.v) }}</text>
+            <text x="{{ '%.2f'|format(pt.x) }}" y="{{ '%.2f'|format(year_y) }}"
+                  font-size="3.2" fill="var(--text-muted)"
+                  text-anchor="middle" font-family="ui-monospace, monospace">{{ pt.p }}</text>
+        {%- endfor -%}
+    </svg>
+    {%- endif -%}
+{%- endmacro %}
+
+{# ── Compact metric card: current value + optional 3Y average. ── #}
+{# The tone is relative to the ticker's OWN N-year average — NOT to absolute
+   cross-ticker bands. Absolute P/E bands (≤15 "cheap" / >30 "expensive") flag
+   structurally premium names (e.g. AMZN) as "expensive" forever, which is
+   wrong: a high-multiple name is cheap when it trades below its own recent
+   average. So: current < avg → below NY (positive/cheap), current within ±5%
+   of avg → near NY (neutral), current > avg → above NY (negative/pricey). No
+   average → neutral with no cheap/expensive claim (better no claim than a
+   wrong one). NY is dynamic per operator directive: the average window is
+   whatever years the underlying series actually covers, not a hard 3-year
+   floor. #}
+{% macro metric_card(label, current, average, n_years=0, unit="", note="") -%}
+    {%- set has_current = current is not none -%}
+    {%- set has_avg = average is not none -%}
+    {%- if has_avg and n_years > 0 -%}
+        {%- set ny_label = n_years ~ 'Y' -%}
+    {%- else -%}
+        {%- set ny_label = 'N' -%}
+    {%- endif -%}
+    {%- set rel = namespace(color='neutral', label='No ' ~ ny_label ~ ' avg') -%}
+    {%- if has_current and has_avg -%}
+        {%- set d = (current - average) / average -%}
+        {%- if d <= -0.05 -%}{%- set rel.color = 'positive' -%}{%- set rel.label = 'Below ' ~ ny_label -%}
+        {%- elif d <= 0.05 -%}{%- set rel.color = 'neutral' -%}{%- set rel.label = 'Near ' ~ ny_label -%}
+        {%- else -%}{%- set rel.color = 'negative' -%}{%- set rel.label = 'Above ' ~ ny_label -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- set txt = {'positive':'text-positive','negative':'text-negative','neutral':'text-text-secondary'}[rel.color] -%}
+    {%- set bg  = {'positive':'bg-positive-soft','negative':'bg-negative-soft','neutral':'bg-surface-sunken'}[rel.color] -%}
+    {%- set dot = {'positive':'bg-positive','negative':'bg-negative','neutral':'bg-text-muted'}[rel.color] -%}
+    <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
+        <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">{{ label }}</div>
+        <div>
+            <div class="text-3xl font-bold tabular-nums {{ txt if has_current else 'text-text-muted' }}">{{ fmt(current, unit) if has_current else '&mdash;' }}</div>
+            <div class="mt-1 flex items-center gap-2 text-xs">
+                {%- if has_avg -%}
+                <span class="text-text-muted">{{ ny_label }} avg {{ fmt(average, unit) }}</span>
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md {{ bg }} {{ txt }} text-[10px] font-semibold uppercase tracking-widest">
+                    <span class="w-1 h-1 rounded-full {{ dot }}"></span>{{ rel.label }}
+                </span>
+                {%- else -%}
+                <span class="text-text-muted">N-year average unavailable</span>
+                {%- endif -%}
+            </div>
+            {%- if note and not has_avg -%}
+            <div class="mt-2 text-[10px] text-text-muted leading-tight">{{ note }}</div>
+            {%- endif -%}
+        </div>
+    </div>
+{%- endmacro %}
+
+{# ── SaaS KPI card with context placement. ── #}
+{% macro kpi_card(label, value, kind="nrr", note="", approx=false) -%}
+    {%- set has_value = value is not none -%}
+    {%- set tone = tone_class(value, kind) -%}
+    <div class="rounded-xl bg-surface-sunken/40 p-4 border border-kpi-violet">
+        <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">{{ label }}</div>
+        <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tabular-nums {{ tone if has_value else 'text-text-muted' }}">
+                {%- if has_value -%}
+                    {%- if kind == "arr" -%}{{ fmt_money(value) }}
+                    {%- elif kind == "nrr" or kind == "rule40" -%}{{ fmt(value, "%") }}
+                    {%- else -%}{{ fmt(value) }}
+                    {%- endif -%}
+                {%- else -%}&mdash;{%- endif -%}
+            </div>
+            {%- if approx -%}
+            <span class="text-[10px] text-warning font-medium">approx.</span>
+            {%- endif -%}
+        </div>
+        <div class="mt-1 flex items-center gap-1.5">
+            {%- if has_value -%}
+            <span class="w-1.5 h-1.5 rounded-full bg-{{ tone }}"></span>
+            <span class="text-xs font-medium {{ tone }}">{{ kpi_label(value, kind) }}</span>
+            {%- else -%}
+            <span class="text-xs text-text-muted">{{ kpi_label(value, kind) }}</span>
+            {%- endif -%}
+        </div>
+        {%- if note -%}
+        <div class="mt-2 text-[10px] text-text-muted leading-tight">{{ note }}</div>
+        {%- endif -%}
+    </div>
+{%- endmacro %}
+
+{# ── Valuation summary: current vs dynamic N-year average ── #}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="val-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="val-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Valuation summary</h2>
+        <span class="text-[10px] text-text-muted">Current value + multi-year historical average where computable</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {# "needs historical X" notes are only accurate when the underlying series
+           is genuinely absent. When the series is present but the multiple is
+           uncomputable (e.g. negative EBITDA / book value), the per-year table
+           and derived.notes already explain why — so we suppress the note here. #}
+        {%- set has_book_series = (derived.per_year|map(attribute='book_value_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_ebitda_series = (derived.per_year|map(attribute='ebitda_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_debt_series = (derived.per_year|map(attribute='total_debt_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set has_cash_series = (derived.per_year|map(attribute='cash_usd')|select('ne', none)|list|length) > 0 -%}
+        {%- set ev_series_complete = has_ebitda_series and has_debt_series and has_cash_series -%}
+        {{ metric_card("P/E", derived.current.pe, derived.pe_ny_avg, derived.pe_ny_avg_years) }}
+        {{ metric_card("Forward P/E", derived.current.forward_pe, none, 0, note="Forward multiple; no historical average available.") }}
+        {{ metric_card("P/S", derived.current.ps, derived.ps_ny_avg, derived.ps_ny_avg_years) }}
+        {{ metric_card("P/B", derived.current.pb, derived.pb_ny_avg, derived.pb_ny_avg_years, note="Multi-year P/B needs historical book value (balance sheet)." if not has_book_series else "") }}
+        {{ metric_card("EV/EBITDA", derived.current.ev_ebitda, derived.ev_ebitda_ny_avg, derived.ev_ebitda_ny_avg_years, note="Multi-year EV/EBITDA needs historical EBITDA, debt, and cash." if not ev_series_complete else "") }}
+        {# PEG is a point-in-time ratio (like Forward P/E) with no 3Y average, so it
+           renders as a plain value with no cheap/expensive tone. Absolute P/E-style
+           bands are meaningless here — and previously always rendered "cheap"
+           because PEG ~1 sits well under the P/E ≤15 band. No 3Y avg → no claim. #}
+        {%- set peg_val = derived.current.peg -%}
+        <div class="rounded-xl bg-surface-sunken/40 p-4 flex flex-col justify-between h-full">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">PEG</div>
+            <div>
+                <div class="text-3xl font-bold tabular-nums text-text-primary">{{ fmt(peg_val) if peg_val is not none else '&mdash;' }}</div>
+                <div class="mt-1 text-xs text-text-muted">Point-in-time (PEG/Y ratio)</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+{# ── FCF yield ── #}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="fcf-heading">
+    <div class="flex items-baseline justify-between mb-4 gap-4 flex-wrap">
+        <h2 id="fcf-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Free cash flow yield</h2>
+        {% if derived.fcf_yield_pct is not none and derived.fcf_yield_sbc_adjusted_pct is not none %}
+        {% set sbc_delta_pp = (derived.fcf_yield_pct - derived.fcf_yield_sbc_adjusted_pct)|round(2) %}
+        <span class="text-xs px-2 py-0.5 rounded-lg font-medium
+                     {{ 'bg-warning-soft text-warning' if sbc_delta_pp >= 2 else 'bg-surface-sunken text-text-muted' }}"
+              role="status"
+              aria-label="Stock-based compensation drag on free cash flow yield">
+            SBC drag: &minus;{{ "%.2f"|format(sbc_delta_pp) }} pp
+        </span>
+        {% endif %}
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Unadjusted</div>
+            <div class="text-2xl font-bold {{ tone_class(derived.fcf_yield_pct, 'yield') }}">
+                {{ fmt(derived.fcf_yield_pct, "%") }}
+            </div>
+            <div class="text-xs text-text-muted mt-1">FCF &divide; market cap</div>
+        </div>
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">SBC-adjusted</div>
+            <div class="text-2xl font-bold {{ tone_class(derived.fcf_yield_sbc_adjusted_pct, 'yield') }}">
+                {{ fmt(derived.fcf_yield_sbc_adjusted_pct, "%") }}
+            </div>
+            <div class="text-xs text-text-muted mt-1">(FCF &minus; stock-based comp) &divide; market cap</div>
+        </div>
+    </div>
+</section>
+
+{# ── SaaS KPIs (render ONLY cards where the metric is actually disclosed) ── #}
+{% set sk = derived.saas_kpis %}
+{# Operator directive: "if the data is not disclosed, don't show anything at all."
+   We only show the SaaS section when AT LEAST ONE of NRR / GRR / RPO / ARR is
+   *explicitly disclosed*. ARR approximated from TTM revenue (the engine's
+   fallback) does NOT count as disclosed — it is silently dropped at the
+   template layer. Rule of 40 is derived from growth + FCF margin (not a SaaS
+   disclosure per se), so it does not trigger the section on its own. #}
+{%- set nrr_disclosed = sk.nrr_pct is not none -%}
+{%- set grr_disclosed = sk.grr_pct is not none -%}
+{%- set rpo_disclosed = sk.rpo_usd is not none -%}
+{%- set arr_disclosed = sk.arr_usd is not none and not sk.arr_is_approximation -%}
+{%- set has_explicit_saas = nrr_disclosed or grr_disclosed or rpo_disclosed or arr_disclosed -%}
+{% if has_explicit_saas %}
+{%- set disclosed = [] -%}
+{%- if nrr_disclosed -%}{%- set _ = disclosed.append('nrr') -%}{%- endif -%}
+{%- if grr_disclosed -%}{%- set _ = disclosed.append('grr') -%}{%- endif -%}
+{%- if arr_disclosed -%}{%- set _ = disclosed.append('arr') -%}{%- endif -%}
+{%- if rpo_disclosed -%}{%- set _ = disclosed.append('rpo') -%}{%- endif -%}
+{%- if sk.rule_of_40 is not none -%}{%- set _ = disclosed.append('rule40') -%}{%- endif -%}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="saas-heading">
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-viz-violet"></span>
+        <h2 id="saas-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">SaaS / subscription KPIs</h2>
+        <span class="text-[10px] text-text-muted ml-auto">Extracted from stored evidence text</span>
+    </div>
+    {# Grid columns adapt to the number of disclosed KPIs so cards stay full-width. #}
+    {%- set grid_cols = {'1': 'grid-cols-1', '2': 'grid-cols-1 sm:grid-cols-2', '3': 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', '4': 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'}[disclosed|length|string] -%}
+    <div class="grid {{ grid_cols }} gap-3">
+        {% if 'nrr' in disclosed %}
+        {{ kpi_card("Net Revenue Retention (NRR)", sk.nrr_pct, "nrr",
+                    note="NRR >100% means existing customers expand; <100% means contraction.",
+                    approx=sk.nrr_from_agent) }}
+        {% endif %}
+        {% if 'grr' in disclosed %}
+        {{ kpi_card("Gross Retention (GRR)", sk.grr_pct, "nrr",
+                    note="Share of revenue retained from existing customers after churn.",
+                    approx=sk.grr_from_agent) }}
+        {% endif %}
+        {% if 'arr' in disclosed %}
+        {{ kpi_card("Annual Recurring Revenue (ARR)", sk.arr_usd, "arr",
+                    note="From EDGAR filing narrative or disclosed earnings call.",
+                    approx=sk.arr_from_agent) }}
+        {% endif %}
+        {% if 'rpo' in disclosed %}
+        {{ kpi_card("Remaining Performance Obligations (RPO)", sk.rpo_usd, "arr",
+                    note="Contracted revenue backlog from EDGAR filing narrative.",
+                    approx=sk.rpo_from_agent) }}
+        {% endif %}
+        {% if 'rule40' in disclosed %}
+        {{ kpi_card("Rule of 40", sk.rule_of_40, "rule40",
+                    note="Revenue growth % + FCF margin %. >40% is the classic SaaS health threshold.") }}
+        {% endif %}
+    </div>
+    {% if sk.notes %}
+    <ul class="mt-3 space-y-1 text-xs text-text-secondary list-disc list-inside">
+        {% for note in sk.notes %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+</section>
+{% endif %}
+
+{# ── Analyst consensus ── #}
+{% set a = derived.analyst %}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="analyst-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="analyst-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Analyst consensus</h2>
+        {%- if a.num_analysts is not none -%}
+        <span class="text-[10px] text-text-muted">{{ a.num_analysts }} analyst{{ 's' if a.num_analysts != 1 else '' }} covering</span>
+        {%- endif -%}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {# Price target #}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Price target</div>
+            {%- if a.target_mean is not none -%}
+            <div class="text-2xl font-bold text-text-primary">{{ fmt(a.target_mean, "$") }}</div>
+            <div class="mt-1 text-xs text-text-muted">Range {{ fmt(a.target_low, "$") }} &ndash; {{ fmt(a.target_high, "$") }} &middot; Median {{ fmt(a.target_median, "$") }}</div>
+            {# Upside is shown once, in the Current price card, computed against
+               the authoritative live price — not duplicated here. #}
+            {%- else -%}
+            <div class="text-2xl font-bold text-text-muted">&mdash;</div>
+            <div class="mt-1 text-xs text-text-muted">No analyst price target in stored evidence.</div>
+            {%- endif -%}
+        </div>
+
+        {# Ratings mix #}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Ratings mix</div>
+            {%- if a.total_analysts -%}
+            {%- set total = a.total_analysts -%}
+            <div class="space-y-1.5">
+                {% for label, count, color in [
+                    ('Strong buy', a.strong_buy or 0, 'positive'),
+                    ('Buy', a.buy or 0, 'positive'),
+                    ('Hold', a.hold or 0, 'warning'),
+                    ('Sell', a.sell or 0, 'negative'),
+                    ('Strong sell', a.strong_sell or 0, 'negative'),
+                ] %}
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 text-text-secondary">{{ label }}</span>
+                    <div class="flex-1 h-1.5 rounded-full bg-surface-sunken overflow-hidden">
+                        <div class="h-full rounded-full bg-{{ color }}" style="width: {{ '%.1f'|format((count/total*100) if total else 0) }}%"></div>
+                    </div>
+                    <span class="w-6 text-right tabular-nums text-text-primary">{{ count }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {%- if a.consensus -%}
+            <div class="mt-2 text-xs text-text-muted">Consensus: <span class="font-medium text-text-primary">{{ a.consensus }}</span></div>
+            {%- endif -%}
+            {%- else -%}
+            <div class="text-sm text-text-muted">No analyst ratings in stored evidence.</div>
+            {%- endif -%}
+        </div>
+
+        {# Current price + upside to mean target.
+           The current price is the authoritative fallback-chain price
+           (technical MA → yfinance metrics → analyst packet), NOT the
+           price-target packet's own `current_price` — that field is blank
+           whenever the analyst source returned no live quote, which left
+           this card showing `—` even though the page had a real price in
+           the Technical section above. The price *target* still comes from
+           the analyst packet; when no target exists the upside line is
+           suppressed and the target card shows its honest empty state. #}
+        {# `current_price` is passed by the route (authoritative fallback chain).
+           Guard with `is defined` so a stale process that imported the route
+           before this var was added doesn't 500 every ticker page — it just
+           falls back to the analyst packet's price. #}
+        {%- set cp = current_price if current_price is defined else none -%}
+        {%- set px = cp if cp is not none else a.current_price -%}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Current price</div>
+            <div class="text-2xl font-bold text-text-primary">{{ fmt(px, "$") }}</div>
+            {%- if px is not none and a.target_mean is not none and a.target_mean > 0 -%}
+            {%- set upside = ((a.target_mean - px) / px * 100)|round(1) -%}
+            {%- set upside_tone = 'text-positive' if upside > 0 else ('text-negative' if upside < 0 else 'text-text-muted') -%}
+            <div class="mt-2 text-sm font-semibold {{ upside_tone }}">{{ "%+.1f"|format(upside) }}% to mean target</div>
+            {%- endif -%}
+        </div>
+    </div>
+</section>
+
+{# ── Technical (price, MAs, RSI, 52w distance) ── #}
+{# `technical` is built in the route from Polygon evidence packets and passed as a top-level context variable (kept separate from the frozen `derived` Pydantic model). #}
+{% set tech = technical or {} %}
+{% set has_tech = tech and (tech.current_price is not none or tech.rsi_14 is not none or tech.high_52w is not none or tech.low_52w is not none) %}
+{% if has_tech %}
+{# RSI colour: >70 overbought → red, <30 oversold → green, else neutral. #}
+{%- set rsi = tech.rsi_14 -%}
+{%- if rsi is not none -%}
+    {%- if rsi >= 70 -%}{%- set rsi_tone = 'negative' -%}{%- set rsi_label = 'Overbought' -%}
+    {%- elif rsi <= 30 -%}{%- set rsi_tone = 'positive' -%}{%- set rsi_label = 'Oversold' -%}
+    {%- else -%}{%- set rsi_tone = 'text-secondary' -%}{%- set rsi_label = 'Neutral' -%}
+    {%- endif -%}
+{%- else -%}
+    {%- set rsi_tone = 'muted' -%}{%- set rsi_label = '—' -%}
+{%- endif -%}
+{# Trend tone: up = positive, down = negative, sideways = muted. #}
+{%- set trend_raw = (tech.trend or '') -%}
+{%- if 'up' in trend_raw -%}{%- set trend_tone = 'positive' -%}
+{%- elif 'down' in trend_raw -%}{%- set trend_tone = 'negative' -%}
+{%- else -%}{%- set trend_tone = 'muted' -%}
+{%- endif -%}
+{# 52w distance tones — closer to high = warning/negative (extended), closer to low = positive (value). #}
+{%- set d_high = tech.dist_from_high_52w_pct -%}
+{%- set d_low = tech.dist_from_low_52w_pct -%}
+{%- if d_high is not none -%}
+    {%- if d_high >= -5 -%}{%- set d_high_tone = 'negative' -%}
+    {%- elif d_high >= -20 -%}{%- set d_high_tone = 'warning' -%}
+    {%- else -%}{%- set d_high_tone = 'positive' -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if d_low is not none -%}
+    {%- if d_low <= 5 -%}{%- set d_low_tone = 'positive' -%}
+    {%- elif d_low <= 30 -%}{%- set d_low_tone = 'accent' -%}
+    {%- else -%}{%- set d_low_tone = 'warning' -%}
+    {%- endif -%}
+{%- endif -%}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="tech-heading">
+    <div class="flex items-center gap-2 mb-4">
+        <span class="w-2 h-2 rounded-full bg-accent"></span>
+        <h2 id="tech-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Technical</h2>
+        <span class="text-[10px] text-text-muted ml-auto">Price, moving averages, momentum &amp; 52-week positioning</span>
+    </div>
+
+    {# Top row: current price (big), RSI (colour-coded), trend (colour-coded chip) #}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Current price</div>
+            <div class="text-3xl font-bold tabular-nums text-text-primary">{{ fmt(tech.current_price, "$") }}</div>
+            {%- if tech.dist_from_sma50_pct is not none -%}
+                {%- set sma50_tone = 'positive' if tech.dist_from_sma50_pct >= 0 else 'negative' -%}
+                <div class="mt-1 text-xs {{ 'text-' ~ sma50_tone }}">
+                    {{ "%+.1f"|format(tech.dist_from_sma50_pct) }}% vs SMA50
+                </div>
+            {%- endif -%}
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">RSI (14)</div>
+            <div class="flex items-baseline gap-2">
+                <div class="text-3xl font-bold tabular-nums
+                            {%- if rsi_tone == 'negative' %} text-negative
+                            {%- elif rsi_tone == 'positive' %} text-positive
+                            {%- elif rsi_tone == 'muted' %} text-text-muted
+                            {%- else %} text-text-secondary
+                            {%- endif %}">
+                    {%- if rsi is not none -%}{{ "%.1f"|format(rsi) }}{%- else -%}&mdash;{%- endif -%}
+                </div>
+                {%- if rsi is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if rsi_tone == 'negative' %} bg-negative-soft text-negative
+                             {%- elif rsi_tone == 'positive' %} bg-positive-soft text-positive
+                             {%- else %} bg-surface-sunken text-text-muted
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    <span class="w-1 h-1 rounded-full
+                                {%- if rsi_tone == 'negative' %} bg-negative
+                                {%- elif rsi_tone == 'positive' %} bg-positive
+                                {%- else %} bg-text-muted
+                                {%- endif %}"></span>{{ rsi_label }}
+                </span>
+                {%- endif -%}
+            </div>
+            {%- if tech.roc_20d_pct is not none -%}
+            <div class="mt-1 text-xs text-text-muted">20d ROC {{ "%+.1f"|format(tech.roc_20d_pct) }}%</div>
+            {%- endif -%}
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-1">Trend</div>
+            {%- set trend_label = trend_raw.replace('_', ' ').title() if trend_raw else '—' -%}
+            <div class="text-2xl font-bold
+                        {%- if trend_tone == 'positive' %} text-positive
+                        {%- elif trend_tone == 'negative' %} text-negative
+                        {%- else %} text-text-muted
+                        {%- endif %}">{{ trend_label }}</div>
+            {%- if tech.dist_from_sma200_pct is not none -%}
+                {%- set sma200_tone = 'positive' if tech.dist_from_sma200_pct >= 0 else 'negative' -%}
+                <div class="mt-1 text-xs {{ 'text-' ~ sma200_tone }}">
+                    {{ "%+.1f"|format(tech.dist_from_sma200_pct) }}% vs SMA200
+                </div>
+            {%- endif -%}
+        </div>
+    </div>
+
+    {# Bottom row: 52w high / 52w low with current price + % distance #}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">52-week high</span>
+                {%- if d_high is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if d_high_tone == 'negative' %} bg-negative-soft text-negative
+                             {%- elif d_high_tone == 'warning' %} bg-warning-soft text-warning
+                             {%- else %} bg-positive-soft text-positive
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    {{ "%+.1f"|format(d_high) }}%
+                </span>
+                {%- endif -%}
+            </div>
+            <div class="flex items-baseline gap-2">
+                <span class="text-2xl font-bold tabular-nums text-text-primary">{{ fmt(tech.high_52w, "$") }}</span>
+                {%- if tech.current_price is not none and tech.high_52w -%}
+                <span class="text-xs text-text-muted">vs {{ fmt(tech.current_price, "$") }} now</span>
+                {%- endif -%}
+            </div>
+            <div class="mt-1 text-xs text-text-muted">Drawdown to all-time high</div>
+        </div>
+
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="flex items-baseline justify-between mb-2">
+                <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest">52-week low</span>
+                {%- if d_low is not none -%}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                             {%- if d_low_tone == 'positive' %} bg-positive-soft text-positive
+                             {%- elif d_low_tone == 'accent' %} bg-accent-soft text-accent
+                             {%- else %} bg-warning-soft text-warning
+                             {%- endif %} text-[10px] font-semibold uppercase tracking-widest">
+                    +{{ "%.1f"|format(d_low) }}%
+                </span>
+                {%- endif -%}
+            </div>
+            <div class="flex items-baseline gap-2">
+                <span class="text-2xl font-bold tabular-nums text-text-primary">{{ fmt(tech.low_52w, "$") }}</span>
+                {%- if tech.current_price is not none and tech.low_52w -%}
+                <span class="text-xs text-text-muted">vs {{ fmt(tech.current_price, "$") }} now</span>
+                {%- endif -%}
+            </div>
+            <div class="mt-1 text-xs text-text-muted">Distance above 52w low</div>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+{# ── Raw fundamentals groups ── #}
+{% if groups %}
+<section class="card card-elevated mb-6 reveal" aria-labelledby="raw-heading">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="raw-heading" class="text-xs font-semibold text-text-primary uppercase tracking-widest">Raw fundamentals</h2>
+        <span class="text-[10px] text-text-muted">Values as stored in evidence</span>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% for group in groups %}
+        <div class="rounded-xl bg-surface-sunken/40 p-4">
+            <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-3">{{ group.title }}</div>
+            <div class="space-y-2">
+                {% for r in group.rows %}
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-text-secondary">{{ r.label }}</span>
+                    {%- if r.state == 'na' -%}
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-sunken text-text-muted text-[10px] font-semibold uppercase tracking-widest" title="Known business N/A for this sector">n/a</span>
+                    {%- elif r.state == 'missing' or r.value is none -%}
+                    <span class="font-mono tabular-nums text-text-muted">&mdash;</span>
+                    {%- else -%}
+                    <span class="font-mono tabular-nums text-text-primary">{{ fmt(r.value, r.unit) }}</span>
+                    {%- endif -%}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+</div>{# /ws-fundamentals #}
+
+{# ── Memo tab (Source.md §16.6 + §16.9) — rendered from the persisted memo_json ── #}
+<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-memo" tabindex="0">
+    {% if ws_memo %}
+    <div class="space-y-5">
+        {% if ws_memo.verdict_line %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Verdict line</p>
+            <p class="text-base font-semibold text-text-primary">{{ ws_memo.verdict_line }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.thesis %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Thesis</p>
+            <p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line">{{ ws_memo.thesis }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.business_model %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-1">Business model</p>
+            <p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line">{{ ws_memo.business_model }}</p>
+        </div>
+        {% endif %}
+        {% if ws_memo.growth_drivers and ws_memo.growth_drivers|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">Growth drivers</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for g in ws_memo.growth_drivers %}<li>{{ g.driver if g is mapping else g }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if ws_memo.risk_factors and ws_memo.risk_factors|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">Risk factors</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for r in ws_memo.risk_factors %}<li>{{ r.risk if r is mapping else r }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% set bbd = ws_memo.bull_bear_debate if ws_memo.bull_bear_debate is mapping else {} %}
+        {% if bbd.bull_case or bbd.bear_case or bbd.advocate_lean %}
+        <div class="card card-elevated p-5 reveal">
+            <div class="flex items-center justify-between mb-3">
+                <p class="text-[10px] text-text-muted uppercase tracking-widest">Bull / Bear debate</p>
+                {% if bbd.advocate_lean %}<span class="text-[10px] font-semibold {{ 'text-positive' if bbd.advocate_lean|upper == 'BULL' else '' }}{{ 'text-negative' if bbd.advocate_lean|upper == 'BEAR' else '' }}{{ 'text-text-muted' if bbd.advocate_lean|upper in ('NEUTRAL','BALANCED') else '' }}">{{ bbd.advocate_lean|upper }}</span>{% endif %}
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {% if bbd.bull_case %}<div class="p-3 bg-positive-soft/40 rounded-xl"><p class="text-[10px] text-positive uppercase tracking-widest mb-1">Bull</p><p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bull_case }}</p></div>{% endif %}
+                {% if bbd.bear_case %}<div class="p-3 bg-negative-soft/40 rounded-xl"><p class="text-[10px] text-negative uppercase tracking-widest mb-1">Bear</p><p class="text-sm text-text-secondary leading-relaxed">{{ bbd.bear_case }}</p></div>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_memo.what_would_change_my_mind and ws_memo.what_would_change_my_mind|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-2">What would change my mind</p>
+            <ul class="space-y-1.5 text-sm text-text-secondary list-disc pl-5">
+                {% for t in ws_memo.what_would_change_my_mind %}<li>{{ t }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        <div class="reveal">
+            <a href="/memo/{{ ticker }}" class="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl bg-accent-soft text-accent hover:bg-accent hover:text-white transition-colors font-medium">Open full memo &rarr;</a>
+        </div>
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">{{ ticker }} has not been analyzed yet.</p>
+        <p class="text-xs text-text-muted">Run a cycle to generate the investment memo.</p>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Personas tab (Source.md §15.4 / §16.6 per-persona accordion) ── #}
+<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-personas" tabindex="0">
+    {% if ws_agent_results|length > 0 %}
+    {% set _aff_by = {} %}
+    {% for a in ws_persona_affinity %}{% set _ = _aff_by.update({a.persona: a}) %}{% endfor %}
+    <div class="space-y-3">
+        {% for r in ws_agent_results %}
+        {% set _brier = (_aff_by[r.persona].avg_brier) if (_aff_by.get(r.persona)) else none %}
+        <details class="card card-elevated reveal">
+            <summary class="cursor-pointer p-4 flex items-center justify-between gap-3 list-none">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-text-primary">{{ r.persona|replace('_',' ')|title }}</p>
+                    <p class="text-xs text-text-muted truncate">{{ r.key_signal or (r.error if r.error else '—') }}</p>
+                </div>
+                <div class="flex items-center gap-3 flex-shrink-0">
+                    {% if _brier is not none %}<span class="text-[10px] text-text-muted font-mono" title="Rolling Brier (lower is better)">Brier {{ "%.2f"|format(_brier|float) }}</span>{% endif %}
+                    <span class="inline-flex items-center gap-1 text-[10px] font-mono">
+                        <span class="text-positive">{{ "%.0f"|format((r.p_up*100)|float) }}↑</span>
+                        <span class="text-text-muted">{{ "%.0f"|format((r.p_flat*100)|float) }}→</span>
+                        <span class="text-negative">{{ "%.0f"|format((r.p_down*100)|float) }}↓</span>
+                    </span>
+                </div>
+            </summary>
+            <div class="px-4 pb-4 pt-1 border-t border-border-subtle">
+                {% if r.analysis %}<p class="text-sm text-text-secondary leading-relaxed whitespace-pre-line mt-3">{{ r.analysis }}</p>{% endif %}
+                {% if r.error %}<p class="mt-3 text-xs text-negative">Error: {{ r.error }}</p>{% endif %}
+            </div>
+        </details>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">No per-persona results in memory for {{ ticker }}.</p>
+        <p class="text-xs text-text-muted">Persona outputs from the most recent cycle appear here while that cycle is in session or until the next one starts.</p>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Lineage tab (Source.md §16.6 position lineage + historical decisions) ── #}
+<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-lineage" tabindex="0">
+    <div class="space-y-5">
+        {% if ws_holding %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Position</p>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <div><p class="text-[10px] text-text-muted">State</p><p class="font-mono text-text-primary">{{ ws_holding.state }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Entry date</p><p class="font-mono text-text-primary">{{ ws_holding.entry_date[:10] if ws_holding.entry_date else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Entry price</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.entry_price_usd) if ws_holding.entry_price_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Size</p><p class="font-mono text-text-primary">${{ "%.0f"|format(ws_holding.position_size_usd) if ws_holding.position_size_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Verdict at entry</p><p class="font-mono text-text-primary">{{ ws_holding.verdict or '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Conviction at entry</p><p class="font-mono text-text-primary">{{ "%.2f"|format(ws_holding.conviction_score) if ws_holding.conviction_score is not none else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Current price</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.current_price_usd) if ws_holding.current_price_usd else '—' }}</p></div>
+                <div><p class="text-[10px] text-text-muted">Price target</p><p class="font-mono text-text-primary">${{ "%.2f"|format(ws_holding.price_target_usd) if ws_holding.price_target_usd else '—' }}</p></div>
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_stop_events|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Stop events</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr class="text-[10px] text-text-muted uppercase tracking-widest text-left">
+                        <th class="py-1 pr-4">Type</th><th class="py-1 pr-4">Detected</th><th class="py-1 pr-4">Trigger</th><th class="py-1 pr-4">Stop</th><th class="py-1">Status</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        {% for s in ws_stop_events %}
+                        <tr class="text-text-secondary">
+                            <td class="py-2 pr-4 font-mono">{{ s.stop_type }}</td>
+                            <td class="py-2 pr-4 font-mono">{{ s.detected_at[:16] if s.detected_at else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono">${{ "%.2f"|format(s.trigger_price_usd) if s.trigger_price_usd else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono">${{ "%.2f"|format(s.stop_price_usd) if s.stop_price_usd else '—' }}</td>
+                            <td class="py-2 font-mono">{{ s.status }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        {% if ws_ticker_decisions|length > 0 %}
+        <div class="card card-elevated p-5 reveal">
+            <p class="text-[10px] text-text-muted uppercase tracking-widest mb-3">Decisions across cycles</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead><tr class="text-[10px] text-text-muted uppercase tracking-widest text-left">
+                        <th class="py-1 pr-4">Date</th><th class="py-1 pr-4">Verdict</th><th class="py-1 pr-4">Conviction</th><th class="py-1">Cycle</th>
+                    </tr></thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        {% for d in ws_ticker_decisions %}
+                        <tr class="text-text-secondary">
+                            <td class="py-2 pr-4 font-mono">{{ d.opened_at[:10] if d.opened_at else '—' }}</td>
+                            <td class="py-2 pr-4 font-mono {{ 'text-positive' if d.verdict in ('STRONG_BUY','BUY') else '' }}{{ 'text-negative' if d.verdict == 'SKIP' else '' }}">{{ d.verdict }}</td>
+                            <td class="py-2 pr-4 font-mono">{{ "%.2f"|format(d.conviction) if d.conviction is not none else '—' }}</td>
+                            <td class="py-2 font-mono text-[10px] text-text-muted truncate max-w-[12rem]">{{ d.cycle_id }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        {% if not ws_holding and ws_ticker_decisions|length == 0 %}
+        <div class="card card-elevated p-8 reveal text-center">
+            <p class="text-sm text-text-secondary mb-1">No position or decision history for {{ ticker }}.</p>
+            <p class="text-xs text-text-muted">Lineage appears once this ticker is held or has run through a cycle.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+{# ── Failures tab (Source.md §16.6 failure history; Agents.md FDE taxonomy) ── #}
+<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-failures" tabindex="0">
+    {% if ws_failures|length > 0 %}
+    <div class="space-y-3">
+        {% for f in ws_failures %}
+        <div class="card card-elevated p-5 reveal">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-mono font-semibold text-negative">{{ f.get("fa.taxonomy") or f.get("taxonomy") or "—" }}</span>
+                <span class="text-[10px] text-text-muted font-mono">{{ (f.get("fa.ts") or f.get("ts") or "")[:16] }}</span>
+            </div>
+            <p class="text-sm text-text-secondary leading-relaxed">{{ f.get("fa.summary") or f.get("summary") or "" }}</p>
+            {% set _sev = f.get("fa.severity") if f.get("fa.severity") is not none else f.get("severity") %}
+            {% if _sev is not none %}<p class="mt-2 text-[10px] text-text-muted">Severity {{ "%.2f"|format(_sev|float) }}</p>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card card-elevated p-8 reveal text-center">
+        <p class="text-sm text-text-secondary mb-1">No recorded failed assumptions for {{ ticker }}.</p>
+        <p class="text-xs text-text-muted">FailedAssumption nodes (Architecture.md §8 graph) appear here when a position is stopped out and the FDE classifies the failure.</p>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+// Ticker workspace tab switching (Source.md §16.6). No framework — plain DOM,
+// degrades to all-panels-visible if JS fails (panels default to .hidden except
+// fundamentals, so without JS only fundamentals shows; with JS, tabs reveal).
+(function () {
+    var tabs = document.querySelectorAll('[data-ws-tab]');
+    var panels = document.querySelectorAll('.ws-panel');
+    if (!tabs.length) return;
+    function activate(name) {
+        panels.forEach(function (p) {
+            p.classList.toggle('hidden', p.id !== 'ws-' + name);
+        });
+        tabs.forEach(function (b) {
+            var on = b.getAttribute('data-ws-tab') === name;
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.setAttribute('tabindex', on ? '0' : '-1');
+            b.classList.toggle('bg-accent-soft', on);
+            b.classList.toggle('text-accent', on);
+            b.classList.toggle('text-text-secondary', !on);
+        });
+        try { history.replaceState(null, '', '#' + name); } catch (e) {}
+    }
+    tabs.forEach(function (b) {
+        b.addEventListener('click', function () { activate(b.getAttribute('data-ws-tab')); });
+        // Keyboard navigation (WAI-ARIA tabs pattern): Arrow/Home/End moves
+        // focus across the tab list and activates the new tab; tabindex
+        // roving is reflected back into the DOM after activation.
+        b.addEventListener('keydown', function (e) {
+            var ids = Array.prototype.map.call(tabs, function (t) {
+                return t.getAttribute('data-ws-tab');
+            });
+            var i = ids.indexOf(b.getAttribute('data-ws-tab'));
+            var next = -1;
+            if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+            else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+            else if (e.key === 'Home') next = 0;
+            else if (e.key === 'End') next = tabs.length - 1;
+            if (next < 0) return;
+            e.preventDefault();
+            var target = tabs[next];
+            target.focus();
+            activate(target.getAttribute('data-ws-tab'));
+        });
+    });
+    // Deep link: /ticker/{ticker}#memo  → open that tab.
+    var initial = (location.hash || '').replace('#', '');
+    if (initial && document.getElementById('ws-' + initial)) { activate(initial); }
+    else { activate('fundamentals'); }
+})();
+</script>
+
+{% endif %}
+{% endblock %}

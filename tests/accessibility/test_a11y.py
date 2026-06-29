@@ -32,7 +32,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_renders_200(self, dashboard_client, url):
         """Every page must render without server errors."""
@@ -47,7 +46,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_landmark_roles(self, dashboard_client, url):
         """Every page must have landmark ARIA roles (nav, main, etc.)."""
@@ -64,7 +62,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_lang_attribute(self, dashboard_client, url):
         """HTML must have lang attribute."""
@@ -80,7 +77,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_page_has_title(self, dashboard_client, url):
         """Every page must have a descriptive <title>."""
@@ -98,13 +94,17 @@ class TestAccessibilityStructural:
     def test_keyboard_shortcuts_have_aria(self, dashboard_client):
         """Keyboard shortcut elements must be accessible."""
         response = dashboard_client.get("/")
-        html = response.text.lower()
-        # Find command palette element and verify it has accessibility attributes
-        palette_match = re.search(r'<[^>]*(command-palette|cmd-k)[^>]*>', html, re.IGNORECASE)
+        html = response.text
+        # Find command palette button element and verify it has accessibility attributes.
+        # Match only real HTML tags (not Jinja comments), and prefer the <button>
+        # that opens the palette via onclick="toggleCmdK()".
+        palette_match = re.search(
+            r'<button[^>]*onclick="toggleCmdK\(\)"[^>]*>', html
+        )
         if palette_match:
             element = palette_match.group()
             assert 'aria-label' in element or 'role=' in element, \
-                "Command palette element lacks aria-label or role: " + element
+                "Command palette button lacks aria-label or role: " + element
         else:
             # If no explicit palette element, verify input has accessible attributes
             assert 'cmd-k-input' in html or 'aria-label="command' in html, \
@@ -162,7 +162,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_images_have_alt_or_aria(self, dashboard_client, url):
         """All <img> tags must have alt text, all decorative images aria-hidden."""
@@ -182,7 +181,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_buttons_have_accessible_names(self, dashboard_client, url):
         """All <button> elements must have accessible text (content, aria-label, or title)."""
@@ -208,7 +206,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_form_inputs_have_labels(self, dashboard_client, url):
         """All form inputs must have associated labels (for/id match or aria-label)."""
@@ -237,7 +234,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_no_outline_none_without_replacement(self, dashboard_client, url):
         """Inline outline:none must be paired with box-shadow or other focus indicator."""
@@ -295,7 +291,6 @@ class TestAccessibilityStructural:
         "/cortex",
         "/settings",
         "/debug",
-        "/compare",
     ])
     def test_no_positive_tabindex(self, dashboard_client, url):
         """No positive tabindex values (WCAG 2.4.3 — messes with tab order)."""
@@ -342,7 +337,8 @@ class TestAxeCoreCI:
     This is the CI-grade check that the structural tests above approximate.
     """
 
-    PAGES = ["/", "/agents", "/pipeline", "/universe", "/cortex", "/settings", "/debug"]
+    PAGES = ["/", "/agents", "/pipeline", "/universe", "/cortex", "/settings", "/debug",
+             "/ticker/AAPL"]
 
     @pytest.fixture(scope="class")
     def browser(self):
@@ -382,19 +378,42 @@ class TestAxeCoreCI:
     @pytest.mark.parametrize("page_path", PAGES)
     def test_axe_core_no_violations(self, browser, base_url, page_path):
         """axe-core scan must find zero WCAG 2.1 AA violations."""
+        from axe_playwright_python.sync_playwright import Axe
+
         page = browser.new_page()
         try:
             # Pages hold a persistent SSE connection, so "networkidle" never
             # settles — wait for DOM content instead.
             page.goto(f"{base_url}{page_path}", wait_until="domcontentloaded", timeout=10000)
 
-            # Inject axe-core and run
-            from axe_playwright_python.sync_playwright import Axe
-            axe = Axe(page)
-            results = axe.run()
-
-            violations = results.get("violations", [])
-            critical = [v for v in violations if v.get("impact") in ("critical", "serious")]
+            # Stabilize before scanning. Pages hydrate/theme-apply AFTER
+            # domcontentloaded; scanning too early reads transient
+            # pre-hydration colors (e.g. axe reports #949da9 on elements
+            # whose settled computed color is #0f172a) and produces
+            # false-positive color-contrast violations. Color-contrast is
+            # the only hydration-sensitive rule; rescan until it stops
+            # changing so the result is deterministic regardless of host
+            # load (a fixed sleep is brittle when the machine is busy).
+            SETTLE_MS = 500
+            MAX_SETTLE_PASSES = 5
+            axe = Axe()
+            results = axe.run(page)
+            critical = [v for v in results.response.get("violations", [])
+                        if v.get("impact") in ("critical", "serious")]
+            cc_count = lambda: sum(len(v.get("nodes", [])) for v in critical
+                                   if v.get("id") == "color-contrast")
+            prev_cc = cc_count()
+            for _ in range(MAX_SETTLE_PASSES):
+                if prev_cc == 0:
+                    break
+                page.wait_for_timeout(SETTLE_MS)
+                results = axe.run(page)
+                critical = [v for v in results.response.get("violations", [])
+                            if v.get("impact") in ("critical", "serious")]
+                cur_cc = cc_count()
+                if cur_cc == prev_cc:
+                    break  # settled — no further hydration changes
+                prev_cc = cur_cc
 
             assert len(critical) == 0, (
                 f"{page_path}: {len(critical)} critical/serious axe-core violations found:\n"
@@ -405,3 +424,82 @@ class TestAxeCoreCI:
             )
         finally:
             page.close()
+
+
+class TestTickerDataPageAccessibility:
+    """Structural a11y checks for the Ticker Data page (Source.md §16.8).
+
+    The dashboard_client fixture uses an empty tmp database, so the page renders
+    its no-data branch — which still emits the full base chrome (main landmark,
+    lang, title) that these checks assert.
+    """
+
+    URL = "/ticker/AAPL"
+
+    def test_renders_200(self, dashboard_client):
+        assert dashboard_client.get(self.URL).status_code == 200
+
+    def test_has_main_landmark(self, dashboard_client):
+        html = dashboard_client.get(self.URL).text
+        assert "<main" in html or 'role="main"' in html
+
+    def test_has_lang_attribute(self, dashboard_client):
+        assert 'lang="en"' in dashboard_client.get(self.URL).text
+
+    def test_has_descriptive_title(self, dashboard_client):
+        html = dashboard_client.get(self.URL).text
+        assert "<title>" in html and "AAPL" in html
+
+    def test_no_data_branch_has_heading(self, dashboard_client):
+        """Empty-state must expose a heading for screen-reader navigation."""
+        # Use a ticker guaranteed absent from the evidence cache.
+        html = dashboard_client.get("/ticker/ZZNODATA").text
+        assert "No data for ZZNODATA" in html
+
+    def test_no_data_branch_has_h1(self, dashboard_client):
+        """Every page must have a top-level <h1> for screen-reader navigation,
+        including the empty-state branch. The ticker symbol is the page's
+        primary identity and is rendered as the H1 in all three branches
+        (data, no_data, error)."""
+        for path in ("/ticker/ZZNODATA", "/ticker/AAPL"):
+            html = dashboard_client.get(path).text
+            assert "<h1" in html, f"page {path} is missing an <h1> element"
+            # The H1 must contain the ticker symbol as its primary text.
+            # Cheap check: pull the first <h1>...</h1> block.
+            import re
+            m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.DOTALL)
+            assert m, f"page {path} has <h1> but it is empty/closed wrong"
+            h1_text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            assert h1_text, f"page {path} <h1> has no text content"
+
+    def test_valuation_fingerprint_is_removed(self):
+        """The Valuation fingerprint section (radar, then heatmap) was removed at
+        the operator's request — the per-year multiples are already covered by the
+        Valuation summary cards and the Raw fundamentals groups, so the section was
+        redundant. Assert it is fully gone: no section heading, no matrix markup,
+        no leftover radar SVG/JS, and no dead heatmap CSS class references."""
+        template = Path("pmacs/web/templates/ticker_detail.html").read_text()
+        assert 'id="mult-heading"' not in template, "fingerprint heading still present"
+        assert 'Valuation fingerprint' not in template, "fingerprint heading text still present"
+        assert 'class="fp-matrix"' not in template, "fingerprint matrix markup still present"
+        assert 'fp_tone' not in template, "dead fp_tone macro still defined"
+        # The old D3 radar must also stay gone.
+        assert 'id="radar-svg"' not in template, "old radar svg still present"
+        assert 'id="radar-data"' not in template, "old radar-data JSON still present"
+
+    def test_analyst_current_price_uses_authoritative_source(self):
+        """The Analyst consensus 'Current price' card must use the authoritative
+        fallback-chain current price (technical MA → yfinance metrics → analyst
+        packet) passed as the `current_price` context var — NOT the price-target
+        packet's own `current_price`, which is blank whenever the analyst source
+        returned no live quote. Without this, the card showed `—` even though the
+        page had a real price in the Technical section above."""
+        template = Path("pmacs/web/templates/ticker_detail.html").read_text()
+        assert 'current_price' in template, "current_price context var not referenced in template"
+        # The current-price card must fall back to the authoritative price and
+        # compute upside against it (not against a.current_price alone). It must
+        # also guard with `is defined` so a stale process missing the var doesn't
+        # 500 every ticker page.
+        assert 'current_price is defined' in template, \
+            "current-price card not guarding against undefined current_price"
+        assert 'a.target_mean - px' in template, "upside not computed against authoritative price"

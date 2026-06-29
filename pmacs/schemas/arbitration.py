@@ -29,6 +29,7 @@ class PersonaWeight(BaseModel):
     weight: float = Field(ge=0.0, le=1.0)
     brier_score: float | None = None
     calibration_count: int = 0
+    weight_multiplier: float = Field(default=1.0, ge=0.0)
 
 
 class Arbitrated(BaseModel):

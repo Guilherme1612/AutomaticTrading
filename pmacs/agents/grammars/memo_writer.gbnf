@@ -38,6 +38,11 @@ root ::= "{" ws
   (ws "," ws "\"dissenting_personas\"" ws ":" ws string_array)?
   (ws "," ws "\"dissent_summary\"" ws ":" ws string)?
   (ws "," ws "\"crucible_thesis_survives\"" ws ":" ws ("true" | "false"))?
+  // Wave-2 debate + valuation (Agents.md §16.9) — all optional
+  (ws "," ws "\"bull_bear_debate\"" ws ":" ws object)?
+  (ws "," ws "\"what_would_change_my_mind\"" ws ":" ws string_array)?
+  (ws "," ws "\"reverse_dcf\"" ws ":" ws object)?
+  (ws "," ws "\"scenario_price\"" ws ":" ws object)?
   ws "}"
 
 ws          ::= [ \t\n\r]*

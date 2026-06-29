@@ -113,6 +113,47 @@ class CycleLock:
             self._fd = None
 
 
+def _build_agent_signals(persona_outputs: list[Any]) -> list[dict[str, Any]]:
+    """Build a deterministic per-persona signal list for memo_json persistence.
+
+    Pure function: no I/O, no audit, no SSE. Used by both the success path
+    (_step_13mn_post_decision) and the Crucible-abort path so every memo
+    carries the same per-persona signal shape regardless of cycle outcome.
+
+    Direction tag is derived from p_up/p_down since DirectionalProbability
+    has no key_signal. Matches the demo path's agent_signals shape
+    (pipeline.py _generate_full_memo) so memo.html's per-signal reads
+    are unchanged.
+    """
+    if not persona_outputs:
+        return []
+    sigs: list[dict[str, Any]] = []
+    for dp in persona_outputs:
+        p_up = float(getattr(dp, "p_up", 0.0))
+        p_down = float(getattr(dp, "p_down", 0.0))
+        direction = (
+            "bullish" if p_up > p_down + 0.05
+            else "bearish" if p_down > p_up + 0.05
+            else "neutral"
+        )
+        pname = getattr(
+            getattr(dp, "persona", None), "value",
+            str(getattr(dp, "persona", "")),
+        )
+        sigs.append({
+            "persona": pname,
+            "signal": direction,
+            "direction": direction,
+            "p_up": round(p_up, 4),
+            "p_flat": round(float(getattr(dp, "p_flat", 0.0)), 4),
+            "p_down": round(p_down, 4),
+            "confidence": round(float(getattr(dp, "confidence", 0.0)), 4),
+            "analysis": (getattr(dp, "reasoning", "") or "")[:500],
+            "evidence_cited": list(getattr(dp, "evidence_ids", []) or [])[:5],
+        })
+    return sigs
+
+
 class CycleOrchestrator:
     """Full cycle orchestrator with step dispatch, idempotency, and locking.
 
@@ -153,10 +194,38 @@ class CycleOrchestrator:
         # Pre-cycle pipeline state (populated by _run_pre_cycle)
         self._fx_rate: Any | None = None
         self._macro_regime_result: Any | None = None
+        # Rec1 (agent sweep): MacroRegime is cycle-level, not ticker-specific.
+        # The first ticker's real-evidence macro DP is cached here and reused for
+        # every subsequent ticker, eliminating N-1 redundant LLM calls per cycle.
+        # Distinct from _macro_regime_result (the step-6 evidence=[] brief label).
+        self._macro_regime_dp_cached: Any | None = None
         self._last_crucible_attacks: list[Any] = []
+        # Crucible narrative fields stashed for memo injection (Task #8 Part C):
+        # the crucible LLM emits summary/thesis_survives alongside severity/attacks,
+        # but only attacks were previously stashed. Persist these so memo.html's
+        # Crucible card renders from memo_json without the demo path's live globals.
+        self._last_crucible_summary: str = ""
+        self._last_crucible_thesis_survives: bool = True
+        # Wave-2 debate + audit state (Agents.md §11b-§11d)
+        self._last_auditor_flags: list[Any] = []
+        self._last_advocate_outputs: dict[str, Any] = {}
+        self._last_reverse_dcf: Any | None = None
+        self._last_scenario_price: Any | None = None
         self._gatekeeper_results: dict[str, Any] = {}
         self._queue: list[Any] = []
         self._universe_tickers: list[str] = []
+
+        # Unification (Task #8): operator-initiated cycle options.
+        # _skip_kill_switch — set per-run_cycle by the operator routes (SOLO/cycle
+        # start) so an explicit operator research run proceeds even if the kill
+        # switch is ENGAGED. Automated callers (boot_detector/daemon) never set it.
+        # Budget enforcement is independent of the kill switch and still runs per
+        # LLM call. Non-Negotiable #5 preserved: we never auto-disengage the kill
+        # switch; the operator opts in per-run, automated paths stay gated.
+        self._skip_kill_switch: bool = False
+        # _requested_tickers — when non-None, overrides universe composition so a
+        # single-ticker SOLO run cycles exactly that ticker (no universe scan).
+        self._requested_tickers: list[str] | None = None
 
         # Paper ledger (created lazily or injected for testing)
         self._ledger: Any | None = None
@@ -254,7 +323,14 @@ class CycleOrchestrator:
 
     # -- Public API --
 
-    def run_cycle(self, trigger: str) -> str:
+    def run_cycle(
+        self,
+        trigger: str,
+        *,
+        tickers: list[str] | None = None,
+        cycle_id: str | None = None,
+        skip_kill_switch: bool = False,
+    ) -> str:
         """Main entry point. Acquires lock, runs steps 0-30, returns cycle_id.
 
         Steps:
@@ -277,16 +353,25 @@ class CycleOrchestrator:
 
         Args:
             trigger: What triggered this cycle (e.g. 'TIMER', 'OPERATOR').
-
-        Returns:
-            The cycle_id of the completed cycle.
+            tickers: Optional explicit ticker list. When provided, overrides
+                universe composition (step 8) so the cycle processes exactly
+                these tickers — used by SOLO single-ticker research runs. None
+                means compose the queue from the universe as usual.
+            cycle_id: Optional pre-generated cycle_id. When provided, the caller
+                already knows the id (so it can return it to the client before
+                this call returns); initiate_cycle uses it instead of uuid4().
+            skip_kill_switch: When True, skips the four kill-switch gates
+                (initiate_cycle, _step_kill_switch, per-symbol pre/post). Set ONLY
+                by operator-initiated routes (SOLO/cycle start) for explicit
+                research runs; automated callers must leave it False. Budget
+                enforcement is independent and still runs per LLM call.
 
         Raises:
             CycleLockError: If another cycle is already running.
             KillSwitchEngagedError: If kill switch is engaged.
             ClockDriftError: If NTP drift exceeds threshold.
         """
-        cycle_id: str = ""
+        cycle_id: str = cycle_id or ""
 
         # Initialize cycle metrics (S6-1)
         self._cycle_metrics: dict[str, Any] = {
@@ -302,16 +387,38 @@ class CycleOrchestrator:
         self._shutdown_requested = False
         self._kill_switch_engaged_mid_cycle = False
         self._symbol_holdings.clear()
+        self._macro_regime_dp_cached = None  # Rec1: reset per-cycle macro DP cache
+        # Unification (Task #8): apply per-run operator options.
+        self._skip_kill_switch = skip_kill_switch
+        self._requested_tickers = list(tickers) if tickers else None
 
         with CycleLock(self._lock_path):
-            # Register signal handlers for graceful shutdown (S5-2)
-            old_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
-            old_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+            # Register signal handlers for graceful shutdown (S5-2).
+            # signal.signal() only works in the main thread; when the orchestrator
+            # is invoked via FastAPI's run_in_executor we silently skip registration
+            # — the kill switch + periodic check-in already cover graceful stop.
+            import threading as _threading
+            if _threading.current_thread() is _threading.main_thread():
+                old_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
+                old_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+            else:
+                old_sigterm, old_sigint = None, None
 
             try:
                 # Step 0 — Initiate cycle
-                cycle_id = initiate_cycle(trigger, self._db_path, self._audit_path)
+                cycle_id = initiate_cycle(
+                    trigger, self._db_path, self._audit_path,
+                    cycle_id=cycle_id, skip_kill_switch=self._skip_kill_switch,
+                )
                 self._publish_sse("cycle", "cycle.open", {
+                    "cycle_id": cycle_id,
+                    "trigger": trigger,
+                })
+                # Task #8 Part D1 — emit the alias the dashboard JS already
+                # handles (demo path's event name) so no JS change is needed
+                # after the SOLO/cycle routes move onto run_cycle. The only SSE
+                # consumer is the browser; emitting both is zero-risk.
+                self._publish_sse("cycle", "cycle.opened", {
                     "cycle_id": cycle_id,
                     "trigger": trigger,
                 })
@@ -377,6 +484,11 @@ class CycleOrchestrator:
                         "cycle_id": cycle_id,
                         "metrics": self._cycle_metrics,
                     })
+                    # Task #8 Part D1 — dashboard JS alias (demo event name).
+                    self._publish_sse("cycle", "cycle.closed", {
+                        "cycle_id": cycle_id,
+                        "metrics": self._cycle_metrics,
+                    })
                     self._mark_op_complete(cycle_id, op_seq, "close_cycle")
 
                 log_debug(
@@ -407,9 +519,12 @@ class CycleOrchestrator:
                 raise
 
             finally:
-                # Restore original signal handlers (S5-2)
-                signal.signal(signal.SIGTERM, old_sigterm)
-                signal.signal(signal.SIGINT, old_sigint)
+                # Restore original signal handlers (S5-2). Only registered when
+                # we ran in the main thread — otherwise these are None.
+                if old_sigterm is not None:
+                    signal.signal(signal.SIGTERM, old_sigterm)
+                if old_sigint is not None:
+                    signal.signal(signal.SIGINT, old_sigint)
 
     # -- Signal handler (S5-2) --
 
@@ -559,8 +674,12 @@ class CycleOrchestrator:
             )
 
     def _step_kill_switch(self, cycle_id: str) -> None:
-        """Step 4: Check kill switch. Abort if engaged."""
-        if is_engaged(self._db_path):
+        """Step 4: Check kill switch. Abort if engaged.
+
+        Skipped when ``self._skip_kill_switch`` is set (operator-initiated
+        research run that explicitly opts past an engaged kill switch).
+        """
+        if not self._skip_kill_switch and is_engaged(self._db_path):
             log_debug(
                 "CYCLE_ABORTED_KILL_SWITCH",
                 payload={"cycle_id": cycle_id},
@@ -810,8 +929,31 @@ class CycleOrchestrator:
         )
 
     def _step_universe_sync(self, cycle_id: str) -> None:
-        """Step 8: Get current universe and check for halted/delisted."""
+        """Step 8: Get current universe and check for halted/delisted.
+
+        When ``self._requested_tickers`` is set (operator-initiated SOLO run),
+        the universe is overridden with exactly those tickers — no DB scan, no
+        gatekeeper universe filtering downstream acts on anything else.
+        """
         from pmacs.data.universe import get_universe
+
+        if self._requested_tickers is not None:
+            self._universe_tickers = list(self._requested_tickers)
+            self._universe_priority = {}
+            log_debug(
+                "CYCLE_UNIVERSE_SYNC",
+                payload={
+                    "cycle_id": cycle_id,
+                    "universe_size": len(self._universe_tickers),
+                    "halted_count": 0,
+                    "requested": True,
+                },
+                level="INFO",
+                cycle_id=cycle_id,
+                msg=f"Universe overridden by operator request: "
+                    f"{len(self._universe_tickers)} ticker(s)",
+            )
+            return
 
         try:
             conn = _sql_connect(self._db_path)
@@ -1175,11 +1317,40 @@ class CycleOrchestrator:
         holding, persona_results, evidence_packets, op = result
         self._last_persona_results = persona_results  # IMP-3: forensics quality extraction
 
+        # -- Step 13d5: Wave-2 debate + cross-persona audit (Agents.md §11b-§11d) ---
+        # Runs AFTER wave-1 personas committed (frozen) and BEFORE Arbitration.
+        # Advocates enter the arbitration pool as normal voters; auditor flags cap
+        # offending weights and enrich the Crucible brief (§11d.6).
+        advocate_results, auditor_flags = self._step_13d5_debate(
+            holding, ticker, cycle_id, op, evidence_packets, brief, persona_results,
+        )
+        persona_results.update(advocate_results)
+        self._last_auditor_flags = auditor_flags
+        self._last_advocate_outputs = {k: v for k, v in advocate_results.items()
+                                        if k in ("bull_advocate", "bear_advocate")}
+
         # -- Step 13e: Arbitration ---
         result = self._step_13e_arbitration(holding, ticker, cycle_id, op, persona_results)
         if isinstance(result, int):
             return result  # abort path
         holding, arbitrated, op = result
+
+        # -- Step 13e5: Valuation triangulation (Architecture.md §9.4b) ---
+        # Deterministic engines (reverse-DCF, forward-valuation, scenario-price).
+        # The forward-valuation engine consumes the ValuationAgent's LLM-produced
+        # assumptions, but the price math is pure Python. Feeds MemoWriter only —
+        # does NOT amend conviction.
+        self._last_reverse_dcf, self._last_forward_valuation, self._last_scenario_price = (
+            self._compute_valuation(
+                ticker, cycle_id, evidence_packets, persona_results, arbitrated, brief,
+            )
+        )
+
+        # -- Auditor flags → FDE feed (Agents.md §11d.6.3) ---
+        # Best effort: each flag becomes a FailedAssumption (KuzuDB + SQLite) so the
+        # Mutation Engine's cluster detection picks them up. Never blocks the cycle.
+        if auditor_flags:
+            self._write_auditor_flags_to_fde(holding.id, cycle_id, ticker, auditor_flags)
 
         # -- Steps 13f-13g: Crucible ---
         result = self._step_13fg_crucible(holding, ticker, cycle_id, op, evidence_packets, arbitrated, brief)
@@ -1193,8 +1364,15 @@ class CycleOrchestrator:
             return result  # abort path
         holding, verdict, conviction_score, risk_result, ev_result, sizing_result, is_bootstrap, op = result
 
-        # -- Steps 13m-13n: Memo + scan record ---
-        op = self._step_13mn_post_decision(holding, ticker, cycle_id, op, evidence_packets, brief, verdict, conviction_score, arbitrated, crucible_severity)
+        # -- Steps 13m-13n: Memo + scan record --
+        op = self._step_13mn_post_decision(
+            holding, ticker, cycle_id, op,
+            evidence_packets, brief, verdict, conviction_score,
+            arbitrated, crucible_severity,
+            per_persona_calibration=getattr(
+                self, "_per_persona_calibration_for_ticker", None
+            ) or None,
+        )
 
         # -- Steps 13o-13p: Execution + catastrophe net ---
         op = self._step_13op_execution(holding, ticker, cycle_id, op, verdict, conviction_score, risk_result, sizing_result, ev_result, arbitrated)
@@ -1318,6 +1496,26 @@ class CycleOrchestrator:
                     affinity_data = {"avg_brier": rows[0][0], "cycle_count": rows[0][1]}
             except Exception:
                 pass
+        # Per-persona DuckDB calibration for THIS ticker — drives the
+        # "## Persona Arbitration Weights" table in the memo (Tier 4). Returns
+        # a dict mapping persona name → avg_brier so MemoWriter can mark
+        # personas with ticker-level brier > 0.25 as LOW CONFIDENCE.
+        per_persona_calibration: dict[str, float] = {}
+        if duckdb_adapter is not None:
+            try:
+                rows = duckdb_adapter.execute(
+                    "SELECT persona, avg_brier FROM persona_ticker_affinity "
+                    "WHERE ticker = ? AND cycle_count >= 5",
+                    [ticker],
+                )
+                for r in rows or []:
+                    if len(r) >= 2 and r[1] is not None:
+                        per_persona_calibration[str(r[0])] = float(r[1])
+            except Exception:
+                pass
+        # Stash so _step_13mn_post_decision can read it without re-querying.
+        # Best-effort: if the affinity table is empty, this is just {}.
+        self._per_persona_calibration_for_ticker = per_persona_calibration
 
         # Prior verdict for this ticker (long-term memory)
         prior_verdict: str | None = None
@@ -1325,6 +1523,18 @@ class CycleOrchestrator:
         prior_key_signal: str | None = None
         prior_decided_at: str | None = None
         ticker_analysis_count: int = 0
+        # Tier 2A — rich prior-memo context (full thesis, fair_value, methodology,
+        # evidence, risks, what_would_change_my_mind, forward-expected price).
+        # Populated below from the most-recent memos.memo_json so the next cycle's
+        # personas see the prior operator-grade memo in full rather than the
+        # 200-char truncated raw_text snippet.
+        prior_thesis: str | None = None
+        prior_fair_value: str | None = None
+        prior_valuation_methodology: str | None = None
+        prior_key_evidence: list[str] | None = None
+        prior_key_risks: list[str] | None = None
+        prior_what_changed: list[str] | None = None
+        prior_forward_expected_price_usd: float | None = None
         try:
             conn_prior = _sql_connect(self._db_path)
             try:
@@ -1373,6 +1583,36 @@ class CycleOrchestrator:
                     if mj_rows and mj_rows[0][0]:
                         memo_data = _json.loads(mj_rows[0][0])
                         prior_crucible_severity = memo_data.get("crucible_severity")
+                        # Tier 2A — extract the rich prior-memo summary and pass
+                        # through to build_context_brief. Reuses the
+                        # memo_scorer.extract_prior_memo_summary helper so the
+                        # parse path is shared with the scorer retry path. The
+                        # helper is best-effort: it returns {} on any failure
+                        # so a malformed memo_json never blocks the brief.
+                        try:
+                            from pmacs.agents.sanity.memo_scorer import (
+                                extract_prior_memo_summary,
+                            )
+                            _psm = extract_prior_memo_summary(mj_rows[0][0])
+                            if _psm:
+                                prior_thesis = _psm.get("thesis")
+                                prior_fair_value = _psm.get("fair_value")
+                                prior_valuation_methodology = _psm.get(
+                                    "valuation_methodology"
+                                )
+                                prior_key_evidence = _psm.get("key_evidence") or None
+                                prior_key_risks = _psm.get("key_risks") or None
+                                prior_what_changed = _psm.get(
+                                    "what_would_change_my_mind"
+                                ) or None
+                                _pfep = _psm.get("forward_expected_price_usd")
+                                if isinstance(_pfep, (int, float)):
+                                    prior_forward_expected_price_usd = float(_pfep)
+                                # prior_conviction / prior_crucible_severity
+                                # already populated above from the raw SQL;
+                                # helper output is a fallback only.
+                        except Exception:
+                            pass
                 except (ValueError, TypeError):
                     pass
                 # Store for drift detection in crucible step
@@ -1399,6 +1639,13 @@ class CycleOrchestrator:
                 ticker_analysis_count=ticker_analysis_count,
                 prior_agent_signals=prior_agent_signals,
                 prior_crucible_severity=prior_crucible_severity,
+                prior_thesis=prior_thesis,
+                prior_fair_value=prior_fair_value,
+                prior_valuation_methodology=prior_valuation_methodology,
+                prior_key_evidence=prior_key_evidence,
+                prior_key_risks=prior_key_risks,
+                prior_what_changed=prior_what_changed,
+                prior_forward_expected_price_usd=prior_forward_expected_price_usd,
             )
         except Exception as exc:
             log_debug(
@@ -1486,6 +1733,729 @@ class CycleOrchestrator:
 
         return holding, persona_results, evidence_packets, op + 1
 
+    def _step_13d5_debate(
+        self,
+        holding: Any,
+        ticker: str,
+        cycle_id: str,
+        op: int,
+        evidence_packets: list[Any],
+        brief: str,
+        persona_results: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[Any]]:
+        """Step 13d5: Wave-2 debate + cross-persona audit (Agents.md §11b-§11d).
+
+        Runs BullAdvocate, BearAdvocate, CrossPersonaAuditor in parallel AFTER the
+        7 wave-1 personas have committed (frozen outputs, §14.4). Each receives the
+        wave-1 PersonaOutputs as peer context via set_peer_outputs().
+
+        Advocates' PersonaOutputs are returned so they enter Arbitration as normal
+        voters (parsed by _extract_directional_probability via the extended
+        PersonaName enum). The auditor's flags are parsed and returned for weight
+        caps, Crucible-brief injection, and FDE writes (§11d.6).
+
+        Failures are best-effort: a wave-2 agent that returns None or times out is
+        skipped — it never aborts the cycle (the wave-1 pipeline is already valid).
+        """
+        from pmacs.agents.bull_advocate import BullAdvocateRunner
+        from pmacs.agents.bear_advocate import BearAdvocateRunner
+        from pmacs.agents.cross_persona_auditor import CrossPersonaAuditorRunner
+        from pmacs.schemas.personas import AuditorOutput
+
+        peer_outputs = list(persona_results.values())
+        runners = [
+            BullAdvocateRunner(cycle_id=cycle_id),
+            BearAdvocateRunner(cycle_id=cycle_id),
+            CrossPersonaAuditorRunner(cycle_id=cycle_id),
+        ]
+
+        # Wave-2 reuses the slot budget after wave-1 completes; the wall-clock cost
+        # is one parallel batch (~the slowest of the three). Per-agent timeout
+        # mirrors the wave-1 per-symbol budget.
+        timeout_seconds = 180
+        advocate_results: dict[str, Any] = {}
+        auditor_raw_output: Any = None
+
+        def _run_wave2(runner: Any) -> tuple[str, Any | None]:
+            try:
+                runner.set_peer_outputs(peer_outputs)
+                self._publish_sse("agent", "agent.running", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "persona": runner.persona_name,
+                })
+                output = runner.run(evidence_packets, episodic_context=brief)
+                if output is not None:
+                    self._log_call_billing(runner, cycle_id)
+                    self._publish_sse("agent", "agent.complete", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name,
+                    })
+                else:
+                    self._publish_sse("agent", "agent.failed", {
+                        "cycle_id": cycle_id, "ticker": ticker,
+                        "persona": runner.persona_name, "reason": "returned_none",
+                    })
+                return (runner.persona_name, output)
+            except Exception as exc:
+                log_debug(
+                    "WAVE2_PERSONA_EXCEPTION",
+                    payload={"persona": runner.persona_name, "ticker": ticker,
+                             "error": str(exc)[:200]},
+                    level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                    msg=f"Wave-2 {runner.persona_name} raised {type(exc).__name__} for {ticker}",
+                )
+                self._publish_sse("agent", "agent.failed", {
+                    "cycle_id": cycle_id, "ticker": ticker,
+                    "persona": runner.persona_name,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:80]}",
+                })
+                return (runner.persona_name, None)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(_run_wave2, r): r.persona_name for r in runners}
+            try:
+                for future in as_completed(futures, timeout=timeout_seconds):
+                    name = futures[future]
+                    try:
+                        pname, output = future.result()
+                    except Exception as exc:
+                        log_debug(
+                            "WAVE2_FUTURE_EXCEPTION",
+                            payload={"persona": name, "ticker": ticker, "error": str(exc)[:200]},
+                            level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                            msg=f"Wave-2 {name} future raised {type(exc).__name__}",
+                        )
+                        continue
+                    if output is None:
+                        continue
+                    if pname == "cross_persona_auditor":
+                        auditor_raw_output = output
+                    else:
+                        advocate_results[pname] = output
+            except FuturesTimeoutError:
+                log_debug(
+                    "WAVE2_BATCH_TIMEOUT",
+                    payload={"ticker": ticker, "timeout_s": timeout_seconds,
+                             "completed": list(advocate_results.keys())},
+                    level="WARN", error_code="PERSONA_TIMEOUT", cycle_id=cycle_id,
+                    msg=f"Wave-2 batch timed out for {ticker} after {timeout_seconds}s",
+                )
+
+        # Parse auditor flags from the raw output (defense-in-depth: never trust
+        # the LLM to produce valid flags; on any parse failure, no flags).
+        auditor_flags: list[Any] = []
+        if auditor_raw_output is not None:
+            auditor_flags = self._parse_auditor_flags(auditor_raw_output, cycle_id, ticker)
+
+        log_debug(
+            "WAVE2_DEBATE_COMPLETE",
+            payload={
+                "cycle_id": cycle_id, "ticker": ticker,
+                "advocates": list(advocate_results.keys()),
+                "auditor_flag_count": len(auditor_flags),
+            },
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Wave-2 {ticker}: advocates={list(advocate_results.keys())} flags={len(auditor_flags)}",
+        )
+        return advocate_results, auditor_flags
+
+    def _parse_auditor_flags(
+        self, auditor_output: Any, cycle_id: str, ticker: str
+    ) -> list[Any]:
+        """Parse AuditorOutput.flags from a PersonaOutput. Defense-in-depth."""
+        import json as _json
+        from pmacs.schemas.personas import AuditorOutput
+        raw = getattr(auditor_output, "raw_output", "")
+        if not raw:
+            return []
+        try:
+            data = _json.loads(raw)
+            model = AuditorOutput.model_validate(data)
+            return list(model.flags)
+        except Exception as exc:
+            log_debug(
+                "AUDITOR_FLAG_PARSE_FAILED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="GBNF_PARSE_FAIL", cycle_id=cycle_id,
+                msg=f"Auditor output unparseable for {ticker}: no flags applied",
+            )
+            return []
+
+    def _compute_valuation(
+        self,
+        ticker: str,
+        cycle_id: str,
+        evidence_packets: list[Any],
+        persona_results: dict[str, Any],
+        arbitrated: Any,
+        brief: str | None = None,
+    ) -> tuple[Any, Any, Any]:
+        """Step 13e5: valuation triangulation (Architecture.md §9.4b).
+
+        reverse_dcf (market-implied vs estimated growth) + forward_valuation
+        (LLM-assumption-driven 6-12mo EV/EBITDA price) + scenario_price
+        (probability-weighted expected price). The forward-valuation engine consumes
+        the ValuationAgent's LLM-produced assumptions, but the price math is pure
+        Python (Five Non-Negotiable #2 — LLMs never math). Feeds MemoWriter only —
+        does NOT enter Arbitration and does NOT amend conviction.
+
+        Returns (reverse_dcf, forward_valuation, scenario_price). When the
+        forward-valuation engine is available, its bull/base/bear prices are
+        preferred for scenario_price; otherwise the reverse-DCF sensitivity grid is
+        used (verbatim fallback, preserving today's behavior).
+        """
+        import json as _json
+        from pmacs.engines.reverse_dcf import compute_reverse_dcf
+        from pmacs.engines.scenario_price import compute_scenario_price
+        from pmacs.engines.forward_valuation import compute_forward_valuation
+
+        market_cap, fcf_ttm, assumed_growth = self._extract_valuation_inputs(
+            evidence_packets, persona_results,
+        )
+        current_price = getattr(self, "_current_price", None)
+        current_price_num = current_price if isinstance(current_price, (int, float)) else None
+
+        rdcf = compute_reverse_dcf(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            market_cap_usd=market_cap,
+            fcf_ttm_usd=fcf_ttm,
+            assumed_growth_pct=assumed_growth,
+        )
+
+        # --- Forward valuation (ValuationAgent → ForwardValuationEngine) ---
+        forward = self._run_forward_valuation(
+            ticker, cycle_id, evidence_packets, brief, current_price_num,
+            reverse_dcf_fair_value_usd=rdcf.fair_value_usd,
+        )
+
+        # --- Choose bull/base/bear for scenario_price ---
+        # Prefer the forward-valuation prices when the engine produced all three;
+        # fall back to the reverse-DCF sensitivity grid otherwise (verbatim, today's
+        # behavior). This is the riskiest integration step — the fallback preserves
+        # the existing reverse-DCF-only path unchanged.
+        rdcf_base = rdcf.fair_value_usd
+        rdcf_sens = [v for v in rdcf.sensitivity.values() if isinstance(v, (int, float)) and v > 0]
+        rdcf_bull = max(rdcf_sens) if rdcf_sens else None
+        rdcf_bear = min(rdcf_sens) if rdcf_sens else None
+        if rdcf_base is None and rdcf_sens:
+            rdcf_base = rdcf.sensitivity.get(
+                f"{rdcf.assumed_growth_pct * 100:.1f}%"
+            ) if rdcf.assumed_growth_pct is not None else None
+
+        if (
+            forward is not None
+            and forward.is_available
+            and forward.bull_price is not None and forward.bull_price > 0
+            and forward.base_price is not None and forward.base_price > 0
+            and forward.bear_price is not None and forward.bear_price > 0
+        ):
+            bull_price = forward.bull_price
+            base_price = forward.base_price
+            bear_price = forward.bear_price
+            valuation_source = "forward_valuation"
+        else:
+            bull_price = rdcf_bull
+            base_price = rdcf_base
+            bear_price = rdcf_bear
+            valuation_source = "reverse_dcf_grid"
+
+        log_debug(
+            "VALUATION_SOURCE_CHOSEN",
+            payload={
+                "ticker": ticker,
+                "source": valuation_source,
+                "forward_available": bool(forward and forward.is_available),
+                "bull_price": bull_price,
+                "base_price": base_price,
+                "bear_price": bear_price,
+            },
+            level="INFO",
+            cycle_id=cycle_id,
+            msg=f"valuation source {ticker}: {valuation_source}",
+        )
+
+        p_up = getattr(arbitrated, "p_up", None)
+        p_flat = getattr(arbitrated, "p_flat", None)
+        p_down = getattr(arbitrated, "p_down", None)
+        scenario = compute_scenario_price(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            p_up=float(p_up) if p_up is not None else 0.0,
+            p_flat=float(p_flat) if p_flat is not None else 0.0,
+            p_down=float(p_down) if p_down is not None else 0.0,
+            bull_price=bull_price,
+            base_price=base_price,
+            bear_price=bear_price,
+            current_price_usd=current_price_num,
+        )
+        return rdcf, forward, scenario
+
+    def _run_forward_valuation(
+        self,
+        ticker: str,
+        cycle_id: str,
+        evidence_packets: list[Any],
+        brief: str | None,
+        current_price_usd: float | None,
+        reverse_dcf_fair_value_usd: float | None = None,
+    ):
+        """Run the ValuationAgent + ForwardValuationEngine (Architecture.md §9.4b).
+
+        Post-arbitration, LLM-assumption-driven. Best-effort: any failure (agent
+        returns None, parse error, missing primitives) degrades to None and the
+        caller falls back to the reverse-DCF sensitivity grid. Never raises into
+        the cycle. The LLM never emits the price — only assumptions (§1.6).
+
+        ``reverse_dcf_fair_value_usd`` (Commit 3, Tier 3A) is the engine's
+        own fair-value estimate for cross-checking the forward base price.
+        When the forward base diverges >50% from this value, the engine raises
+        ``forward_vs_reverse_dcf_warning`` so the memo can surface it.
+        """
+        import json as _json
+        from pmacs.agents.valuation_agent import ValuationAgentRunner
+        from pmacs.data.evidence_router import filter_evidence_for_persona
+        from pmacs.engines.forward_valuation import compute_forward_valuation
+
+        filtered = filter_evidence_for_persona(evidence_packets, "ValuationAgent")
+
+        # Anchor the agent's exit multiple in the market's current EV/Sales /
+        # EV/EBITDA / analyst consensus — the single biggest accuracy lever for
+        # forward valuation (full rationale in _build_current_valuation_anchor).
+        revenue_ttm, shares, net_debt = self._extract_forward_valuation_inputs(evidence_packets)
+        anchor, current_ev_sales, analyst_target_mean = self._build_current_valuation_anchor(
+            ticker=ticker,
+            current_price_usd=current_price_usd,
+            revenue_ttm=revenue_ttm,
+            shares=shares,
+            net_debt=net_debt,
+            evidence_packets=evidence_packets,
+        )
+        agent_context = ((brief or "") + ("\n\n" if brief else "") + anchor).strip() or None
+
+        valuation_output = None
+        try:
+            runner = ValuationAgentRunner(
+                cycle_id=cycle_id,
+                audit_writer=getattr(self, "_audit", None),
+                simulation_mode=bool(getattr(self, "simulation_mode", False)),
+            )
+            po = runner.run(filtered, episodic_context=agent_context)
+            if po is not None and getattr(po, "raw_output", ""):
+                valuation_output = po
+        except Exception as exc:
+            log_debug(
+                "VALUATION_AGENT_ABORTED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                msg=f"ValuationAgent aborted for {ticker}: {type(exc).__name__}",
+            )
+            return None
+
+        if valuation_output is None:
+            log_debug(
+                "VALUATION_AGENT_ABORTED",
+                payload={"ticker": ticker, "reason": "returned_none"},
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
+                msg=f"ValuationAgent returned None for {ticker}; using reverse-DCF fallback",
+            )
+            return None
+
+        # Parse the agent's assumptions (raw_output is JSON).
+        try:
+            from pmacs.schemas.personas import ValuationAgentOutput
+            data = _json.loads(valuation_output.raw_output)
+            model = ValuationAgentOutput.model_validate(data)
+        except Exception as exc:
+            log_debug(
+                "VALUATION_AGENT_PARSE_FAILED",
+                payload={"ticker": ticker, "error": str(exc)[:200]},
+                level="WARN", error_code="GBNF_PARSE_FAIL", cycle_id=cycle_id,
+                msg=f"ValuationAgent output unparseable for {ticker}: reverse-DCF fallback",
+            )
+            return None
+
+        scenario_probs = {
+            "bull": float(model.bull.probability_of_occurrence),
+            "base": float(model.base.probability_of_occurrence),
+            "bear": float(model.bear.probability_of_occurrence),
+        }
+        return compute_forward_valuation(
+            ticker=ticker,
+            cycle_id=cycle_id,
+            horizon_months=model.horizon_months,
+            bull_assumptions=model.bull.model_dump(),
+            base_assumptions=model.base.model_dump(),
+            bear_assumptions=model.bear.model_dump(),
+            scenario_probabilities=scenario_probs,
+            current_revenue_ttm_usd=revenue_ttm,
+            shares_outstanding=shares,
+            net_debt_usd=net_debt,
+            current_price_usd=current_price_usd,
+            current_ev_sales=current_ev_sales,
+            analyst_target_mean_usd=analyst_target_mean,
+            reverse_dcf_fair_value_usd=reverse_dcf_fair_value_usd,
+        )
+
+    def _extract_valuation_inputs(
+        self,
+        evidence_packets: list[Any],
+        persona_results: dict[str, Any],
+    ) -> tuple[float | None, float | None, float | None]:
+        """Pull market cap, TTM FCF, and an assumed growth rate from evidence.
+
+        Defensive: returns None for any missing primitive so the engines degrade
+        to NEUTRAL rather than fabricating. Mirrors the key semantics used by
+        ticker_data.py (Source.md §16.8 — the ticker page is the source of truth).
+        """
+        market_cap: float | None = None
+        fcf_ttm: float | None = None
+        assumed_growth_pct: float | None = None
+
+        # Index evidence by id → data for the valuation primitives.
+        edata: dict[str, dict] = {}
+        for packet in evidence_packets:
+            for ev in getattr(packet, "evidence", []) or []:
+                ev_id = getattr(ev, "id", "") or ""
+                data = getattr(ev, "data", {}) or {}
+                if isinstance(data, dict):
+                    edata[ev_id] = data
+
+        for ev_id, data in edata.items():
+            # Market cap: fundamentals profile stores it in millions USD.
+            if ev_id.endswith("_profile") and market_cap is None:
+                mcap = data.get("marketCapitalization")
+                if isinstance(mcap, (int, float)) and mcap > 0:
+                    market_cap = float(mcap) * 1_000_000
+
+            # FCF TTM: prefer the annual series' most recent value, then ttm_fcf.
+            if ev_id.endswith("_metrics") and fcf_ttm is None:
+                fcf_series = data.get("annual_freeCashFlow") or []
+                if isinstance(fcf_series, list) and fcf_series:
+                    first = fcf_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            fcf_ttm = float(v)
+                if fcf_ttm is None:
+                    ttm = data.get("ttm_fcf")
+                    if isinstance(ttm, (int, float)):
+                        fcf_ttm = float(ttm)
+                # Assumed growth from yfinance/Finnhub revenueGrowthTTMYoy (percent).
+                if assumed_growth_pct is None:
+                    rg = data.get("revenueGrowthTTMYoy")
+                    if isinstance(rg, (int, float)):
+                        assumed_growth_pct = _growth_to_fraction(float(rg))
+
+            # EDGAR fallback for FCF.
+            if ev_id.endswith("_financials") and "edgar" in ev_id and fcf_ttm is None:
+                fcf_obj = data.get("free_cash_flow_most_recent")
+                if isinstance(fcf_obj, dict):
+                    v = fcf_obj.get("value_usd")
+                    if isinstance(v, (int, float)):
+                        fcf_ttm = float(v)
+            # Yahoo fallback for FCF.
+            if ev_id.endswith("_financials") and "yahoo" in ev_id and fcf_ttm is None:
+                ttm = data.get("ttm_fcf")
+                if isinstance(ttm, (int, float)):
+                    fcf_ttm = float(ttm)
+
+        # Assumed growth: prefer the GrowthHunter persona's revenue_yoy_pct.
+        gh = persona_results.get("growth_hunter")
+        if gh is not None:
+            import json as _json
+            raw = getattr(gh, "raw_output", "")
+            if raw:
+                try:
+                    gdata = _json.loads(raw)
+                    rg = gdata.get("revenue_yoy_pct")
+                    if isinstance(rg, (int, float)):
+                        assumed_growth_pct = _growth_to_fraction(float(rg))
+                except (ValueError, TypeError):
+                    pass
+
+        return market_cap, fcf_ttm, assumed_growth_pct
+
+    def _extract_forward_valuation_inputs(
+        self,
+        evidence_packets: list[Any],
+    ) -> tuple[float | None, float | None, float | None]:
+        """Pull TTM revenue, shares outstanding, and net debt from evidence.
+
+        Defensive: returns None for any missing primitive so the ForwardValuationEngine
+        degrades to is_available=False rather than fabricating. Net debt = total
+        debt - cash (already net of cash); when either series is missing the whole
+        net_debt is None (the engine then degrades gracefully).
+        """
+        revenue_ttm: float | None = None
+        shares: float | None = None
+        total_debt: float | None = None
+        cash: float | None = None
+        net_debt_finnhub: float | None = None
+
+        edata: dict[str, dict] = {}
+        for packet in evidence_packets:
+            for ev in getattr(packet, "evidence", []) or []:
+                ev_id = getattr(ev, "id", "") or ""
+                data = getattr(ev, "data", {}) or {}
+                if isinstance(data, dict):
+                    edata[ev_id] = data
+
+        for ev_id, data in edata.items():
+            if not ev_id.endswith("_metrics"):
+                continue
+
+            # TTM revenue: PREFER revenueTTM (actual trailing-twelve-months) —
+            # the semantically correct base for a forward valuation grown from
+            # "today". Fall back to the most recent annual value only when
+            # revenueTTM is absent. Using last-FY revenue understates the base
+            # for hypergrowth names mid-year (e.g. NBIS FY2025 $529.8M vs TTM
+            # $877.9M), which materially undershoots the forward fair value.
+            if revenue_ttm is None:
+                ttm = data.get("revenueTTM")
+                if isinstance(ttm, (int, float)) and ttm > 0:
+                    revenue_ttm = float(ttm)
+                if revenue_ttm is None:
+                    rev_series = data.get("annual_revenue") or []
+                    if isinstance(rev_series, list) and rev_series:
+                        first = rev_series[0]
+                        if isinstance(first, dict):
+                            v = first.get("v")
+                            if isinstance(v, (int, float)):
+                                revenue_ttm = float(v)
+
+            # Net debt components from the annual series.
+            if total_debt is None:
+                debt_series = data.get("annual_total_debt") or []
+                if isinstance(debt_series, list) and debt_series:
+                    first = debt_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            total_debt = float(v)
+            if cash is None:
+                cash_series = data.get("annual_cash") or []
+                if isinstance(cash_series, list) and cash_series:
+                    first = cash_series[0]
+                    if isinstance(first, dict):
+                        v = first.get("v")
+                        if isinstance(v, (int, float)):
+                            cash = float(v)
+            # Finnhub gap-fill net debt (already net of cash).
+            if net_debt_finnhub is None:
+                nd = data.get("netDebtAnnual")
+                if isinstance(nd, (int, float)):
+                    net_debt_finnhub = float(nd)
+
+        # Shares outstanding: fundamentals profile stores it in millions.
+        for ev_id, data in edata.items():
+            if ev_id.endswith("_profile") and shares is None:
+                so = data.get("shareOutstanding")
+                if isinstance(so, (int, float)) and so > 0:
+                    shares = float(so) * 1_000_000
+
+        # Resolve net debt: prefer the derived (total_debt - cash), else Finnhub.
+        net_debt: float | None = None
+        if total_debt is not None and cash is not None:
+            net_debt = float(total_debt) - float(cash)
+        elif net_debt_finnhub is not None:
+            net_debt = float(net_debt_finnhub)
+
+        return revenue_ttm, shares, net_debt
+
+    def _build_current_valuation_anchor(
+        self,
+        *,
+        ticker: str,
+        current_price_usd: float | None,
+        revenue_ttm: float | None,
+        shares: float | None,
+        net_debt: float | None,
+        evidence_packets: list[Any],
+    ) -> tuple[str, float | None, float | None]:
+        """Build a 'current valuation multiples' context block for the ValuationAgent.
+
+        The agent's exit multiples (exit_multiple, exit_sales_multiple) must be
+        GROUNDED in the market's current multiples — otherwise it picks them in a
+        vacuum and the forward fair value reflects the agent's multiple, not a
+        reasoned deviation from the market's view. This computes the observable
+        current EV/Sales, EV/EBITDA, P/S, and the analyst price-target upside from
+        the evidence + market primitives, and returns a short context string the
+        agent is told to anchor against. Returns ("", None, None) when no multiple
+        can be computed (the agent then falls back to peer medians, as before).
+
+        Returns ``(anchor_str, current_ev_sales, analyst_target_mean_usd)`` — the
+        two numeric anchors are also returned so the ForwardValuationEngine can
+        carry them onto the result for the memo to surface the model-vs-market and
+        model-vs-analyst-PT gaps (the non-obvious reconciliation most memos omit).
+        """
+        parts: list[str] = []
+        current_ev_sales: float | None = None
+        analyst_target_mean: float | None = None
+        try:
+            # EBITDA TTM + analyst PT + TTM revenue growth from evidence.
+            ebitda_ttm: float | None = None
+            target_mean: float | None = None
+            upside: float | None = None
+            rev_growth_ttm_yoy: float | None = None
+            for packet in evidence_packets:
+                for ev in getattr(packet, "evidence", []) or []:
+                    eid = getattr(ev, "id", "") or ""
+                    data = getattr(ev, "data", {}) or {}
+                    if not isinstance(data, dict):
+                        continue
+                    if eid.endswith("_metrics") and ebitda_ttm is None:
+                        es = data.get("annual_ebitda") or []
+                        if isinstance(es, list) and es and isinstance(es[0], dict):
+                            v = es[0].get("v")
+                            if isinstance(v, (int, float)):
+                                ebitda_ttm = float(v)
+                        if ebitda_ttm is None:
+                            em = data.get("ebitdaMarginTTM")
+                            if isinstance(em, (int, float)) and revenue_ttm:
+                                ebitda_ttm = revenue_ttm * float(em) / 100.0
+                        # TTM revenue growth (revenueGrowthTTMYoy) — the AUTHORITATIVE
+                        # "growth from today" signal for a forward valuation. Other
+                        # growth fields (yahoo_*_financials.revenue_growth_yoy, quarterly
+                        # YoY) can be stale or a single-quarter figure and conflict
+                        # badly for hypergrowth names (e.g. ONDS shows 1079% TTM but
+                        # 10.8% in a quarterly field — the agent must not average these).
+                        if rev_growth_ttm_yoy is None:
+                            gt = data.get("revenueGrowthTTMYoy")
+                            if isinstance(gt, (int, float)):
+                                rev_growth_ttm_yoy = float(gt)
+                    if "_price_target" in eid:
+                        tm = data.get("target_mean")
+                        if isinstance(tm, (int, float)) and tm > 0:
+                            target_mean = float(tm)
+                        um = data.get("upside_to_mean_pct")
+                        if isinstance(um, (int, float)):
+                            upside = float(um)
+
+            price = float(current_price_usd) if isinstance(current_price_usd, (int, float)) and current_price_usd > 0 else None
+            market_cap = (price * shares) if (price and shares) else None
+            ev_est = (market_cap + net_debt) if (market_cap is not None and net_debt is not None) else market_cap
+
+            if ev_est and revenue_ttm and revenue_ttm > 0:
+                current_ev_sales = round(ev_est / revenue_ttm, 2)
+                parts.append(f"current EV/Sales ≈ {current_ev_sales:.1f}x")
+            if rev_growth_ttm_yoy is not None:
+                parts.append(
+                    f"TTM revenue growth {rev_growth_ttm_yoy:+.1f}% YoY (AUTHORITATIVE — "
+                    f"base your revenue_growth_path_pct on this; ignore conflicting "
+                    f"quarterly/stale YoY figures)"
+                )
+            if market_cap and revenue_ttm and revenue_ttm > 0:
+                parts.append(f"current P/S ≈ {market_cap/revenue_ttm:.1f}x")
+            if ev_est and ebitda_ttm and ebitda_ttm > 0:
+                parts.append(f"current EV/EBITDA ≈ {ev_est/ebitda_ttm:.1f}x")
+            elif ebitda_ttm is not None and ebitda_ttm <= 0:
+                parts.append("current EBITDA <= 0 (pre-profit → use EV/Sales, not EV/EBITDA)")
+            if target_mean:
+                analyst_target_mean = float(target_mean)
+                tag = f", +{upside:.0f}% upside to mean" if upside is not None else ""
+                parts.append(f"analyst PT mean ${target_mean:,.2f}{tag}")
+        except Exception:
+            return "", None, None
+
+        if not parts:
+            return "", None, None
+        anchor = (
+            "## Current Valuation Anchor (OBSERVABLE — ground your exit multiples here)\n"
+            + "; ".join(parts)
+            + "\nAnchor exit_multiple / exit_sales_multiple to these current multiples "
+            "and justify any deviation in each rationale (e.g. '8x EV/Sales vs current "
+            "65x reflects growth deceleration + dilution'). Do NOT ignore them."
+        )
+        return anchor, current_ev_sales, analyst_target_mean
+
+    def _build_agent_signals(
+        self, persona_outputs: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Thin wrapper around the module-level helper. Used by both the
+        success path (_step_13mn_post_decision) and the Crucible-abort path so
+        every memo carries the same per-persona signal shape regardless of
+        cycle outcome. Cached on self._last_persona_signals by
+        _step_13e_arbitration BEFORE the Crucible loop so the abort path can
+        still see what each persona said before the cycle was rejected.
+        """
+        return _build_agent_signals(persona_outputs)
+
+    def _write_auditor_flags_to_fde(
+        self, holding_id: str, cycle_id: str, ticker: str, flags: list[Any]
+    ) -> None:
+        """Project auditor flags into the FDE stores (Agents.md §11d.6.3).
+
+        Each flag → a FailedAssumption node (KuzuDB) + failure_classifications row
+        (SQLite) using flag.taxonomy_mapping, so the Mutation Engine's cluster
+        detection (§15.3, §17.2) picks them up unchanged. Best effort: never
+        raises into the cycle.
+        """
+        from uuid import uuid4 as _uuid4
+
+        kuzu = self._get_kuzu_adapter()
+        conn = None
+        try:
+            conn = _sql_connect(self._db_path)
+        except Exception:
+            conn = None
+
+        for flag in flags:
+            tax = getattr(flag, "taxonomy_mapping", None)
+            tax_val = getattr(tax, "value", tax)
+            sev = getattr(flag, "severity", 0.0)
+            desc = getattr(flag, "description", "") or ""
+            target = getattr(flag, "target_persona", None)
+            target_val = getattr(target, "value", target)
+            summary = f"[auditor:{target_val}] {desc}"[:400]
+            fa_id = str(_uuid4())
+
+            if kuzu is not None and isinstance(tax_val, str):
+                try:
+                    kuzu.write_failed_assumption(
+                        fa_id=fa_id,
+                        taxonomy=tax_val,
+                        severity=float(sev) if isinstance(sev, (int, float)) else 0.0,
+                        holding_id=holding_id,
+                        cycle_id=cycle_id,
+                        summary=summary,
+                    )
+                except Exception:
+                    pass
+
+            if conn is not None and isinstance(tax_val, str):
+                try:
+                    conn.execute(
+                        "INSERT INTO failure_classifications "
+                        "(holding_id, taxonomy, severity, summary, cycle_id, classified_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            holding_id,
+                            tax_val,
+                            float(sev) if isinstance(sev, (int, float)) else 0.0,
+                            summary,
+                            cycle_id,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception:
+                    pass
+
+        if conn is not None:
+            try:
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        log_debug(
+            "AUDITOR_FLAGS_WRITTEN_TO_FDE",
+            payload={"cycle_id": cycle_id, "ticker": ticker,
+                     "holding_id": holding_id, "flag_count": len(flags)},
+            level="INFO", cycle_id=cycle_id,
+            msg=f"Auditor flags → FDE: {len(flags)} for {ticker}",
+        )
+
     def _step_13e_arbitration(
         self, holding: Any, ticker: str, cycle_id: str, op: int, persona_results: dict
     ) -> int | tuple[Any, Any, int]:
@@ -1506,7 +2476,15 @@ class CycleOrchestrator:
                     skipped_insufficient.append(persona_name_str)
                     continue
                 avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
-                signals.append(ArbitrationSignal(dp, historical_n=historical_n, rolling_brier=avg_brier))
+                quality_tag = self._extract_quality_tag(persona_name_str, raw_output)
+                signals.append(
+                    ArbitrationSignal(
+                        dp,
+                        historical_n=historical_n,
+                        rolling_brier=avg_brier,
+                        quality_tag=quality_tag,
+                    )
+                )
 
         if skipped_insufficient:
             log_debug(
@@ -1531,7 +2509,42 @@ class CycleOrchestrator:
             )
             return op + 1
 
+        # CrossPersonaAuditor flag caps (Agents.md §11d.6.1): for each flag targeting
+        # a persona, multiply that signal's weight_multiplier by (1 - severity). A
+        # severity-0.8 flag cuts the persona's arbitration weight by 80%. This is
+        # applied BEFORE arbitrate() — the auditor never calls arbitrate().
+        auditor_flags = getattr(self, "_last_auditor_flags", []) or []
+        if auditor_flags:
+            cap_by_persona: dict[str, float] = {}
+            for flag in auditor_flags:
+                target = getattr(flag, "target_persona", None)
+                target_val = getattr(target, "value", target)
+                sev = getattr(flag, "severity", 0.0)
+                if not isinstance(target_val, str) or not isinstance(sev, (int, float)):
+                    continue
+                cap_by_persona[target_val] = cap_by_persona.get(target_val, 1.0) * (1.0 - float(sev))
+            capped: list[str] = []
+            for sig in signals:
+                cap = cap_by_persona.get(sig.persona.value)
+                if cap is not None and cap < 1.0:
+                    sig.weight_multiplier = min(getattr(sig, "weight_multiplier", 1.0), cap)
+                    capped.append(f"{sig.persona.value}:{cap:.2f}")
+            if capped:
+                log_debug(
+                    "AUDITOR_FLAG_WEIGHT_CAP",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "capped": capped},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Auditor flags capped weights: {', '.join(capped)}",
+                )
+
         arbitrated = arbitrate(signals, cycle_id=cycle_id)
+        # Cache agent_signals on self so both the success path
+        # (_step_13mn_post_decision) and the Crucible-abort path can populate
+        # memo_dict. CycleLock at line 354 serializes cycles, so this instance
+        # attr is one-cycle-at-a-time safe.
+        self._last_persona_signals = self._build_agent_signals(
+            getattr(arbitrated, "persona_outputs", None) or []
+        )
         log_debug(
             "SYMBOL_ARBITRATION_COMPLETE",
             payload={
@@ -1640,6 +2653,12 @@ class CycleOrchestrator:
                 # Store attacks for downstream use (FIX-3: MemoWriter needs them)
                 crucible_attacks = crucible_data.get("attacks", [])
                 self._last_crucible_attacks = crucible_attacks
+                # Task #8 Part C: also stash the narrative fields so the persisted
+                # memo's Crucible card renders from memo_json (no live globals).
+                self._last_crucible_summary = str(crucible_data.get("summary", "") or "")
+                self._last_crucible_thesis_survives = bool(
+                    crucible_data.get("thesis_survives", True)
+                )
 
                 log_debug("CRUCIBLE_CYCLE_COMPLETE",
                     payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
@@ -1653,7 +2672,10 @@ class CycleOrchestrator:
                 elif crucible_severity >= 0.3 and _cycle_idx < CRUCIBLE_MAX_CYCLES - 1:
                     crucible_state = "REWRITE"
                     attacks = crucible_attacks
-                    revised_evidence = _rebuild_evidence_brief(evidence_packets, attacks, arbitrated, ticker)
+                    revised_evidence = _rebuild_evidence_brief(
+                        evidence_packets, attacks, arbitrated, ticker,
+                        auditor_flags=getattr(self, "_last_auditor_flags", []),
+                    )
                     log_debug("CRUCIBLE_REWRITE_TRIGGERED",
                         payload={"cycle_id": cycle_id, "ticker": ticker, "cycle": _cycle_idx + 1,
                                  "severity": crucible_severity, "num_attacks": len(attacks)},
@@ -1671,16 +2693,120 @@ class CycleOrchestrator:
                 break
 
         if crucible_state == "ABORT":
-            transition(holding, HoldingState.ABORTED_RISK,
+            # Crucible abort can be triggered by LLM failure (parse/validation
+            # exhaustion) or by high-severity attack surfacing. From
+            # PHASE2_CRUCIBLE, the only valid terminal states are
+            # APPROVED_PENDING and ABORTED_LLM. Risk-based aborts (high
+            # severity) flow through ABORTED_LLM here; the per-state
+            # risk-driven paths use the ABORTED_RISK state from PHASE3+ only.
+            transition(holding, HoldingState.ABORTED_LLM,
                 f"crucible_abort:severity={crucible_severity:.2f},iterations={crucible_iterations}", cycle_id, op)
             log_debug("SYMBOL_ABORTED_CRUCIBLE",
                 payload={"cycle_id": cycle_id, "ticker": ticker, "holding_id": holding.id,
                          "crucible_severity": crucible_severity, "crucible_state": crucible_state,
                          "crucible_iterations": crucible_iterations,
                          "elapsed_s": time.monotonic() - crucible_start},
-                level="WARN", error_code="ABORTED_CRUCIBLE", cycle_id=cycle_id,
+                level="WARN", error_code="ABORTED_LLM", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} aborted by Crucible: severity={crucible_severity:.2f}, state={crucible_state}")
             self._upsert_holding(holding, cycle_id)
+
+            # Write a low-conviction HOLD decision + minimal memo so the cycle produces
+            # a complete audit trail for the operator. Without this, a
+            # Crucible-aborted symbol produces 0 decisions and the cycle's
+            # audit trail has no record of why. The HOLD verdict reflects the
+            # Crucible's high-severity finding — operator can still BUY/SELL
+            # later via the override path.
+            #
+            # Inline write matches the memo+decision block used by the normal
+            # post-decision path (~line 2730). We synthesize a minimal
+            # memo_dict + arbitrated stub since the symbol never reached the
+            # memo writer. Use a SHORT, auditable note — no LLM, no fake
+            # p_up/p_down beyond a flat 0.30/0.40/0.30 (no edge).
+            try:
+                import json as _persist_j
+                from datetime import datetime as _dt, timezone as _tz
+                from pmacs.schemas.arbitration import Arbitrated
+                from pmacs.engines.conviction import compute_conviction
+
+                abort_arb = Arbitrated(
+                    ticker=ticker,
+                    cycle_id=cycle_id,
+                    p_up=0.30, p_flat=0.40, p_down=0.30,  # flat — Crucible rejected
+                    agreement_score=0.0,
+                    matured_sources_used=0,
+                    abort_reason=f"crucible_abort:severity={crucible_severity:.2f}",
+                    # decision uses default (PROCEED) — schema is what we care about here
+                )
+                abort_conv = compute_conviction(
+                    arb=abort_arb,
+                    crucible_severity=crucible_severity,
+                    ev_multiple=0.0,  # neutral EV — Crucible rejected the thesis
+                    is_bootstrap=False,
+                )
+                abort_verdict_str = "HOLD"  # forced — Crucible's signal IS the verdict here
+                abort_decided_at = _dt.now(_tz.utc).isoformat()
+                abort_memo_dict = {
+                    "verdict_line": f"HOLD — Crucible aborted (severity {crucible_severity:.2f})",
+                    "verdict": abort_verdict_str,  # explicit HOLD — template reads this from memo_json
+                    "thesis": (
+                        f"Crucible adversarial review aborted this symbol at "
+                        f"severity {crucible_severity:.2f} after "
+                        f"{crucible_iterations} cycle(s). Conservative HOLD "
+                        f"recorded so the cycle's audit trail + memo are "
+                        f"complete. Operator can still BUY/SELL via the "
+                        f"override path if they disagree with Crucible."
+                    ),
+                    "p_up": 0.30, "p_flat": 0.40, "p_down": 0.30,
+                    "conviction": float(abort_conv),
+                    "crucible_severity": float(crucible_severity),
+                    "crucible_iterations": int(crucible_iterations),
+                    "abort_reason": "crucible_abort",
+                    # Include the per-persona signals captured before the
+                    # Crucible loop rejected the thesis — these tell the
+                    # operator which personas actually produced outputs vs.
+                    # which ones had no data, even on a HOLD-on-write abort.
+                    "agent_signals": list(getattr(self, "_last_persona_signals", None) or []),
+                }
+                abort_memo_json = _persist_j.dumps(abort_memo_dict)
+                abort_raw = abort_memo_dict["thesis"]
+                conn = _sql_connect(self._db_path)
+                try:
+                    conn.execute(
+                        "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+                        "memo_json, raw_text, memo_score, memo_grade, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, abort_verdict_str, float(abort_conv),
+                         abort_memo_json, abort_raw, None, None, abort_decided_at),
+                    )
+                    # Mirror to decisions table (same dual-write as pipeline.py)
+                    conn.execute(
+                        "INSERT INTO decisions (cycle_id, ticker, verdict, "
+                        "conviction_score, thesis_summary, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, abort_verdict_str, float(abort_conv),
+                         abort_memo_json, abort_decided_at),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                log_debug(
+                    "CRUCIBLE_ABORT_HOLD_WRITTEN",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "crucible_severity": crucible_severity,
+                             "conviction": float(abort_conv)},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} Crucible-aborted; conservative HOLD written to memos+decisions",
+                )
+            except Exception as _dec_exc:
+                log_debug(
+                    "CRUCIBLE_ABORT_DECISION_FAILED",
+                    payload={"ticker": ticker, "error": str(_dec_exc)},
+                    level="WARN",
+                    error_code="ABORTED_LLM",
+                    cycle_id=cycle_id,
+                    msg=f"Could not write HOLD-on-abort decision for {ticker}: {_dec_exc}",
+                )
+
             self._symbol_holdings.pop(ticker, None)
             return op + 1
 
@@ -1691,6 +2817,13 @@ class CycleOrchestrator:
             level="INFO", cycle_id=cycle_id,
             msg=f"Symbol {ticker} crucible: severity={crucible_severity:.2f}, state={crucible_state}, iterations={crucible_iterations}")
         self._publish_sse("decision", "decision.crucible_complete", {
+            "cycle_id": cycle_id, "ticker": ticker,
+            "severity": round(crucible_severity, 4),
+            "iterations": crucible_iterations,
+            "state": crucible_state,
+        })
+        # Task #8 Part D1 — dashboard JS alias (demo event name).
+        self._publish_sse("decision", "crucible.complete", {
             "cycle_id": cycle_id, "ticker": ticker,
             "severity": round(crucible_severity, 4),
             "iterations": crucible_iterations,
@@ -1851,6 +2984,7 @@ class CycleOrchestrator:
         evidence_packets: list, brief: str,
         verdict: Any, conviction_score: float, arbitrated: Any,
         crucible_severity: float = 0.0,
+        per_persona_calibration: dict | None = None,
     ) -> int:
         """Steps 13m-13n: Memo writer + scan record."""
         from pmacs.agents.memo_writer import MemoWriterRunner
@@ -1871,6 +3005,18 @@ class CycleOrchestrator:
                     pass
 
             memo_runner = MemoWriterRunner()
+            # Collect data-quality warnings from evidence packets so the memo
+            # does NOT cite flagged-anomalous metrics as facts (post-cycle-1
+            # audit: ONDS netProfitMarginTTM=251.9% was cited despite the
+            # source's own _data_quality_warning marking it as likely corruption).
+            data_quality_warnings: list[str] = []
+            for ep in evidence_packets or []:
+                data = getattr(ep, "data", {}) or {}
+                w = data.get("_data_quality_warning") if isinstance(data, dict) else None
+                if w:
+                    ticker = getattr(ep, "ticker", "?")
+                    ev_id = getattr(ep, "evidence_id", "?")
+                    data_quality_warnings.append(f"[{ticker}/{ev_id}] {w}")
             memo_runner.set_analytical_context(
                 arbitrated=arbitrated,
                 verdict=verdict,
@@ -1879,6 +3025,14 @@ class CycleOrchestrator:
                 crucible_attacks=self._last_crucible_attacks,
                 forensics_quality=forensics_quality,
                 persona_outputs=getattr(arbitrated, "persona_outputs", None),
+                advocate_outputs=getattr(self, "_last_advocate_outputs", {}),
+                auditor_flags=getattr(self, "_last_auditor_flags", []),
+                reverse_dcf=getattr(self, "_last_reverse_dcf", None),
+                forward_valuation=getattr(self, "_last_forward_valuation", None),
+                scenario_price=getattr(self, "_last_scenario_price", None),
+                data_quality_warnings=data_quality_warnings,
+                persona_weights=getattr(arbitrated, "persona_weights", None),
+                per_persona_calibration=per_persona_calibration,
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
             if memo_output is not None:
@@ -1889,11 +3043,324 @@ class CycleOrchestrator:
                 log_debug("SYMBOL_MEMO_SKIPPED",
                     payload={"cycle_id": cycle_id, "ticker": ticker},
                     level="INFO", cycle_id=cycle_id, msg=f"Symbol {ticker} memo: skipped (LLM returned None)")
+
+            # ── Memo quality scorer (Agents.md §13.5, Tier 1A) ────────────────
+            # score_memo() is fully implemented but was dead code. Activate it here
+            # with a cost-capped 1-retry on low score (<70). On the retry, the scorer
+            # feedback is injected into the prompt via set_analytical_context(...)
+            # so the LLM knows what to fix. Whatever comes out of the retry is
+            # accepted (no loop) — cost cap is enforced by the LLM provider budget
+            # in risk.toml, not by the orchestrator. The 2nd run replaces
+            # memo_output wholesale; previous output is discarded.
+            memo_score_total: float | None = None
+            memo_grade_str: str | None = None
+            memo_retry_count: int = 0
+            try:
+                from pmacs.agents.sanity.memo_scorer import (
+                    score_memo,
+                    format_retry_feedback,
+                )
+                # Parse memo_output to a dict for scoring. Best effort — if parsing
+                # fails (LLM returned non-JSON or a list), we still attempt the
+                # score on the raw_text fallback so the column is populated.
+                _parsed_for_score: dict = {}
+                if memo_output is not None:
+                    _raw = getattr(memo_output, "raw_output", "") or ""
+                    if _raw:
+                        try:
+                            import json as _scj
+                            _p = _scj.loads(_raw)
+                            if isinstance(_p, dict):
+                                _parsed_for_score = _p
+                        except (ValueError, TypeError):
+                            pass
+                # Build agent_results from the arbitrated DirectionalProbability
+                # list so the scorer has per-persona key_signal/analysis. Mirrors
+                # the agent_signals shape memo_writer set_analytical_context already
+                # produces, so the scorer dimension check sees the same data.
+                _agent_results: list[dict] = []
+                _dps_for_score = getattr(arbitrated, "persona_outputs", None) or []
+                for _dp in _dps_for_score:
+                    _pname = getattr(getattr(_dp, "persona", None), "value",
+                                     str(getattr(_dp, "persona", "")))
+                    _pu = float(getattr(_dp, "p_up", 0.0))
+                    _pd = float(getattr(_dp, "p_down", 0.0))
+                    _dir = ("bullish" if _pu > _pd + 0.05
+                            else "bearish" if _pd > _pu + 0.05
+                            else "neutral")
+                    _agent_results.append({
+                        "persona": _pname,
+                        "key_signal": _dir,
+                        "analysis": (getattr(_dp, "reasoning", "") or "")[:500],
+                        "p_up": _pu,
+                        "p_down": _pd,
+                    })
+                _verdict_str = verdict.value if hasattr(verdict, "value") else str(verdict)
+                score = score_memo(
+                    _parsed_for_score,
+                    evidence=evidence_packets,
+                    agent_results=_agent_results,
+                    crucible_attacks=self._last_crucible_attacks,
+                    conviction=conviction_score,
+                    verdict=_verdict_str,
+                )
+                # Cost-capped 1-retry: if score is low OR critical issues, re-run
+                # with feedback injected. We deliberately do not loop — risk.toml
+                # $20/day budget cap is the outer bound.
+                if not score.passed or score.total < 70.0:
+                    memo_retry_count = 1
+                    _fb = format_retry_feedback(score)
+                    memo_runner.set_analytical_context(memo_feedback=_fb)
+                    _retry = memo_runner.run(
+                        evidence=evidence_packets, episodic_context=brief
+                    )
+                    if _retry is not None:
+                        memo_output = _retry
+                        # Re-parse the retry and re-score (best effort — accept
+                        # whatever comes out, no second retry).
+                        _raw2 = getattr(_retry, "raw_output", "") or ""
+                        if _raw2:
+                            try:
+                                import json as _scj2
+                                _p2 = _scj2.loads(_raw2)
+                                if isinstance(_p2, dict):
+                                    _parsed_for_score = _p2
+                            except (ValueError, TypeError):
+                                pass
+                        score = score_memo(
+                            _parsed_for_score,
+                            evidence=evidence_packets,
+                            agent_results=_agent_results,
+                            crucible_attacks=self._last_crucible_attacks,
+                            conviction=conviction_score,
+                            verdict=_verdict_str,
+                        )
+                memo_score_total = float(score.total)
+                memo_grade_str = score.grade
+                # Dimension breakdown for the audit log (operator-eye). Keep it
+                # compact — full ScoreDimension objects stay in memory only.
+                _dim_brief = [
+                    {"name": d.name, "score": round(d.score, 1),
+                     "max": d.max_score}
+                    for d in score.dimensions
+                ]
+                log_debug("MEMO_SCORED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "score": round(memo_score_total, 1),
+                             "grade": memo_grade_str,
+                             "retry_count": memo_retry_count,
+                             "critical_issues": list(score.critical_issues)[:5],
+                             "dimensions": _dim_brief},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} memo scored {memo_score_total:.0f}/100 "
+                        f"(Grade {memo_grade_str}, retries={memo_retry_count})")
+            except Exception as exc:
+                # Scorer failure must NEVER abort the cycle — best-effort. The
+                # memo persists without score/grade (matches pre-activation behavior).
+                log_debug("MEMO_SCORER_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "error": str(exc)},
+                    level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
+                    msg=f"Memo scorer failed for {ticker} ({type(exc).__name__}), "
+                        f"continuing without score")
         except Exception as exc:
             log_debug("SYMBOL_MEMO_EXCEPTION",
                 payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
                 level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
                 msg=f"Symbol {ticker} memo: failed ({type(exc).__name__}), continuing (best effort)")
+
+        # 13m+: Persist structured memo to the memos table (Architecture.md §16.9).
+        # The live /memo/{ticker} page reads memos.memo_json; without this write the
+        # orchestrator's MemoWriter output (incl. wave-2 debate/valuation fields) was
+        # computed and discarded. Mirror pipeline.py's dual-write (memos + decisions).
+        verdict_str = verdict.value if hasattr(verdict, "value") else str(verdict)
+        decided_at = datetime.now(timezone.utc).isoformat()
+        try:
+            import json as _persist_j
+            memo_dict: dict = {}
+            if memo_output is not None and getattr(memo_output, "raw_output", ""):
+                try:
+                    parsed = _persist_j.loads(memo_output.raw_output)
+                    if isinstance(parsed, dict):
+                        memo_dict = parsed
+                except (ValueError, TypeError):
+                    memo_dict = {}
+            if not memo_dict:
+                # Fallback when the LLM returned nothing — still persist the decision
+                # so the operator sees the verdict/conviction on the memo page.
+                memo_dict = {
+                    "verdict_line": f"{verdict_str} — conviction {conviction_score:.2f}",
+                    "thesis": f"Memo generation unavailable for {ticker}; see agent signals.",
+                }
+            # Authoritative arbitration numbers override any LLM-stated values.
+            memo_dict["p_up"] = float(getattr(arbitrated, "p_up", 0.0))
+            memo_dict["p_flat"] = float(getattr(arbitrated, "p_flat", 0.0))
+            memo_dict["p_down"] = float(getattr(arbitrated, "p_down", 0.0))
+            memo_dict["conviction"] = float(conviction_score)
+            memo_dict.setdefault("verdict_line", f"{verdict_str} — conviction {conviction_score:.2f}")
+            # Inject the deterministic valuation results (not LLM-produced) so the
+            # template's Reverse-DCF + Scenario-Weighted Expected Price cards render.
+            rdcf = getattr(self, "_last_reverse_dcf", None)
+            if rdcf is not None:
+                memo_dict["reverse_dcf"] = (
+                    rdcf.model_dump() if hasattr(rdcf, "model_dump") else dict(rdcf)
+                )
+            sp = getattr(self, "_last_scenario_price", None)
+            if sp is not None:
+                memo_dict["scenario_price"] = (
+                    sp.model_dump() if hasattr(sp, "model_dump") else dict(sp)
+                )
+            # Forward-valuation (LLM-assumption-driven, Architecture.md §9.4b). Persist
+            # so the memo template / audit can surface the 6-12mo scenario prices.
+            fv = getattr(self, "_last_forward_valuation", None)
+            if fv is not None:
+                memo_dict["forward_valuation"] = (
+                    fv.model_dump() if hasattr(fv, "model_dump") else dict(fv)
+                )
+            # Inject the wave-2 Bull/Bear advocate debate (Agents.md §11b-§11c, §16.9).
+            # _last_advocate_outputs holds the bull_advocate/bear_advocate PersonaOutput
+            # objects; their `reasoning` becomes the operator-readable bull/bear cases and
+            # a derived advocate_lean summarises which side won the debate. Without this
+            # injection the memo's Bull/Bear Debate card renders empty even though the
+            # advocates ran. Best-effort: any parse failure is skipped so wave-2 never
+            # aborts an otherwise-valid memo (consistent with _step_13d5_debate contract).
+            try:
+                from pmacs.schemas.personas import (
+                    BullAdvocateOutput,
+                    BearAdvocateOutput,
+                )
+
+                adv = getattr(self, "_last_advocate_outputs", {}) or {}
+                bull_po = adv.get("bull_advocate")
+                bear_po = adv.get("bear_advocate")
+
+                def _typed_adv(po, model_cls):
+                    raw = getattr(po, "raw_output", "") or ""
+                    if not raw:
+                        return None
+                    try:
+                        return model_cls.model_validate(_persist_j.loads(raw))
+                    except Exception:
+                        return None
+
+                bull = _typed_adv(bull_po, BullAdvocateOutput) if bull_po is not None else None
+                bear = _typed_adv(bear_po, BearAdvocateOutput) if bear_po is not None else None
+                # Start with the LLM-produced debate dict (if any) so we never
+                # discard fields the memo writer already emitted (e.g. advocate_lean,
+                # bull_case, bear_case) when the orchestrator's own advocate outputs
+                # are empty or fail to parse. Only override specific fields below.
+                bbd: dict = dict(memo_dict.get("bull_bear_debate") or {})
+                if bull is not None and getattr(bull, "reasoning", ""):
+                    bbd["bull_case"] = bull.reasoning
+                if bear is not None and getattr(bear, "reasoning", ""):
+                    bbd["bear_case"] = bear.reasoning
+                # Bull advocate pushes p_up; bear advocate pushes p_down. Net lean.
+                if bull is not None and bear is not None:
+                    if bull.p_up > bear.p_down + 0.02:
+                        bbd["advocate_lean"] = "BULL"
+                    elif bear.p_down > bull.p_up + 0.02:
+                        bbd["advocate_lean"] = "BEAR"
+                    else:
+                        bbd["advocate_lean"] = "NEUTRAL"
+                elif bull is not None:
+                    bbd["advocate_lean"] = "BULL" if bull.p_up >= bull.p_down else "BEAR"
+                elif bear is not None:
+                    bbd["advocate_lean"] = "BEAR" if bear.p_down >= bear.p_up else "BULL"
+                # reverse_dcf_gap: a one-line summary the debate card renders verbatim.
+                rdcf_for_gap = getattr(self, "_last_reverse_dcf", None)
+                if rdcf_for_gap is not None:
+                    _gap = getattr(rdcf_for_gap, "growth_gap_pct", None)
+                    _imp = getattr(rdcf_for_gap, "implied_growth_pct", None)
+                    _asm = getattr(rdcf_for_gap, "assumed_growth_pct", None)
+                    if _gap is not None and _imp is not None and _asm is not None:
+                        bbd["reverse_dcf_gap"] = (
+                            f"Market implies {_imp:.1f}% growth vs {_asm:.1f}% "
+                            f"assumed (gap {_gap:+.1f}pp)."
+                        )
+                if bbd:
+                    memo_dict["bull_bear_debate"] = bbd
+            except Exception:
+                pass
+            # Task #8 Part C — deterministic agent signals. Read from the cache populated
+            # by _step_13e_arbitration (self._last_persona_signals) so the same
+            # per-persona signals land in the memo regardless of whether we hit
+            # the success path here or the Crucible-abort path earlier. The cache
+            # is populated BEFORE the Crucible loop runs, so abort stubs still
+            # see what each persona said. DirectionalProbability has no
+            # key_signal — direction is derived from p_up/p_down.
+            if "agent_signals" not in memo_dict:
+                cached = getattr(self, "_last_persona_signals", None)
+                if cached:
+                    memo_dict["agent_signals"] = list(cached)
+            # Deterministic crucible narrative fields. memo.html's Crucible card
+            # reads memo.crucible_severity/attacks/summary and derives
+            # thesis_survives from severity (< 0.50). Inject from the stashed
+            # crucible result so the card renders from memo_json (no live globals).
+            if "crucible_severity" not in memo_dict:
+                memo_dict["crucible_severity"] = float(crucible_severity)
+            if "crucible_attacks" not in memo_dict:
+                memo_dict["crucible_attacks"] = list(self._last_crucible_attacks or [])[:5]
+            if "crucible_summary" not in memo_dict:
+                memo_dict["crucible_summary"] = self._last_crucible_summary or ""
+            if "crucible_thesis_survives" not in memo_dict:
+                memo_dict["crucible_thesis_survives"] = bool(
+                    getattr(self, "_last_crucible_thesis_survives", True)
+                )
+            # Inject the deterministic scorer results (Agents.md §13.5). Authoritative —
+            # overrides any LLM-stated score; the LLM never produces memo_score itself.
+            if memo_score_total is not None:
+                memo_dict["memo_score"] = float(memo_score_total)
+            if memo_grade_str is not None:
+                memo_dict["memo_grade"] = memo_grade_str
+            if memo_retry_count:
+                memo_dict["memo_score_retry_count"] = int(memo_retry_count)
+
+            memo_json_str = _persist_j.dumps(memo_dict)
+            raw_text = memo_dict.get("raw_text") or memo_json_str
+            conn = _sql_connect(self._db_path)
+            try:
+                conn.execute(
+                    "INSERT INTO memos (cycle_id, ticker, verdict, conviction_score, "
+                    "memo_json, raw_text, memo_score, memo_grade, decided_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (cycle_id, ticker, verdict_str, float(conviction_score),
+                     memo_json_str, raw_text, memo_dict.get("memo_score"),
+                     memo_dict.get("memo_grade"), decided_at),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            # Mirror to decisions.thesis_summary for legacy readers (memo.py fallback).
+            try:
+                conn = _sql_connect(self._db_path)
+                try:
+                    conn.execute(
+                        "INSERT INTO decisions (cycle_id, ticker, verdict, "
+                        "conviction_score, thesis_summary, decided_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (cycle_id, ticker, verdict_str, float(conviction_score),
+                         memo_json_str, decided_at),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as exc2:
+                log_debug("MEMO_DECISIONS_WRITE_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc2)},
+                    level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                    msg=f"Memo mirror to decisions failed for {ticker}: {exc2}")
+            log_debug("SYMBOL_MEMO_PERSISTED",
+                payload={"cycle_id": cycle_id, "ticker": ticker,
+                         "has_reverse_dcf": "reverse_dcf" in memo_dict,
+                         "has_scenario_price": "scenario_price" in memo_dict,
+                         "has_debate": bool(memo_dict.get("bull_bear_debate"))},
+                level="INFO", cycle_id=cycle_id,
+                msg=f"Symbol {ticker} memo persisted to memos table")
+        except Exception as exc:
+            log_debug("MEMO_PERSIST_FAILED",
+                payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
+                level="WARN", error_code="DB_WRITE_FAILED", cycle_id=cycle_id,
+                msg=f"Memo persistence failed for {ticker}: ({type(exc).__name__}) {exc}")
 
         # 13n: Scan record (IMP-6: persist price at decision time)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -2244,7 +3711,7 @@ class CycleOrchestrator:
                 )
                 break
 
-            if is_engaged(self._db_path):
+            if not self._skip_kill_switch and is_engaged(self._db_path):
                 self._kill_switch_engaged_mid_cycle = True
                 log_debug(
                     "CYCLE_SYMBOL_SKIP_KILL_SWITCH",
@@ -2265,7 +3732,27 @@ class CycleOrchestrator:
                 "progress": f"{symbols_processed + 1}/{len(self._queue)}",
             })
             prev_op = op_seq
-            op_seq = self._run_symbol(cycle_id, item, op_seq)
+            try:
+                op_seq = self._run_symbol(cycle_id, item, op_seq)
+            except Exception as exc:
+                # A single symbol failure must not abort the whole cycle —
+                # the operator wants the rest of the universe to still be
+                # processed. Log it loudly, skip the symbol, keep going.
+                log_debug(
+                    "CYCLE_INTERRUPTED",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": item.ticker,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "scope": "single_symbol",
+                    },
+                    level="ERROR",
+                    error_code="CYCLE_INTERRUPTED",
+                    cycle_id=cycle_id,
+                    msg=f"Symbol {item.ticker} raised {type(exc).__name__} in run_symbol; continuing cycle",
+                )
+                op_seq = prev_op + 1
             symbols_processed += 1
 
             # Detect if symbol aborted early (op_seq advanced by 2-3 vs ~15 for full pipeline)
@@ -2285,7 +3772,7 @@ class CycleOrchestrator:
                 )
                 break
 
-            if is_engaged(self._db_path):
+            if not self._skip_kill_switch and is_engaged(self._db_path):
                 self._kill_switch_engaged_mid_cycle = True
                 log_debug(
                     "CYCLE_SYMBOL_LOOP_KILL_SWITCH",
@@ -2640,6 +4127,17 @@ class CycleOrchestrator:
             ],
         }
 
+        # Rec1: MacroRegime is cycle-level — after the first ticker produces a
+        # real-evidence macro DP, reuse it for subsequent tickers instead of
+        # re-calling the LLM N more times (Architecture.md §12.2 lists MacroRegime
+        # as one persona; per-ticker re-runs differ only by LLM sampling noise on
+        # identical FRED/FOMC/POLYGON/ECB data).
+        _reuse_macro = self._macro_regime_dp_cached is not None
+        if _reuse_macro:
+            slot_runners[0] = [
+                r for r in slot_runners[0] if r.persona_name != "macro_regime"
+            ]
+
         def _run_slot(
             runners: list[Any],
         ) -> list[tuple[str, Any]]:
@@ -2650,6 +4148,49 @@ class CycleOrchestrator:
                     persona_evidence = filter_evidence_for_persona(
                         evidence, runner.persona_name,
                     )
+                    # Rec2: Deterministic pre-check for insider_activity/short_interest.
+                    # When their primary data source (FORM4/FINRA) produced no evidence,
+                    # the LLM call would only emit INSUFFICIENT_DATA — which arbitration
+                    # zeroes out anyway (confidence=0.0 → skipped, _step_13e_arbitration).
+                    # Skip the token-burning call and synthesize the dataless DP directly.
+                    if runner.persona_name in ("insider_activity", "short_interest"):
+                        from pmacs.schemas.data import DataSource as _DS
+                        _primary = (
+                            _DS.FORM4 if runner.persona_name == "insider_activity"
+                            else _DS.FINRA
+                        )
+                        _has_primary = any(
+                            getattr(_ev, "source", None) == _primary
+                            for _pkt in persona_evidence
+                            for _ev in getattr(_pkt, "evidence", [])
+                        )
+                        if not _has_primary:
+                            _fallback_eid = next(
+                                (_ev.id for _pkt in persona_evidence
+                                 for _ev in getattr(_pkt, "evidence", [])),
+                                f"{runner.persona_name}-no-data-{ticker}",
+                            )
+                            _synth = self._synthesize_dataless_persona(
+                                runner.persona_name, ticker, cycle_id, [_fallback_eid],
+                            )
+                            results.append((runner.persona_name, _synth))
+                            self._publish_sse("agent", "agent.complete", {
+                                "cycle_id": cycle_id, "ticker": ticker,
+                                "persona": runner.persona_name,
+                            })
+                            log_debug(
+                                "PERSONA_DATALESS_SKIP",
+                                payload={
+                                    "cycle_id": cycle_id, "ticker": ticker,
+                                    "persona": runner.persona_name,
+                                    "reason": "primary_source_absent",
+                                    "source": _primary.value,
+                                },
+                                level="INFO", cycle_id=cycle_id,
+                                msg=f"{runner.persona_name} skipped for {ticker} "
+                                    f"(no {_primary.value} data) — synthesized dataless DP",
+                            )
+                            continue
                     self._publish_sse("agent", "agent.running", {
                         "cycle_id": cycle_id, "ticker": ticker,
                         "persona": runner.persona_name,
@@ -2729,6 +4270,18 @@ class CycleOrchestrator:
                         msg=f"Slot {slot_id} raised {type(exc).__name__} for {ticker}",
                     )
 
+        # Rec1: inject the cached macro DP for subsequent tickers (the runner was
+        # stripped from slot 0 above), or cache the first ticker's real-evidence
+        # macro DP for reuse. A failed first-ticker macro call leaves the cache
+        # empty so the next ticker retries normally.
+        if _reuse_macro and self._macro_regime_dp_cached is not None:
+            results["macro_regime"] = self._macro_regime_dp_cached
+            self._publish_sse("agent", "agent.complete", {
+                "cycle_id": cycle_id, "ticker": ticker, "persona": "macro_regime",
+            })
+        elif "macro_regime" in results and self._macro_regime_dp_cached is None:
+            self._macro_regime_dp_cached = results["macro_regime"]
+
         log_debug(
             "PERSONA_DISPATCH_COMPLETE",
             payload={
@@ -2748,6 +4301,49 @@ class CycleOrchestrator:
         )
 
         return results
+
+    @staticmethod
+    def _synthesize_dataless_persona(
+        persona_name: str, ticker: str, cycle_id: str, evidence_ids: list[str],
+    ) -> Any:
+        """Synthesize an INSUFFICIENT_DATA PersonaOutput without an LLM call (Rec2).
+
+        Used when insider_activity/short_interest have no FORM4/FINRA evidence —
+        the LLM would only emit INSUFFICIENT_DATA, which arbitration skips anyway
+        (confidence=0.0 via _extract_directional_probability, then dropped in
+        _step_13e_arbitration). Mirrors the dataless shape the personas produce
+        when their primary source is empty, so the /agents display and memo treat
+        it identically to a real dataless run.
+        """
+        import json
+        from pmacs.schemas.agents import PersonaOutput, PersonaName
+
+        if persona_name == "insider_activity":
+            payload = {
+                "ticker": ticker,
+                "transactions": [],
+                "signal": "INSUFFICIENT_DATA",
+                "signal_reasoning": f"No Form 4 insider transaction data available for {ticker}",
+                "p_up": 0.3, "p_flat": 0.4, "p_down": 0.3,
+                "evidence_ids": evidence_ids,
+            }
+        else:  # short_interest
+            payload = {
+                "ticker": ticker,
+                "short_pct_float": None,
+                "days_to_cover": None,
+                "short_change_pct": None,
+                "anomaly": "INSUFFICIENT_DATA",
+                "anomaly_reasoning": f"No FINRA short interest data available for {ticker}",
+                "p_up": 0.3, "p_flat": 0.4, "p_down": 0.3,
+                "evidence_ids": evidence_ids,
+            }
+        return PersonaOutput(
+            persona=PersonaName(persona_name),
+            ticker=ticker,
+            cycle_id=cycle_id,
+            raw_output=json.dumps(payload),
+        )
 
     @staticmethod
     def _extract_directional_probability(
@@ -2817,6 +4413,48 @@ class CycleOrchestrator:
             )
         except Exception:
             return None
+
+    def _extract_quality_tag(self, persona_name_str: str, persona_output: Any) -> str:
+        """Extract a quality tag from a persona's raw JSON output.
+
+        Used by arbitration to apply persona-specific weight multipliers:
+          - forensics: MATERIAL_CONCERNS / SEVERE_RISK boosts weight
+          - short_interest: INSUFFICIENT_DATA (defense-in-depth)
+          - insider_activity: NO_SIGNAL / INSUFFICIENT_DATA (defense-in-depth)
+        """
+        import json
+
+        raw_json = getattr(persona_output, "raw_output", "")
+        if not raw_json:
+            return ""
+        try:
+            data = json.loads(raw_json)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
+        if persona_name_str == "forensics":
+            eq = data.get("earnings_quality") or data.get("forensics_quality", "")
+            if eq in ("MATERIAL_CONCERNS", "SEVERE_RISK"):
+                return eq
+            red_flags = data.get("red_flags", [])
+            if red_flags:
+                max_sev = max(
+                    (rf.get("severity", 0.0) for rf in red_flags if isinstance(rf, dict)),
+                    default=0.0,
+                )
+                if max_sev >= 0.7:
+                    return "SEVERE_RISK"
+                if max_sev >= 0.4:
+                    return "MATERIAL_CONCERNS"
+            return ""
+
+        if persona_name_str == "short_interest":
+            return str(data.get("anomaly", "")).upper()
+
+        if persona_name_str == "insider_activity":
+            return str(data.get("signal", "")).upper()
+
+        return ""
 
     def _run_post_cycle(self, cycle_id: str, op_seq: int) -> int:
         """Steps 14-28: Post-cycle flywheel processing (Architecture.md §9).
@@ -3882,16 +5520,30 @@ class CycleOrchestrator:
 # -- Module-level functions (backward compat) --
 
 
-def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) -> str:
+def initiate_cycle(
+    trigger: str,
+    db_path: Path,
+    audit_path: Path | None = None,
+    *,
+    cycle_id: str | None = None,
+    skip_kill_switch: bool = False,
+) -> str:
     """Open a new cycle.
 
-    Checks kill switch first -- raises KillSwitchEngagedError if engaged.
-    Creates cycle_id (UUID4), inserts into SQLite, emits SSE and audit events.
+    Checks kill switch first -- raises KillSwitchEngagedError if engaged
+    (unless ``skip_kill_switch`` is set, for operator-initiated research runs).
+    Creates cycle_id (UUID4, or the caller-provided id), inserts into SQLite,
+    emits SSE and audit events.
 
     Args:
         trigger: What triggered this cycle (e.g. 'TIMER', 'OPERATOR').
         db_path: Path to the SQLite database.
         audit_path: Optional path to the audit log file.
+        cycle_id: Optional pre-generated cycle_id. When provided, used instead of
+            a fresh uuid4 — lets the operator route return the id to the client
+            before this (background) call returns.
+        skip_kill_switch: When True, skip the kill-switch gate. Set ONLY by
+            operator-initiated routes; automated callers must leave it False.
 
     Returns:
         The newly created cycle_id.
@@ -3900,7 +5552,7 @@ def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) 
         KillSwitchEngagedError: If the kill switch is currently engaged.
     """
     # Kill switch gate -- must check BEFORE any state mutation
-    if is_engaged(db_path):
+    if not skip_kill_switch and is_engaged(db_path):
         log_debug(
             "CYCLE_OPEN_BLOCKED_KILL_SWITCH",
             payload={"trigger": trigger},
@@ -3910,9 +5562,9 @@ def initiate_cycle(trigger: str, db_path: Path, audit_path: Path | None = None) 
         )
         raise KillSwitchEngagedError("Cannot initiate cycle: kill switch is engaged")
 
-    cycle_id = str(uuid4())
+    cycle_id = cycle_id or str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    mode = _current_mode(db_path)
+    mode = CycleOrchestrator._current_mode(db_path)
 
     conn = _sql_connect(db_path)
     try:
@@ -4009,11 +5661,34 @@ def close_cycle(cycle_id: str, db_path: Path, audit_path: Path | None = None) ->
     )
 
 
+def _growth_to_fraction(v: float) -> float:
+    """Normalize a growth-rate reading to a fraction (0.18 = 18%).
+
+    Evidence sources disagree on units: Finnhub returns percentages (18.0),
+    yfinance returns fractions (0.18), and the GrowthHunter persona emits
+    revenue_yoy_pct in percent. Guard: if the magnitude exceeds 1.0 treat it as a
+    percentage and divide by 100; otherwise pass through. Clamps to a sane
+    perpetual-growth range for the reverse-DCF.
+    """
+    if not isinstance(v, (int, float)):
+        return 0.0
+    f = float(v)
+    if abs(f) > 1.0:
+        f = f / 100.0
+    # Bound to (-0.5, 0.5) — a perpetual-growth rate outside this is not credible.
+    if f > 0.5:
+        f = 0.5
+    elif f < -0.5:
+        f = -0.5
+    return f
+
+
 def _rebuild_evidence_brief(
     evidence: list[Any],
     attacks: list[dict[str, Any]],
     arbitrated: Any,
     ticker: str,
+    auditor_flags: list[Any] | None = None,
 ) -> list[Any]:
     """Rebuild evidence brief addressing Crucible cycle-1 attacks.
 
@@ -4025,6 +5700,10 @@ def _rebuild_evidence_brief(
     structured summary of its own cycle-1 attacks. This ensures the rewrite
     test is about whether the thesis *inherently* addresses the attacks, not
     whether new evidence was cherry-picked to dodge them.
+
+    When CrossPersonaAuditor flags are present (Agents.md §16.4), an
+    ``auditor_flag_summary`` annotation is appended so the Crucible attacks the
+    specific reasoning flaws the auditor found, not just its own cycle-1 attacks.
     """
     attack_summary: dict[str, Any] = {
         "source": "crucible_rewrite_context",
@@ -4037,13 +5716,32 @@ def _rebuild_evidence_brief(
         "revised": True,
     }
 
-    # Return a new list: original evidence + attack context annotation
-    return list(evidence) + [attack_summary]
+    out = list(evidence) + [attack_summary]
 
+    # Auditor flag enrichment (Agents.md §16.4): a separate annotation so the
+    # Crucible can attack the named reasoning flaws. Flags are serialized to
+    # plain dicts (they may be Pydantic AuditorFlag models or dicts).
+    if auditor_flags:
+        flag_summaries: list[dict[str, Any]] = []
+        for flag in auditor_flags:
+            target = getattr(flag, "target_persona", None)
+            flag_summaries.append({
+                "flag_type": getattr(flag, "flag_type", None),
+                "target_persona": getattr(target, "value", target),
+                "severity": getattr(flag, "severity", None),
+                "description": getattr(flag, "description", None),
+                "evidence_ids": getattr(flag, "evidence_ids", []) or [],
+                "taxonomy_mapping": getattr(
+                    getattr(flag, "taxonomy_mapping", None), "value",
+                    getattr(flag, "taxonomy_mapping", None),
+                ),
+            })
+        out.append({
+            "source": "auditor_flag_context",
+            "ticker": ticker,
+            "flags": flag_summaries,
+            "flag_count": len(flag_summaries),
+            "revised": True,
+        })
 
-def _current_mode(db_path: Path) -> str:
-    """Read current mode from mode_history or default to INSTALLING.
-
-    Delegates to CycleOrchestrator._current_mode to avoid duplication.
-    """
-    return CycleOrchestrator._current_mode(db_path)
+    return out

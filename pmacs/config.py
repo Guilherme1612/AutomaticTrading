@@ -63,7 +63,8 @@ class ResourcesConfig:
     ctx_size: int = 32768
     quantization: str = "UD-Q4_K_XL"
     phase1_seconds_per_symbol: int = 270
-    daily_llm_seconds_total: int = 18000
+    debate_wave_seconds_per_symbol: int = 180
+    daily_llm_seconds_total: int = 21600
     stop_loss_check_interval_seconds: int = 1800
     quote_freshness_max_seconds: int = 60
     crash_loop_max_restarts: int = 5
@@ -175,7 +176,8 @@ def _parse_resources(data: dict) -> ResourcesConfig:
         ctx_size=rt.get("ctx_size", 32768),
         quantization=rt.get("quantization", "UD-Q4_K_XL"),
         phase1_seconds_per_symbol=bu.get("phase1_seconds_per_symbol", 270),
-        daily_llm_seconds_total=bu.get("daily_llm_seconds_total", 18000),
+        debate_wave_seconds_per_symbol=bu.get("debate_wave_seconds_per_symbol", 180),
+        daily_llm_seconds_total=bu.get("daily_llm_seconds_total", 21600),
         stop_loss_check_interval_seconds=sl.get("intraday_check_interval_seconds", 1800),
         quote_freshness_max_seconds=sl.get("quote_freshness_max_seconds", 60),
         crash_loop_max_restarts=cl.get("max_restarts_per_minute", 5),

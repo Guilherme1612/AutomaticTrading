@@ -17,7 +17,7 @@
         <span class="text-text-muted">/</span>
         <span class="font-mono text-text-muted">${{ "%.2f"|format(daily_cap) }}</span>
         <div class="w-20 h-1.5 bg-surface-sunken rounded-full overflow-hidden" role="progressbar"
-             aria-valuenow="{{ cost_daily }}" aria-valuemin="0" aria-valuemax="{{ daily_cap }}"
+             aria-valuenow="{{ "%.2f"|format([cost_daily / daily_cap * 100, 100]|min) }}" aria-valuemin="0" aria-valuemax="100"
              aria-label="Daily spend progress">
             <div id="cost-daily-bar"
                  class="h-full rounded-full transition-all duration-300 {{ 'bg-negative' if cost_daily / daily_cap > 0.9 else 'bg-accent' if cost_daily / daily_cap > 0.7 else 'bg-positive' }}"
@@ -32,7 +32,7 @@
         <span class="text-text-muted">/</span>
         <span class="font-mono text-text-muted">${{ "%.2f"|format(monthly_cap) }}</span>
         <div class="w-20 h-1.5 bg-surface-sunken rounded-full overflow-hidden" role="progressbar"
-             aria-valuenow="{{ cost_monthly }}" aria-valuemin="0" aria-valuemax="{{ monthly_cap }}"
+             aria-valuenow="{{ "%.2f"|format([cost_monthly / monthly_cap * 100, 100]|min) }}" aria-valuemin="0" aria-valuemax="100"
              aria-label="Monthly spend progress">
             <div id="cost-monthly-bar"
                  class="h-full rounded-full transition-all duration-300 {{ 'bg-negative' if cost_monthly / monthly_cap > 0.9 else 'bg-accent' if cost_monthly / monthly_cap > 0.7 else 'bg-positive' }}"

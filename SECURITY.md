@@ -533,7 +533,6 @@ server-side.
 - No `0.0.0.0` bindings found.
 - `pmacs-nervous`: `127.0.0.1:8000`
 - `pmacs-dashboard`: `127.0.0.1:8000` (served by pmacs-nervous)
-- `pmacs-inference`: `127.0.0.1:8080`
 - `pmacs-execution`: Unix Domain Socket (no network)
 - Security headers middleware present (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`).
 

@@ -6,6 +6,10 @@ Schemas for all 7 analysis personas + Crucible + MemoWriter:
   - Crucible (adversarial attacker)
   - MemoWriter (operator-facing memo synthesis)
 
+Wave-2 debate + audit personas (Agents.md §11b-§11d):
+  - BullAdvocate, BearAdvocate (emit DirectionalProbability; argue against consensus)
+  - CrossPersonaAuditor (emits AuditorFlags; never probabilities)
+
 Each persona produces a structured output parsed through Pydantic v2.
 All models include probability-sum validators and persona-specific invariants.
 """
@@ -15,6 +19,9 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from pmacs.schemas.agents import PersonaName
+from pmacs.schemas.failure import AUDITOR_ALLOWED_TAXONOMY, FailureTaxonomy
 
 
 def _coerce_optional_float(v: object) -> float | None:
@@ -566,6 +573,52 @@ class MemoWriterOutput(BaseModel):
     dissenting_personas: list[str] = Field(default_factory=list)
     dissent_summary: str | None = None
 
+    # ── Wave-2 enrichment (Agents.md §16.9) ─────────────────────────────────
+    # All optional with defaults so the pipeline's existing construction paths
+    # (memo_dict merge in pipeline.py, simulation) keep working unchanged.
+    # bull_bear_debate: {bull_case, bear_case, advocate_lean, reverse_dcf_gap}
+    # what_would_change_my_mind: pre-registered falsification triggers.
+    # reverse_dcf / scenario_price: serialized engine results for display.
+    bull_bear_debate: dict = Field(default_factory=dict)
+    what_would_change_my_mind: list[str] = Field(default_factory=list)
+    reverse_dcf: dict | None = None
+    scenario_price: dict | None = None
+
+    # ── Allocator-grade memo additions (.planning/memo_allocator_redesign_prompt.md) ──
+    # PASS is a first-class verdict tier (see VerdictTier docstring). When the
+    # LLM emits verdict=PASS, ``pass_reason`` is REQUIRED and must be a non-empty
+    # string ≤ 200 chars. The validator below enforces this; the sanity
+    # validator also surfaces a failed check. Empty verdict for back-compat
+    # reasons — old memos don't have it; new memos should always set it.
+    verdict: Literal["STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS", ""] = ""
+    pass_reason: str | None = None
+
+    # Premise → Mechanism → Outcome → Number causal chain. Renders as the
+    # primary reading path in the hero thesis section. Capped at 5 entries.
+    # Each entry MUST have all four fields — ``number`` is what the operator
+    # quotes when pitching the thesis to an LP.
+    thesis_bullets: list[dict] = Field(default_factory=list)
+
+    # Comparable M&A / take-privates in the same vertical, used to anchor the
+    # bull case. Capped at 5. At least one multiple is required per row.
+    # Empty list renders an explicit "data unavailable" chip (no fabrication).
+    comparable_transactions: list[dict] = Field(default_factory=list)
+
+    # Pre-registered exit criteria with explicit falsifiers. Renders as the
+    # ranked "what breaks the thesis" list. The falsifier is what the
+    # operator commits to monitoring post-entry; the claim is just context.
+    counter_thesis: list[dict] = Field(default_factory=list)
+
+    # Short interest + borrow health, lifted from ShortInterestOutput so the
+    # hero / financial-snapshot can surface it without a separate fetch.
+    # All fields optional — missing values render as `—` chips, not guesses.
+    short_interest_row: dict | None = None
+
+    # Insider / 13F activity summary, lifted from InsiderActivityOutput and
+    # computed 13F diffs. Pre-aggregated by the orchestrator; the LLM never
+    # computes these. Empty dict renders an explicit chip.
+    insider_strip: dict = Field(default_factory=dict)
+
     # Human-readable fallback written alongside JSON
     raw_text: str | None = None
 
@@ -574,9 +627,395 @@ class MemoWriterOutput(BaseModel):
     def _check_verdict_prefix(cls, v: str) -> str:
         if not v:
             return v  # empty is allowed during construction; sanity validator checks
-        valid = ("STRONG_BUY", "BUY", "HOLD", "SKIP")
+        valid = ("STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS")
         if not any(v.startswith(prefix) for prefix in valid):
             raise ValueError(
                 f"verdict_line must start with one of {valid}, got: '{v[:50]}'"
             )
         return v
+
+    @model_validator(mode="after")
+    def _check_allocator_grade_invariants(self) -> "MemoWriterOutput":
+        """Cross-field invariants for the new allocator-grade fields.
+
+        All checks are *fail-soft at the schema layer* — they raise ValueError
+        when the LLM produces garbage, but allow empty defaults so existing
+        memos that pre-date these fields keep loading from the memos table.
+        """
+        # PASS requires a structured reason. Empty pass_reason on a PASS memo
+        # is a *bug* (the spec says "active no-bid, not couldn't decide") —
+        # we reject it so the LLM retries with a real reason.
+        if self.verdict == "PASS" and (not self.pass_reason or not str(self.pass_reason).strip()):
+            raise ValueError(
+                "verdict=PASS requires non-empty pass_reason (active no-bid, not 'couldn't decide')"
+            )
+        if self.pass_reason is not None and len(self.pass_reason) > 200:
+            raise ValueError(
+                f"pass_reason must be <= 200 chars, got {len(self.pass_reason)}"
+            )
+
+        # thesis_bullets: 1-5 entries, all four required fields per entry.
+        if len(self.thesis_bullets) > 5:
+            raise ValueError(
+                f"thesis_bullets capped at 5 entries, got {len(self.thesis_bullets)}"
+            )
+        for i, b in enumerate(self.thesis_bullets):
+            if not isinstance(b, dict):
+                raise ValueError(f"thesis_bullets[{i}] must be a dict, got {type(b).__name__}")
+            for fld in ("premise", "mechanism", "outcome", "number"):
+                v = b.get(fld)
+                if v is None or not str(v).strip():
+                    raise ValueError(f"thesis_bullets[{i}].{fld} is required and must be non-empty")
+
+        # comparable_transactions: ≤ 5 entries, at least one multiple per row.
+        if len(self.comparable_transactions) > 5:
+            raise ValueError(
+                f"comparable_transactions capped at 5 entries, got {len(self.comparable_transactions)}"
+            )
+        for i, c in enumerate(self.comparable_transactions):
+            if not isinstance(c, dict):
+                raise ValueError(f"comparable_transactions[{i}] must be a dict")
+            ev_rev = c.get("ev_revenue_multiple")
+            ev_ebitda = c.get("ev_ebitda_multiple")
+            if ev_rev is None and ev_ebitda is None:
+                raise ValueError(
+                    f"comparable_transactions[{i}] needs at least one of "
+                    f"ev_revenue_multiple / ev_ebitda_multiple"
+                )
+            for mname, mval in (("ev_revenue_multiple", ev_rev), ("ev_ebitda_multiple", ev_ebitda)):
+                if mval is not None and (not isinstance(mval, (int, float)) or mval <= 0 or mval > 100):
+                    raise ValueError(
+                        f"comparable_transactions[{i}].{mname}={mval} must be in (0, 100]"
+                    )
+
+        # counter_thesis: every claim needs a non-empty falsifier.
+        for i, ct in enumerate(self.counter_thesis):
+            if not isinstance(ct, dict):
+                raise ValueError(f"counter_thesis[{i}] must be a dict")
+            if not str(ct.get("claim") or "").strip():
+                raise ValueError(f"counter_thesis[{i}].claim is required")
+            if not str(ct.get("falsifier") or "").strip():
+                raise ValueError(f"counter_thesis[{i}].falsifier is required (operator must commit to a falsifiable trigger)")
+
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Wave-2 debate + audit personas (Agents.md §11b-§11d)
+# ---------------------------------------------------------------------------
+
+# Wave-1 personas that advocates/auditor may target/reference. The auditor's
+# flag.target_persona and the advocates' target_persona must be one of these.
+WAVE1_PERSONAS: frozenset[PersonaName] = frozenset({
+    PersonaName.MACRO_REGIME,
+    PersonaName.CATALYST_SUMMARIZER,
+    PersonaName.MOAT_ANALYST,
+    PersonaName.GROWTH_HUNTER,
+    PersonaName.INSIDER_ACTIVITY,
+    PersonaName.SHORT_INTEREST,
+    PersonaName.FORENSICS,
+})
+
+
+class BullAdvocateOutput(BaseModel):
+    """BullAdvocate persona output — argues the bull case against consensus.
+
+    spec_ref: Agents.md §11b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    target_persona: PersonaName  # the wave-1 persona this argument pushes against
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bear_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> BullAdvocateOutput:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
+        return self
+
+
+class BearAdvocateOutput(BaseModel):
+    """BearAdvocate persona output — argues the bear case against consensus.
+
+    spec_ref: Agents.md §11c
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    target_persona: PersonaName
+    p_up: float = Field(ge=0.0, le=1.0)
+    p_flat: float = Field(ge=0.0, le=1.0)
+    p_down: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(max_length=600)
+    strongest_bull_counterpoint: str = Field(max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator("p_up", "p_flat", "p_down", mode="before")
+    @classmethod
+    def _snap_probs(cls, v: float) -> float:
+        return _snap_to_grid(v)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> BearAdvocateOutput:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        total = self.p_up + self.p_flat + self.p_down
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(f"probabilities sum to {total}")
+        if abs(total - 1.0) > 1e-9:
+            p_up, p_flat, p_down = _normalize_probs(self.p_up, self.p_flat, self.p_down)
+            object.__setattr__(self, "p_up", p_up)
+            object.__setattr__(self, "p_flat", p_flat)
+            object.__setattr__(self, "p_down", p_down)
+        return self
+
+
+class AuditorFlag(BaseModel):
+    """A single reasoning-flaw flag emitted by the CrossPersonaAuditor.
+
+    spec_ref: Agents.md §11d.4 / §15.4
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    flag_type: Literal[
+        "CITATION_GAP",
+        "CONCLUSION_UNSUPPORTED",
+        "CONFLICTING_CONCLUSIONS",
+        "NUMBER_MISUSE",
+        "HALLUCINATED_EVIDENCE",
+    ]
+    target_persona: PersonaName  # the wave-1 persona the flag applies to
+    severity: float = Field(ge=0.0, le=1.0)
+    description: str = Field(max_length=400)
+    evidence_ids: list[str] = Field(default_factory=list)
+    taxonomy_mapping: FailureTaxonomy  # projection into FDE (must be auditor-allowed)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> AuditorFlag:
+        if self.target_persona not in WAVE1_PERSONAS:
+            raise ValueError(
+                f"flag target_persona must be a wave-1 analysis persona, got {self.target_persona}"
+            )
+        if self.taxonomy_mapping not in AUDITOR_ALLOWED_TAXONOMY:
+            raise ValueError(
+                f"taxonomy_mapping must be an auditor-allowed type (Agents.md §15.4), "
+                f"got {self.taxonomy_mapping}"
+            )
+        # Flag type and taxonomy should correspond (defense against a mismatched
+        # projection that would mislead the Mutation Engine).
+        expected = {
+            "CITATION_GAP": FailureTaxonomy.CITATION_GAP,
+            "CONCLUSION_UNSUPPORTED": FailureTaxonomy.CONCLUSION_UNSUPPORTED,
+            "CONFLICTING_CONCLUSIONS": FailureTaxonomy.CONFLICTING_CONCLUSIONS,
+            "NUMBER_MISUSE": FailureTaxonomy.NUMBER_MISUSE,
+            "HALLUCINATED_EVIDENCE": FailureTaxonomy.HALLUCINATED_EVIDENCE,
+        }
+        if expected[self.flag_type] != self.taxonomy_mapping:
+            raise ValueError(
+                f"taxonomy_mapping {self.taxonomy_mapping} does not match flag_type {self.flag_type}"
+            )
+        return self
+
+
+class AuditorOutput(BaseModel):
+    """CrossPersonaAuditor output — structured flags, NO probabilities.
+
+    The auditor never touches the math (Five Non-Negotiable #2). The orchestrator
+    consumes flags deterministically: weight caps, Crucible-brief injection, FDE write.
+
+    spec_ref: Agents.md §11d
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str = ""
+    cycle_id: str = ""
+    flags: list[AuditorFlag] = Field(max_length=20, default_factory=list)
+    summary: str = Field(max_length=600, default="")
+
+
+# ---------------------------------------------------------------------------
+# ValuationAgent — post-arbitration forward-valuation assumptions (Agents.md §13b)
+# ---------------------------------------------------------------------------
+
+class ValuationScenarioAssumptions(BaseModel):
+    """One scenario block (bull/base/bear) of forward-valuation assumptions.
+
+    The LLM emits ASSUMPTIONS only — never a price. The deterministic
+    ForwardValuationEngine (Architecture.md §9.4b) consumes these to compute the
+    per-scenario price. All fractions are decimals (0.18 = 18%), not percentages.
+
+    spec_ref: Agents.md §13b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Revenue CAGR to the horizon (fraction). Negative = contraction.
+    # Widened from spec §13b [ge -0.5, le 1.0] to [ge -0.6, le 3.0] so
+    # hypergrowth names (NBIS/ONDS doing 100-300%+ YoY) are representable
+    # instead of hard-rejected → valuation abort. Spec amendment pending.
+    revenue_growth_path_pct: float = Field(ge=-0.60, le=3.00)
+    # Margin direction the agent expects over the horizon.
+    margin_trajectory: Literal["COMPRESSING", "EXPANDING", "STABLE"]
+    # Signed margin delta to apply (fraction, e.g. -0.03 = -3pp).
+    # Widened from spec §13b [±0.20] to [±0.40] so a pre-profit company
+    # pivoting from -35% to +5% margin (a +40pp swing) is representable.
+    margin_delta_pct: float = Field(ge=-0.40, le=0.40)
+    # EBITDA margin the agent assumes at the horizon (fraction).
+    # Widened from spec §13b [ge -0.10] to [ge -0.50] so pre-profit AI-infra
+    # names with -15% to -35% EBITDA margins are representable. A company
+    # whose IMPROVED horizon margin is still -20% was unrepresentable under
+    # the old -10% floor, silently aborting the whole forward valuation.
+    ebitda_margin_at_horizon_pct: float = Field(ge=-0.50, le=0.90)
+    # Acquisition revenue contribution as a fraction of current revenue
+    # (low-confidence — LLM-inferred from filings/press narrative, no hard deal
+    # number). 0.0 when acquisitions are N/A or immaterial.
+    acquisition_revenue_contribution_pct: float = Field(ge=0.0, le=0.50, default=0.0)
+    acquisition_confidence: Literal["HIGH", "MODERATE", "LOW", "NONE"] = "NONE"
+    # Exit EV/EBITDA multiple the agent assumes at the horizon. Nullable: for
+    # pre-profit scenarios (ebitda_margin <= 0) the engine uses the EV/Sales path
+    # via exit_sales_multiple instead, so exit_multiple should be null there.
+    # At least one of exit_multiple / exit_sales_multiple must be set per scenario
+    # (enforced in sanity).
+    exit_multiple: float | None = Field(default=None, gt=0.0, le=100.0)
+    # Exit EV/Sales multiple — REQUIRED for pre-profit scenarios (when
+    # ebitda_margin_at_horizon_pct <= 0), since EV/EBITDA is meaningless for
+    # negative EBITDA. Optional for profitable names. The engine uses the
+    # EV/Sales path (forward_ev = forward_revenue * exit_sales_multiple) when
+    # EBITDA <= 0 and this is provided; otherwise the scenario degrades to no
+    # price. Typical range 1x-50x for hypergrowth pre-profit names.
+    exit_sales_multiple: float | None = Field(default=None, ge=0.0, le=100.0)
+    rationale: str = Field(max_length=800)
+    # The agent's probability THIS scenario occurs. Bull/base/bear must sum ~1.0.
+    probability_of_occurrence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @field_validator(
+        "revenue_growth_path_pct", "margin_delta_pct",
+        "ebitda_margin_at_horizon_pct", "acquisition_revenue_contribution_pct",
+        "exit_multiple", "exit_sales_multiple", "probability_of_occurrence",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_floats(cls, v: object) -> float | None:
+        return _coerce_optional_float(v)
+
+    @field_validator("probability_of_occurrence", mode="before")
+    @classmethod
+    def _snap_scenario_prob(cls, v: object) -> float:
+        coerced = _coerce_optional_float(v)
+        if coerced is None:
+            return 0.0
+        return _snap_to_grid(coerced)
+
+
+class ValuationAgentOutput(BaseModel):
+    """ValuationAgent persona output — forward-valuation scenario assumptions.
+
+    Post-arbitration ONLY (Architecture.md §9.4b). Does NOT emit p_up/p_flat/p_down
+    and does NOT enter Arbitration — the per-scenario ``probability_of_occurrence``
+    is the agent's view of which scenario materializes, used only by the
+    ForwardValuationEngine to weight an expected price for the memo. The LLM never
+    emits the price number (§1.6 LLMs never math) — only the structured assumptions.
+
+    spec_ref: Agents.md §13b, Architecture.md §9.4b
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    horizon_months: int = Field(ge=6, le=12)
+    bull: ValuationScenarioAssumptions
+    base: ValuationScenarioAssumptions
+    bear: ValuationScenarioAssumptions
+    # Free-text notes of N/A inputs (e.g. "acquisitions: N/A, inferred narratively",
+    # "management guidance: N/A, using analyst consensus proxy").
+    data_gaps: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> ValuationAgentOutput:
+        # Scenario probabilities must sum ~1.0 (±0.10 reject, else normalize).
+        p_bull = self.bull.probability_of_occurrence
+        p_base = self.base.probability_of_occurrence
+        p_bear = self.bear.probability_of_occurrence
+        total = p_bull + p_base + p_bear
+        if abs(total - 1.0) > 0.10:
+            raise ValueError(
+                f"scenario probabilities sum to {total:.4f}, expected ~1.0 "
+                f"(bull={p_bull}, base={p_base}, bear={p_bear})"
+            )
+        if abs(total - 1.0) > 1e-9 and total > 0:
+            nb, na, nr = (
+                round(p_bull / total, 2),
+                round(p_base / total, 2),
+                round(p_bear / total, 2),
+            )
+            object.__setattr__(self.bull, "probability_of_occurrence", nb)
+            object.__setattr__(self.base, "probability_of_occurrence", na)
+            object.__setattr__(self.bear, "probability_of_occurrence", nr)
+
+        # Reject degenerate distributions (all mass on one scenario).
+        if p_bull == 1.0 and p_base == 0.0 and p_bear == 0.0:
+            raise ValueError("degenerate distribution: all mass on bull")
+        if p_bear == 1.0 and p_base == 0.0 and p_bull == 0.0:
+            raise ValueError("degenerate distribution: all mass on bear")
+
+        # Scenario growth ordering: bull >= base >= bear (V-003 — mirrors the
+        # sanity-layer check so schema and sanity agree on the same invariant;
+        # a producer that bypasses sanity still cannot pass a wrong-ordered
+        # output downstream).
+        g_bull = self.bull.revenue_growth_path_pct
+        g_base = self.base.revenue_growth_path_pct
+        g_bear = self.bear.revenue_growth_path_pct
+        if all(isinstance(x, (int, float)) for x in (g_bull, g_base, g_bear)):
+            if g_bull < g_base - 0.001 or g_bear > g_base + 0.001:
+                raise ValueError(
+                    f"revenue_growth_path_pct not ordered bull>=base>=bear: "
+                    f"bull={g_bull} base={g_base} bear={g_bear}"
+                )
+
+        # Acquisition contribution > 0 must carry a LOW/MODERATE confidence flag
+        # (the operator's "no fabricated deal numbers" guardrail) and be noted in
+        # data_gaps so the memo surfaces the low confidence.
+        for name, block in (("bull", self.bull), ("base", self.base), ("bear", self.bear)):
+            if block.acquisition_revenue_contribution_pct > 0.0:
+                if block.acquisition_confidence not in ("LOW", "MODERATE"):
+                    raise ValueError(
+                        f"{name} acquisition contribution >0 but confidence="
+                        f"{block.acquisition_confidence} (must be LOW/MODERATE)"
+                    )
+                if not any("acqui" in g.lower() for g in self.data_gaps):
+                    raise ValueError(
+                        f"{name} acquisition contribution >0 but data_gaps has no "
+                        f"acquisition note"
+                    )
+        return self

@@ -196,8 +196,15 @@ def engage(
                     cycle_id=cycle_id or None,
                     msg=f"Kill switch: {len(flagged)} mutations flagged for review",
                 )
-        except Exception:
-            pass  # Never block kill switch engagement
+        except Exception as _exc:
+                log_debug(
+                    "KILL_SWITCH_INTERNAL_ERROR",
+                    payload={"context": "engage_mutation_review", "error": str(_exc)},
+                    level="ERROR",
+                    error_code="KILL_SWITCH_INTERNAL_ERROR",
+                    msg=f"Kill switch mutation review failed: {_exc}",
+                )
+                pass  # Never block kill switch engagement
     finally:
         conn.close()
 
@@ -253,7 +260,14 @@ def disengage(
                         msg=f"Kill switch disengaged but condition {trigger_name[0]} may still be active: {reasons}",
                     )
                     # Operator action takes precedence — log warning but allow disengage
-            except Exception:
+            except Exception as _recheck_exc:
+                log_debug(
+                    "KILL_SWITCH_INTERNAL_ERROR",
+                    payload={"context": "disengage_recheck", "error": str(_recheck_exc)},
+                    level="ERROR",
+                    error_code="KILL_SWITCH_INTERNAL_ERROR",
+                    msg=f"Kill switch disengage re-check failed: {_recheck_exc}",
+                )
                 # If re-check fails, allow disengage (operator explicitly overriding)
                 pass
 
@@ -573,6 +587,13 @@ def _check_rolling_loss(db_path: str | Path) -> TriggerResult:
         finally:
             conn.close()
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "ROLLING_5D_LOSS", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check ROLLING_5D_LOSS failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="ROLLING_5D_LOSS",
             triggered=False,
@@ -615,6 +636,13 @@ def _check_daily_mtm_loss(db_path: str | Path) -> TriggerResult:
         finally:
             conn.close()
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "SINGLE_DAY_MTM_LOSS", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check SINGLE_DAY_MTM_LOSS failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="SINGLE_DAY_MTM_LOSS",
             triggered=False,
@@ -637,6 +665,13 @@ def _check_disk_space() -> TriggerResult:
             details={"free_gb": free_gb},
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "DISK_SPACE_LOW", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check DISK_SPACE_LOW failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="DISK_SPACE_LOW",
             triggered=False,
@@ -657,6 +692,13 @@ def _check_ntp_drift() -> TriggerResult:
             details={"drift_s": drift_s},
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "NTP_DRIFT", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check NTP_DRIFT failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="NTP_DRIFT",
             triggered=False,
@@ -701,6 +743,13 @@ def _check_crash_loop(db_path: str | Path) -> TriggerResult:
             reason="No crash loops detected",
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "CRASH_LOOP", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check CRASH_LOOP failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="CRASH_LOOP",
             triggered=False,
@@ -711,23 +760,45 @@ def _check_crash_loop(db_path: str | Path) -> TriggerResult:
 def _check_budget_daily(
     db_path: str | Path | None = None,
 ) -> TriggerResult:
-    """Check if daily budget hard cap has been exceeded."""
+    """Check if daily budget hard cap has been exceeded.
+
+    Reads the operator-configured cap from config/risk.toml [billing] (defaults
+    to DEFAULT_DAILY_HARD_CAP if the file is missing/malformed). The previous
+    version read the hardcoded default constant and never honored Settings UI
+    writes — root cause of the 2026-06-24 false engagement at $2.04/$2.00.
+    """
     db_path = _resolve_db(db_path)
     try:
-        from pmacs.billing.budget_enforcer import DEFAULT_DAILY_HARD_CAP, _get_period_total
+        from pmacs.billing.budget_enforcer import (
+            DEFAULT_DAILY_HARD_CAP,
+            _get_period_total,
+            _load_billing_caps_from_risk_toml,
+        )
+
+        daily_cap, _monthly_cap, _cycle_cap = _load_billing_caps_from_risk_toml()
+        # If TOML missing entirely, _load returns the defaults — same value,
+        # but keep the explicit fallback for clarity and symmetry with monthly.
+        effective_cap = daily_cap if daily_cap > 0 else DEFAULT_DAILY_HARD_CAP
 
         conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "today")
         finally:
             conn.close()
-        triggered = current >= DEFAULT_DAILY_HARD_CAP
+        triggered = current >= effective_cap
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_DAILY",
             triggered=triggered,
-            reason=f"Daily spend ${current:.4f}/{DEFAULT_DAILY_HARD_CAP:.2f}",
+            reason=f"Daily spend ${current:.4f}/{effective_cap:.2f}",
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "CYCLE_BLOCKED_BUDGET_DAILY", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check CYCLE_BLOCKED_BUDGET_DAILY failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_DAILY",
             triggered=False,
@@ -738,23 +809,42 @@ def _check_budget_daily(
 def _check_budget_monthly(
     db_path: str | Path | None = None,
 ) -> TriggerResult:
-    """Check if monthly budget hard cap has been exceeded."""
+    """Check if monthly budget hard cap has been exceeded.
+
+    Reads the operator-configured cap from config/risk.toml [billing] (defaults
+    to DEFAULT_MONTHLY_HARD_CAP if the file is missing/malformed). See
+    _check_budget_daily for the rationale — same bug pattern.
+    """
     db_path = _resolve_db(db_path)
     try:
-        from pmacs.billing.budget_enforcer import DEFAULT_MONTHLY_HARD_CAP, _get_period_total
+        from pmacs.billing.budget_enforcer import (
+            DEFAULT_MONTHLY_HARD_CAP,
+            _get_period_total,
+            _load_billing_caps_from_risk_toml,
+        )
+
+        _daily_cap, monthly_cap, _cycle_cap = _load_billing_caps_from_risk_toml()
+        effective_cap = monthly_cap if monthly_cap > 0 else DEFAULT_MONTHLY_HARD_CAP
 
         conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "this_month")
         finally:
             conn.close()
-        triggered = current >= DEFAULT_MONTHLY_HARD_CAP
+        triggered = current >= effective_cap
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_MONTHLY",
             triggered=triggered,
-            reason=f"Monthly spend ${current:.4f}/{DEFAULT_MONTHLY_HARD_CAP:.2f}",
+            reason=f"Monthly spend ${current:.4f}/{effective_cap:.2f}",
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "CYCLE_BLOCKED_BUDGET_MONTHLY", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check CYCLE_BLOCKED_BUDGET_MONTHLY failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_MONTHLY",
             triggered=False,
@@ -783,6 +873,13 @@ def _check_model_integrity(
             reason="Hash verified" if ok else "Hash mismatch",
         )
     except Exception as exc:
+        log_debug(
+            "KILL_SWITCH_INTERNAL_ERROR",
+            payload={"trigger": "MODEL_INTEGRITY", "error": str(exc)},
+            level="ERROR",
+            error_code="KILL_SWITCH_INTERNAL_ERROR",
+            msg=f"Kill switch check MODEL_INTEGRITY failed: {exc}",
+        )
         return TriggerResult(
             trigger_id="MODEL_INTEGRITY",
             triggered=False,

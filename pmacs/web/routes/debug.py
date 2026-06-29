@@ -87,7 +87,6 @@ async def debug_page(request: Request):
             name="debug.html",
             context={
                 "page": "debug",
-                "mode": "SHADOW + PAPER",
                 "events": events,
                 "recent_events": recent_events,
                 "filter_chips": [
@@ -108,7 +107,6 @@ async def debug_page(request: Request):
             name="debug.html",
             context={
                 "page": "debug",
-                "mode": "SHADOW + PAPER",
                 "error": data_layer.build_error_context("debug", exc),
             },
         )

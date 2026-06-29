@@ -63,8 +63,14 @@ class TestModeCycleStatus:
 
     def test_mode_badge_displayed(self, client):
         resp = client.get("/")
-        # Mode badge shows in full dashboard; empty state has "Run smoke-test cycle"
-        assert "SHADOW + PAPER" in resp.text or "Welcome to PMACS" in resp.text
+        # The mode badge (in base.html) renders the current Mode enum value
+        # (INSTALLING / SHADOW / PAPER / PAPER_VALIDATED / LIVE_EARLY /
+        # LIVE_STANDARD / LIVE_EXPANDED). Pre-first-cycle dashboards render
+        # the empty-state hero instead. Either is a valid dashboard state.
+        valid_modes = ("INSTALLING", "SHADOW", "PAPER", "PAPER_VALIDATED",
+                       "LIVE_EARLY", "LIVE_STANDARD", "LIVE_EXPANDED")
+        assert any(f">{m}<" in resp.text or f'Current mode: {m}' in resp.text
+                   for m in valid_modes) or "Welcome to PMACS" in resp.text
 
     def test_run_cycle_button_not_in_empty_state(self, client):
         """Dashboard renders successfully."""
@@ -212,7 +218,11 @@ class TestMutationEngineSummary:
     def test_mutation_cycles_displayed(self, client):
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "Activates after 50 PAPER cycles" in resp.text or "Welcome to PMACS" in resp.text
+        # The Mutation Engine summary card shows the remaining cycles until
+        # activation (50 total). The format changed from
+        # "Activates after 50 PAPER cycles (current: X)" to
+        # "X cycles until activation" — match the new copy.
+        assert "cycles until activation" in resp.text or "Welcome to PMACS" in resp.text
 
     def test_mutation_candidates_count(self, client):
         resp = client.get("/")

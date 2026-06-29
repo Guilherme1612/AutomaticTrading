@@ -393,11 +393,16 @@ class TestExit06SSEReconnectResume:
 
 
 # ---------------------------------------------------------------------------
-# Exit Test 7: All 9 Ollama JSON schemas validate
+# Exit Test 7: All Ollama JSON schemas validate
 # ---------------------------------------------------------------------------
 
 class TestExit07OllamaSchemasValidate:
-    """Exit test 7: All 9 JSON schemas validate against their GBNF grammars."""
+    """Exit test 7: All JSON schemas validate against their GBNF grammars.
+
+    Wave-2 debate/audit personas (bull_advocate, bear_advocate,
+    cross_persona_auditor) were added in Phase 7b (Agents.md §11b-§11d) and
+    carry their own schemas, so the canonical roster is now 12.
+    """
 
     PERSONAS = [
         "macro_regime",
@@ -409,11 +414,15 @@ class TestExit07OllamaSchemasValidate:
         "forensics",
         "crucible",
         "memo_writer",
+        # Wave-2 (Phase 7b)
+        "bull_advocate",
+        "bear_advocate",
+        "cross_persona_auditor",
     ]
 
-    def test_all_9_personas_have_schemas(self):
+    def test_all_personas_have_schemas(self):
         from pmacs.agents.schemas_json import PERSONAS
-        assert len(PERSONAS) == 9
+        assert len(PERSONAS) == 12
         for persona in self.PERSONAS:
             assert persona in PERSONAS, f"Missing persona: {persona}"
 

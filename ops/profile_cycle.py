@@ -23,7 +23,7 @@ from pathlib import Path
 PHASE_BUDGETS = {
     "Phase 0: Gatekeeper": {"budget_s": 5, "notes": "deterministic, full universe"},
     "Phase 1: Per symbol (7 personas, 3 slots)": {"budget_s": 270, "notes": "per symbol"},
-    "Phase 1: Total (20 admitted symbols)": {"budget_s": 5400, "notes": "~1.5h"},
+    "Phase 1: Total (10 admitted symbols)": {"budget_s": 2700, "notes": "~45min"},
     "Crucible (15 active)": {"budget_s": 900, "notes": "~15min"},
     "MacroRegime + supporting": {"budget_s": 120, "notes": ""},
     "Resolution / calibration / engines": {"budget_s": 60, "notes": ""},
@@ -44,7 +44,7 @@ class PhaseResult:
 
 
 def simulate_cycle(
-    admitted_symbols: int = 20,
+    admitted_symbols: int = 10,
     crucible_active: int = 15,
     mutation_active: bool = False,
 ) -> list[PhaseResult]:
@@ -82,9 +82,9 @@ def simulate_cycle(
 
     # Phase 1 total
     total_phase1 = per_symbol_s * admitted_symbols
-    budget_total = PHASE_BUDGETS["Phase 1: Total (20 admitted symbols)"]["budget_s"]
+    budget_total = PHASE_BUDGETS["Phase 1: Total (10 admitted symbols)"]["budget_s"]
     results.append(PhaseResult(
-        "Phase 1: Total (20 admitted symbols)", budget_total,
+        "Phase 1: Total (10 admitted symbols)", budget_total,
         total_phase1, total_phase1 <= budget_total,
         f"actual for {admitted_symbols} symbols",
     ))
@@ -174,7 +174,7 @@ def format_json(results: list[PhaseResult], total_ok: bool, total_s: float) -> s
 def main():
     parser = argparse.ArgumentParser(description="Cycle throughput profiler")
     parser.add_argument("--json", action="store_true", help="JSON output for CI")
-    parser.add_argument("--symbols", type=int, default=20, help="Admitted symbols")
+    parser.add_argument("--symbols", type=int, default=10, help="Admitted symbols")
     parser.add_argument("--with-mutation", action="store_true", help="Include mutation A/B")
     args = parser.parse_args()
 

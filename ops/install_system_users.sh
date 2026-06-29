@@ -31,7 +31,9 @@ PMACS_DB="/var/db/pmacs"
 PMACS_LOG="/var/log/pmacs"
 PMACS_HOME="/usr/local/var/pmacs"
 
-# All PMACS process users (Architecture.md §4 -- 8 processes)
+# All PMACS process users (Architecture.md §4). The combined web + write API
+# server runs as _pmacs_nervous (dashboard UI + nervous in one process); there
+# is no separate _pmacs_dashboard user. See Architecture.md §2.2 ADR.
 USERS=(
     "_pmacs_inference"
     "_pmacs_cortex"
@@ -39,7 +41,6 @@ USERS=(
     "_pmacs_nervous"
     "_pmacs_stoploss"
     "_pmacs_mutation"
-    "_pmacs_dashboard"
 )
 
 # ── Create system users ────────────────────────────────────────────────────
@@ -81,11 +82,11 @@ info "Setting up ${PMACS_DB} ..."
 mkdir -p "${PMACS_DB}/heartbeat"
 mkdir -p "${PMACS_DB}/queue"
 
-# nervous process owns the database directory (primary read/write)
+# nervous process owns the database directory (primary read/write, serves dashboard UI)
 chown -R _pmacs_nervous:staff "${PMACS_DB}"
 chmod 750 "${PMACS_DB}"
 
-# Dashboard needs read access for SQLite
+# Group read access for SQLite (all _pmacs_* users are in staff group)
 chmod -R g+r "${PMACS_DB}"
 
 ok "Created ${PMACS_DB} with correct permissions."

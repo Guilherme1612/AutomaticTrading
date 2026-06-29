@@ -80,6 +80,29 @@ pytest tests/property/ -v
 pytest tests/e2e/ -v
 ```
 
+## Daily tooling — slash commands + skills
+
+PMACS ships three PMACS-specific slash commands (and matching skills) that automate the spec-vs-code audit discipline. They live in `~/.claude/skills/pmacs-*/SKILL.md` (user-scoped, persistent) and are invoked as thin wrappers at `.claude/commands/{gap-audit,design-scorecard,trace-cycle}.md` (gitignored).
+
+| Command | What it does | When to run |
+|---|---|---|
+| `/gap-audit [base]` | 5-dimension sweep against `base` (default `origin/main`): untested code paths, contradicting tests, invalidated spec, stale memory, anti-pattern regressions | Before opening a PR |
+| `/design-scorecard <path>` | 6-pillar scorecard vs `Source.md §13.1` visual identity (color, typography, spacing, components, anti-patterns, a11y). PASS at 14, FLAG at 11, BLOCK at 10 | Before merging a UI change |
+| `/trace-cycle [id-prefix]` | Post-mortem a failing cycle via SQLite + audit log + `orchestrator.py`. Step reference table with line numbers + spec citations. **Check `memory/pmacs_skills_and_hook_jun29.md` first** — many prior post-mortems live there | After a cycle aborts unexpectedly |
+
+All three commands fall back to their inline procedure if the skill is not loaded — they never silently skip.
+
+### Live anti-pattern enforcement (complementary layers)
+
+Two enforcement layers protect `Architecture.md §16` anti-patterns. Both are wired by default on this repo. A clean working tree passes both.
+
+- **pre-commit** (`.pre-commit-config.yaml`) — 6 patterns, fires on `git commit` from any tool.
+- **hookify** (`.claude/hookify.pmacs-anti-patterns.local.md`) — 5 patterns, fires on live `Edit`/`Write`/`MultiEdit` from Claude Code against `pmacs/*.py`.
+
+Together they cover 11 distinct anti-patterns. Pre-commit wins on coverage (file-level grep over `pmacs/schemas/`, secrets-in-logs); hookify wins on real-time feedback (fires before the operator stages the change). The hookify rule MUST live directly in `.claude/` (not a subdirectory) and MUST use `field: content` (not `field: new_text` — that one does not resolve for Edit operations). Both gotchas are pinned by `tests/unit/test_hookify_rule.py`.
+
+See `spec/Source.md §27` for the operator-facing summary and `spec/Architecture.md §16.15` for the implementation rationale.
+
 ## License
 
 MIT

@@ -161,7 +161,7 @@
                     <input type="radio" name="inference-provider" value="{{ provider.id }}"
                            aria-label="Select {{ provider.id }} inference provider"
                            {{ 'checked' if provider.id == inference.active else '' }}
-                           onchange="switchProvider(this.value)"
+                           onclick="switchProvider(this.value)"
                            class="accent-blue-600 shrink-0">
                     <div class="flex-1 min-w-0">
                         <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
@@ -198,7 +198,7 @@
                     <input type="radio" name="inference-provider" value="{{ provider.id }}"
                            aria-label="Select {{ provider.id }} inference provider"
                            {{ 'checked' if provider.id == inference.active else '' }}
-                           onchange="switchProvider(this.value)"
+                           onclick="switchProvider(this.value)"
                            class="accent-blue-600 shrink-0">
                     <div class="flex-1 min-w-0">
                         <span class="text-sm font-medium text-text-primary">{{ provider.id }}</span>
@@ -1058,7 +1058,7 @@ function switchProvider(providerId) {
     fetch('/api/settings/inference/provider', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({provider: providerId})
+        body: JSON.stringify({provider: providerId, force: true})
     }).then(function(r) { return r.json(); }).then(function(data) {
         if (data.ok) {
             currentProvider = providerId;

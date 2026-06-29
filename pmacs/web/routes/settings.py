@@ -246,6 +246,15 @@ async def get_notification_levels():
 
 class InferenceProviderRequest(BaseModel):
     provider: str
+    # Operator directive (Jun 29 2026): the active backend MUST never change
+    # without an explicit operator action. ``force=True`` is the operator's
+    # confirmation signal — it is set only by the radio ``onclick`` handler
+    # on /settings, which fires solely on real pointer interaction. Any other
+    # caller (page load, panel toggle, browser-driven radio change, programmatic
+    # ``.checked = true``, etc.) sends ``force=False`` and the request is
+    # rejected with 400. The idempotent same-provider path remains unconditional
+    # so harmless re-posts do not 400.
+    force: bool = False
 
 
 class InferenceApiKeyRequest(BaseModel):
@@ -291,6 +300,18 @@ async def set_inference_provider(req: InferenceProviderRequest):
     if current == req.provider:
         # Idempotent — already active; don't rewrite the file.
         return JSONResponse({"ok": True, "active": req.provider, "noop": True})
+
+    # Real switch — require explicit operator confirmation. Only the radio
+    # ``onclick`` handler on /settings sends ``force=True``; page loads,
+    # panel toggles, and any browser-driven ``change`` event do not. This
+    # is the second half of the "active must never change unless the
+    # operator clicked" guarantee (the front-end half moved onchange ->
+    # onclick on the radios so spurious change events cannot reach here).
+    if not req.force:
+        return JSONResponse(
+            {"ok": False, "error": "Active provider change requires explicit operator confirmation (force=true)"},
+            status_code=400,
+        )
 
     registry["active"] = req.provider
     _save_registry(registry)

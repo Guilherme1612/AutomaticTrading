@@ -154,7 +154,7 @@ def test_switching_active_only_changes_active(isolated_registry):
     model and api_key_ref must survive the switch verbatim."""
     state = isolated_registry
     resp = asyncio.run(
-        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+        set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True))
     )
     assert resp.status_code == 200
     assert _body(resp) == {"ok": True, "active": "openrouter"}
@@ -175,8 +175,8 @@ def test_switching_active_back_and_forth_preserves_both_models(isolated_registry
     """The operator's actual complaint: switch to API, switch back to local, and
     both per-backend models must still be the ones they configured."""
     state = isolated_registry
-    asyncio.run(set_inference_provider(InferenceProviderRequest(provider="openrouter")))
-    asyncio.run(set_inference_provider(InferenceProviderRequest(provider="llama_server")))
+    asyncio.run(set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True)))
+    asyncio.run(set_inference_provider(InferenceProviderRequest(provider="llama_server", force=True)))
     assert state["reg"]["active"] == "llama_server"
     assert (
         state["reg"]["backends"]["llama_server"]["default_model"]
@@ -223,7 +223,7 @@ def test_setting_active_to_already_active_returns_noop_and_does_not_write(
 
     # First switch — actually changes active, NOT a noop.
     resp = asyncio.run(
-        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+        set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True))
     )
     body = _body(resp)
     assert body["ok"] is True
@@ -232,7 +232,7 @@ def test_setting_active_to_already_active_returns_noop_and_does_not_write(
 
     # Second switch to the SAME provider — must be idempotent.
     resp2 = asyncio.run(
-        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+        set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True))
     )
     body2 = _body(resp2)
     assert body2["ok"] is True
@@ -250,3 +250,69 @@ def test_unknown_provider_returns_400_without_touching_active(isolated_registry)
     )
     assert resp.status_code == 400
     assert isolated_registry["reg"]["active"] == before
+
+
+# --- set_inference_provider: explicit-operator guard (Jun 29 2026 regression) ----
+#
+# Bug: research runs and page refreshes in other browsers were silently flipping
+# the active backend (e.g. openrouter -> anthropic). Root cause: the provider
+# radios in settings.html bound ``onchange=switchProvider(this.value)`` and the
+# browser fires ``change`` not just on user clicks but also whenever the radio's
+# checked-state disagrees with the persisted state (panel re-renders,
+# programmatic ``.checked = true``, page reloads, etc.). Each spurious event
+# POSTed /api/settings/inference/provider and overwrote ``active``.
+#
+# Fix (this commit): the route now requires ``force=True`` on the request body
+# to perform a real switch. The /settings radio ``onclick`` handler is the only
+# caller that sends ``force=True``; all other callers (page loads, panel
+# toggles, browser-driven change events) send ``force=False`` and the request
+# is rejected with 400. The idempotent same-provider path stays unconditional
+# so harmless re-posts do not 400.
+
+
+def test_real_switch_requires_force(isolated_registry):
+    """A POST to switch the active backend to a DIFFERENT provider without
+    ``force=True`` must 400 and must NOT mutate ``active``."""
+    before = isolated_registry["reg"]["active"]
+    assert before == "llama_server"  # fixture pre-condition
+
+    resp = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+    )  # default force=False
+    assert resp.status_code == 400
+    body = _body(resp)
+    assert body["ok"] is False
+    assert "explicit operator confirmation" in body["error"].lower()
+    # Registry untouched.
+    assert isolated_registry["reg"]["active"] == before
+
+
+def test_real_switch_with_force_succeeds(isolated_registry):
+    """An operator-confirmed switch (``force=True``) still works."""
+    resp = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True))
+    )
+    assert resp.status_code == 200
+    assert _body(resp) == {"ok": True, "active": "openrouter"}
+    assert isolated_registry["reg"]["active"] == "openrouter"
+
+
+def test_idempotent_same_provider_does_not_require_force(isolated_registry):
+    """The noop path is unconditional — a POST whose target provider is
+    already active must NOT 400 even without ``force=True`` (this preserves
+    the Jun 23 idempotency contract and keeps harmless re-posts quiet)."""
+    # First, switch to openrouter with force=True (the operator's only way in).
+    asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter", force=True))
+    )
+    assert isolated_registry["reg"]["active"] == "openrouter"
+
+    # Now POST openrouter again WITHOUT force — must still succeed (noop).
+    resp = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+    )
+    assert resp.status_code == 200
+    body = _body(resp)
+    assert body["ok"] is True
+    assert body.get("noop") is True
+    assert isolated_registry["reg"]["active"] == "openrouter"

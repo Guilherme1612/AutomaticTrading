@@ -94,13 +94,17 @@ class TestAccessibilityStructural:
     def test_keyboard_shortcuts_have_aria(self, dashboard_client):
         """Keyboard shortcut elements must be accessible."""
         response = dashboard_client.get("/")
-        html = response.text.lower()
-        # Find command palette element and verify it has accessibility attributes
-        palette_match = re.search(r'<[^>]*(command-palette|cmd-k)[^>]*>', html, re.IGNORECASE)
+        html = response.text
+        # Find command palette button element and verify it has accessibility attributes.
+        # Match only real HTML tags (not Jinja comments), and prefer the <button>
+        # that opens the palette via onclick="toggleCmdK()".
+        palette_match = re.search(
+            r'<button[^>]*onclick="toggleCmdK\(\)"[^>]*>', html
+        )
         if palette_match:
             element = palette_match.group()
             assert 'aria-label' in element or 'role=' in element, \
-                "Command palette element lacks aria-label or role: " + element
+                "Command palette button lacks aria-label or role: " + element
         else:
             # If no explicit palette element, verify input has accessible attributes
             assert 'cmd-k-input' in html or 'aria-label="command' in html, \

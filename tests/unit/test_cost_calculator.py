@@ -70,3 +70,41 @@ def test_compute_body_cost_missing_fields():
     )
     assert compute_body_cost({}, pricing) == 0.0
     assert compute_body_cost({"prompt_tokens": 100}, pricing) == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# Spec exit test #1 (spec/Phases.md Phase 16, line 677)
+# "compute_cost(1000, 500, $1/M in, $2/M out) = $0.002 exact; round-trip;
+#  empty token counts → 0"
+# The PRD §4.1 numerical examples above cover a different price point; this
+# section pins the spec's exact wording.
+# ---------------------------------------------------------------------------
+
+def test_compute_cost_spec_exact_example():
+    """Spec/Phases.md Phase 16 exit test #1, exact verbatim case.
+
+    compute_cost(1000 input, 500 output, $1/M input, $2/M output) = $0.002 exact.
+    """
+    in_per_token = 1.0 / 1_000_000   # $1 per 1M input tokens
+    out_per_token = 2.0 / 1_000_000  # $2 per 1M output tokens
+    cost = compute_cost(1000, 500, in_per_token, out_per_token)
+    # 1000 * 1e-6 + 500 * 2e-6 = 0.001 + 0.001 = 0.002 exact
+    assert cost == pytest.approx(0.002, abs=1e-12)
+
+
+def test_compute_cost_round_trip_via_pricing_record():
+    """Spec/Phases.md Phase 16 exit test #1 round-trip.
+
+    Round-trip via PricingRecord + compute_body_cost: prices stored per-token
+    must produce the same USD as the spec's per-million tables.
+    """
+    pricing = PricingRecord(
+        model_id="gpt-4",
+        input_price_per_token=5.0 / 1_000_000,    # $5/M
+        output_price_per_token=15.0 / 1_000_000,  # $15/M
+        fetched_at="2026-01-01T00:00:00Z",
+    )
+    usage = {"prompt_tokens": 1000, "completion_tokens": 500}
+    cost = compute_body_cost(usage, pricing)
+    # 1000 * 5e-6 + 500 * 15e-6 = 0.005 + 0.0075 = 0.0125
+    assert cost == pytest.approx(0.0125, abs=1e-9)

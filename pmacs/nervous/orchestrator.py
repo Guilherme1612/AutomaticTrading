@@ -113,6 +113,47 @@ class CycleLock:
             self._fd = None
 
 
+def _build_agent_signals(persona_outputs: list[Any]) -> list[dict[str, Any]]:
+    """Build a deterministic per-persona signal list for memo_json persistence.
+
+    Pure function: no I/O, no audit, no SSE. Used by both the success path
+    (_step_13mn_post_decision) and the Crucible-abort path so every memo
+    carries the same per-persona signal shape regardless of cycle outcome.
+
+    Direction tag is derived from p_up/p_down since DirectionalProbability
+    has no key_signal. Matches the demo path's agent_signals shape
+    (pipeline.py _generate_full_memo) so memo.html's per-signal reads
+    are unchanged.
+    """
+    if not persona_outputs:
+        return []
+    sigs: list[dict[str, Any]] = []
+    for dp in persona_outputs:
+        p_up = float(getattr(dp, "p_up", 0.0))
+        p_down = float(getattr(dp, "p_down", 0.0))
+        direction = (
+            "bullish" if p_up > p_down + 0.05
+            else "bearish" if p_down > p_up + 0.05
+            else "neutral"
+        )
+        pname = getattr(
+            getattr(dp, "persona", None), "value",
+            str(getattr(dp, "persona", "")),
+        )
+        sigs.append({
+            "persona": pname,
+            "signal": direction,
+            "direction": direction,
+            "p_up": round(p_up, 4),
+            "p_flat": round(float(getattr(dp, "p_flat", 0.0)), 4),
+            "p_down": round(p_down, 4),
+            "confidence": round(float(getattr(dp, "confidence", 0.0)), 4),
+            "analysis": (getattr(dp, "reasoning", "") or "")[:500],
+            "evidence_cited": list(getattr(dp, "evidence_ids", []) or [])[:5],
+        })
+    return sigs
+
+
 class CycleOrchestrator:
     """Full cycle orchestrator with step dispatch, idempotency, and locking.
 
@@ -2328,6 +2369,18 @@ class CycleOrchestrator:
         )
         return anchor, current_ev_sales, analyst_target_mean
 
+    def _build_agent_signals(
+        self, persona_outputs: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Thin wrapper around the module-level helper. Used by both the
+        success path (_step_13mn_post_decision) and the Crucible-abort path so
+        every memo carries the same per-persona signal shape regardless of
+        cycle outcome. Cached on self._last_persona_signals by
+        _step_13e_arbitration BEFORE the Crucible loop so the abort path can
+        still see what each persona said before the cycle was rejected.
+        """
+        return _build_agent_signals(persona_outputs)
+
     def _write_auditor_flags_to_fde(
         self, holding_id: str, cycle_id: str, ticker: str, flags: list[Any]
     ) -> None:
@@ -2485,6 +2538,13 @@ class CycleOrchestrator:
                 )
 
         arbitrated = arbitrate(signals, cycle_id=cycle_id)
+        # Cache agent_signals on self so both the success path
+        # (_step_13mn_post_decision) and the Crucible-abort path can populate
+        # memo_dict. CycleLock at line 354 serializes cycles, so this instance
+        # attr is one-cycle-at-a-time safe.
+        self._last_persona_signals = self._build_agent_signals(
+            getattr(arbitrated, "persona_outputs", None) or []
+        )
         log_debug(
             "SYMBOL_ARBITRATION_COMPLETE",
             payload={
@@ -2701,6 +2761,11 @@ class CycleOrchestrator:
                     "crucible_severity": float(crucible_severity),
                     "crucible_iterations": int(crucible_iterations),
                     "abort_reason": "crucible_abort",
+                    # Include the per-persona signals captured before the
+                    # Crucible loop rejected the thesis — these tell the
+                    # operator which personas actually produced outputs vs.
+                    # which ones had no data, even on a HOLD-on-write abort.
+                    "agent_signals": list(getattr(self, "_last_persona_signals", None) or []),
                 }
                 abort_memo_json = _persist_j.dumps(abort_memo_dict)
                 abort_raw = abort_memo_dict["thesis"]
@@ -3216,36 +3281,17 @@ class CycleOrchestrator:
                     memo_dict["bull_bear_debate"] = bbd
             except Exception:
                 pass
-            # Task #8 Part C — deterministic agent signals. Build from the
-            # arbitrated DirectionalProbability list so memo.html's Agent Signals
-            # card renders from persisted memo_json without the demo path's live
-            # globals. DirectionalProbability has no key_signal, so derive a short
-            # direction tag. Matches the demo's agent_signals shape (pipeline.py
-            # _generate_full_memo) so memo.html's per-signal reads are unchanged.
+            # Task #8 Part C — deterministic agent signals. Read from the cache populated
+            # by _step_13e_arbitration (self._last_persona_signals) so the same
+            # per-persona signals land in the memo regardless of whether we hit
+            # the success path here or the Crucible-abort path earlier. The cache
+            # is populated BEFORE the Crucible loop runs, so abort stubs still
+            # see what each persona said. DirectionalProbability has no
+            # key_signal — direction is derived from p_up/p_down.
             if "agent_signals" not in memo_dict:
-                _dps = getattr(arbitrated, "persona_outputs", None) or []
-                if _dps:
-                    _sigs: list[dict] = []
-                    for _dp in _dps:
-                        _p_up = float(getattr(_dp, "p_up", 0.0))
-                        _p_down = float(getattr(_dp, "p_down", 0.0))
-                        _dir = ("bullish" if _p_up > _p_down + 0.05
-                                else "bearish" if _p_down > _p_up + 0.05
-                                else "neutral")
-                        _pname = getattr(getattr(_dp, "persona", None), "value",
-                                         str(getattr(_dp, "persona", "")))
-                        _sigs.append({
-                            "persona": _pname,
-                            "signal": _dir,
-                            "direction": _dir,
-                            "p_up": round(_p_up, 4),
-                            "p_flat": round(float(getattr(_dp, "p_flat", 0.0)), 4),
-                            "p_down": round(_p_down, 4),
-                            "confidence": round(float(getattr(_dp, "confidence", 0.0)), 4),
-                            "analysis": (getattr(_dp, "reasoning", "") or "")[:500],
-                            "evidence_cited": list(getattr(_dp, "evidence_ids", []) or [])[:5],
-                        })
-                    memo_dict["agent_signals"] = _sigs
+                cached = getattr(self, "_last_persona_signals", None)
+                if cached:
+                    memo_dict["agent_signals"] = list(cached)
             # Deterministic crucible narrative fields. memo.html's Crucible card
             # reads memo.crucible_severity/attacks/summary and derives
             # thesis_survives from severity (< 0.50). Inject from the stashed

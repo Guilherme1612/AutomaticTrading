@@ -3443,7 +3443,7 @@ Synthetic ticker (`SMKT`) with deterministic OHLCV, fake earnings, fake insider 
 |---|---|---|
 | Phase 0 gatekeeper (deterministic, full universe) | ~5s | |
 | Phase 1 per symbol (7 analysis personas, 3 parallel slots) | ≤ 270s | |
-| Phase 1 total (assume 20 admitted symbols) | ≤ 5,400s (1.5h) | |
+| Phase 1 total (assume 10 admitted symbols) | ≤ 2,700s (45min) | |
 | Crucible (15 active) | ~900s (15min) | |
 | MacroRegime + supporting | ~120s | |
 | Resolution / calibration / engines | ~60s | |

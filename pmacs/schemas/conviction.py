@@ -8,10 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class VerdictTier(str, Enum):
+    """The 5 verdict tiers emitted by the conviction engine.
+
+    - STRONG_BUY / BUY: actionable longs (conviction >= 0.6 / 0.3 standard)
+    - HOLD: position-management state for an *existing* active holding whose
+      thesis is still valid (decision belongs to the holding, not the conviction)
+    - SKIP: passive abstention — conviction too low to justify capital at risk
+    - PASS: active no-bid — analyst-persona judgment says the setup is real
+      but the edge doesn't justify entry (R:R < 1.5, comps empty + growth < 10%,
+      etc.). PASS is *not* "we couldn't decide"; it's a deliberate no-action
+      that requires a structured `pass_reason`. See ``engines.conviction`` for
+      the trigger logic and ``schemas.personas.MemoWriterOutput.pass_reason``
+      for the schema-side reason field.
+    """
     STRONG_BUY = "STRONG_BUY"
     BUY = "BUY"
     HOLD = "HOLD"
     SKIP = "SKIP"
+    PASS = "PASS"
 
 
 class ConvictionInput(BaseModel):

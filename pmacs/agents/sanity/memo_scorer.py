@@ -862,4 +862,158 @@ def parse_fundamentals_text(text: str) -> list[dict]:
         def __init__(self, d: dict):
             self.evidence = [_SyntheticEvidence(d)]
 
+
+# --- Prior-memo extraction (Commit 2 — Tier 2A) -----------------------------
+# The orchestrator's _step_13c_episodic_context previously pulled only 7 fields
+# from the prior memo and truncated prior_key_signal to 200 chars. The full
+# thesis, fair_value, methodology, evidence, risks, what_would_change_my_mind,
+# and forward_valuation.expected_price_usd were never reinjected — so on
+# cycle 2+ the LLM re-derives facts already in the persisted memo. This
+# helper extracts the rich subset from the JSON-serialised memos.memo_json
+# so it can be passed to build_context_brief as new kwargs and rendered into
+# the persona prompt.
+#
+# spec_ref: Architecture.md §16.9; Agents.md §13.5
+
+def extract_prior_memo_summary(memo_json_str: str | None) -> dict:
+    """Extract the rich prior-memo fields from a memos.memo_json string.
+
+    Returns a dict with the following keys (all optional; missing keys default
+    to None / empty list):
+      - thesis: str
+      - verdict_line: str
+      - fair_value: str | None
+      - valuation_methodology: str | None
+      - key_evidence: list[str]
+      - key_risks: list[str]
+      - what_would_change_my_mind: list[str]
+      - forward_expected_price_usd: float | None
+      - crucible_severity: float | None
+      - conviction: float | None
+      - decided_at: str | None
+
+    On any parse failure (empty string, malformed JSON, non-dict), returns
+    an empty dict. This helper is best-effort — never raises. The orchestrator
+    treats an empty result as "no prior memo" and continues.
+    """
+    if not memo_json_str:
+        return {}
+    try:
+        import json as _epj
+        parsed = _epj.loads(memo_json_str)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    def _get_str(*keys: str) -> str | None:
+        for k in keys:
+            v = parsed.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        return None
+
+    def _get_list(*keys: str) -> list[str]:
+        for k in keys:
+            v = parsed.get(k)
+            if isinstance(v, list):
+                return [str(x) for x in v if x is not None][:8]
+            if isinstance(v, str) and v.strip():
+                # Some memos store a single string in what_would_change_my_mind.
+                return [v.strip()][:8]
+        return []
+
+    # forward_valuation is a nested dict on the persisted memo_json.
+    fv = parsed.get("forward_valuation")
+    fv_price: float | None = None
+    if isinstance(fv, dict):
+        _p = fv.get("expected_price_usd")
+        if isinstance(_p, (int, float)):
+            fv_price = float(_p)
+
+    _sev = parsed.get("crucible_severity")
+    _conv = parsed.get("conviction")
+    return {
+        "thesis": _get_str("thesis"),
+        "verdict_line": _get_str("verdict_line"),
+        "fair_value": _get_str("fair_value_estimate", "fair_value"),
+        "valuation_methodology": _get_str("valuation_methodology"),
+        "key_evidence": _get_list("key_evidence"),
+        "key_risks": _get_list("key_risks"),
+        "what_would_change_my_mind": _get_list("what_would_change_my_mind"),
+        "forward_expected_price_usd": fv_price,
+        "crucible_severity": float(_sev) if isinstance(_sev, (int, float)) else None,
+        "conviction": float(_conv) if isinstance(_conv, (int, float)) else None,
+        "decided_at": _get_str("decided_at"),
+    }
+
+
+# --- Persona weight table formatter (Commit 4 — Tier 4) ----------------------
+# Surfaces who drove the arbitration verdict and how reliable each persona is
+# on this ticker (per-persona Brier calibration from DuckDB). The operator
+# can see, in the memo, which personas were weighted highest.
+
+def format_persona_weight_table(
+    persona_weights: list | None,
+    per_persona_calibration: dict | None = None,
+) -> str:
+    """Render a sorted ASCII table of persona arbitration weights.
+
+    Each row: ``{persona:20s}  weight={pct:5.1f}%  brier={brier:.3f}  n={n}  mult={mult:.2f}``
+
+    Rows sorted by weight desc. If ``persona_weights`` is empty/None, returns
+    an empty string so callers can short-circuit rendering.
+
+    Args:
+        persona_weights: List of PersonaWeight objects (or dicts) with fields
+            persona, weight, brier_score, calibration_count, weight_multiplier.
+        per_persona_calibration: Optional dict mapping persona_name → avg_brier
+            (from DuckDB persona_ticker_affinity). When supplied, an extra
+            "ticker_brier" column appears and a "LOW CONFIDENCE on this ticker"
+            marker is shown for brier > 0.25.
+
+    Returns:
+        Multi-line string. Empty string when no weights are provided.
+    """
+    if not persona_weights:
+        return ""
+    # Normalize to (name, weight_pct, brier, n, mult, ticker_brier|None)
+    rows: list[tuple] = []
+    for w in persona_weights:
+        if isinstance(w, dict):
+            name = str(w.get("persona", "?"))
+            weight = float(w.get("weight", 0.0))
+            brier = float(w.get("brier_score", 0.0) or 0.0)
+            n = int(w.get("calibration_count", 0) or 0)
+            mult = float(w.get("weight_multiplier", 1.0) or 1.0)
+        else:
+            name = str(getattr(w, "persona", "?"))
+            weight = float(getattr(w, "weight", 0.0) or 0.0)
+            brier = float(getattr(w, "brier_score", 0.0) or 0.0)
+            n = int(getattr(w, "calibration_count", 0) or 0)
+            mult = float(getattr(w, "weight_multiplier", 1.0) or 1.0)
+        ticker_brier = None
+        if per_persona_calibration:
+            tb = per_persona_calibration.get(name)
+            if isinstance(tb, (int, float)):
+                ticker_brier = float(tb)
+        rows.append((name, weight * 100.0, brier, n, mult, ticker_brier))
+    rows.sort(key=lambda r: r[1], reverse=True)
+
+    header = (
+        f"  {'persona':20s}  {'weight':>7s}  {'brier':>6s}  {'n':>4s}  "
+        f"{'mult':>5s}  {'ticker_brier':>12s}  note"
+    )
+    lines = [header, "  " + "-" * (len(header) - 2)]
+    for name, pct, brier, n, mult, tb in rows:
+        tb_str = f"{tb:.3f}" if tb is not None else "—"
+        note = ""
+        if tb is not None and tb > 0.25:
+            note = "  LOW CONFIDENCE on this ticker"
+        lines.append(
+            f"  {name:20s}  {pct:6.1f}%  {brier:6.3f}  {n:4d}  "
+            f"{mult:5.2f}  {tb_str:>12s}{note}"
+        )
+    return "\n".join(lines)
+
     return [_SyntheticPacket(data)]

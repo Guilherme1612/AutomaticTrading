@@ -621,7 +621,7 @@ pmacs/
 │   │           └── htmx.min.js
 │   └── installer/
 │       ├── __init__.py
-│       ├── wizard.py               # the 10-step run wizard (Source.md §12)
+│       ├── wizard.py               # the 11-step run wizard (Source.md §12) — 10 progress dots
 │       └── steps/
 │           ├── __init__.py
 │           ├── check_system.py

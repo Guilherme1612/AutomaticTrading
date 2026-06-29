@@ -189,6 +189,7 @@ def compute_forward_valuation(
     current_price_usd: float | None = None,
     current_ev_sales: float | None = None,
     analyst_target_mean_usd: float | None = None,
+    reverse_dcf_fair_value_usd: float | None = None,
 ) -> ForwardValuationResult:
     """Compute per-scenario forward fair-value prices. Keyword-only.
 
@@ -300,6 +301,66 @@ def compute_forward_valuation(
     # "result: equity floored at zero".
     base_price_underwater = base_price == 0.0 and base_pt.equity_value_usd == 0.0
 
+    # ── Tier 3 — gap / distress / convergence signals (Commit 3) ──────────
+    # (3A) Cross-check vs reverse-DCF: when both prices exist and the forward
+    # base diverges >50% from the reverse-DCF fair value, the agent's exit
+    # multiple or growth assumption is suspect — flag for operator review.
+    # (3B) Distress surfacing: a floored-at-$0 base price is real distress;
+    # surface it explicitly so the memo writer can prepend ⚠ DISTRESS.
+    # (3C) Probability convergence: when the agent's bull/bear scenarios are
+    # nearly equally weighted (|p_bull - p_bear| < 0.10), the agent is
+    # uncertain; surface as LOW-CONFIDENCE FORWARD VALUATION. This is a
+    # signal, not a stop-trade flag — operator decides.
+    forward_vs_reverse_dcf_gap_pct: float | None = None
+    forward_vs_reverse_dcf_warning: str = ""
+    agent_scenario_convergence_warning: str = ""
+
+    # (3A) Cross-check vs reverse-DCF
+    if (
+        reverse_dcf_fair_value_usd is not None
+        and reverse_dcf_fair_value_usd > 0
+        and base_price is not None
+        and base_price > 0
+    ):
+        _gap = (float(base_price) - float(reverse_dcf_fair_value_usd)) / float(
+            reverse_dcf_fair_value_usd
+        )
+        forward_vs_reverse_dcf_gap_pct = round(_gap, 4)
+        if abs(_gap) > 0.50:
+            forward_vs_reverse_dcf_warning = (
+                f"forward base ${base_price:.2f} diverges {_gap*100:+.0f}% "
+                f"from reverse-DCF fair value ${reverse_dcf_fair_value_usd:.2f} "
+                f"— review agent assumptions (LLM hallucination check)"
+            )
+
+    # (3B) Distress surfacing — prefix the convergence_warning with the
+    # ⚠ DISTRESS tag. We use agent_scenario_convergence_warning as the
+    # single sink (per the plan: "Surface `base_price_underwater` flag with
+    # explicit ⚠ DISTRESS note") and concatenate (3C) below.
+    if base_price_underwater:
+        agent_scenario_convergence_warning = (
+            "⚠ DISTRESS: equity floored at $0 — forward EV < net debt"
+        )
+
+    # (3C) Probability convergence — append when the agent's bull/bear
+    # probabilities are within 10pp of each other. Concatenated after the
+    # distress tag so the operator sees both in priority order.
+    if (
+        p_bull is not None
+        and p_bear is not None
+        and abs(p_bull - p_bear) < 0.10
+    ):
+        _lc = (
+            f"LOW-CONFIDENCE FORWARD VALUATION — agent scenarios nearly "
+            f"equally weighted (p_bull={p_bull:.2f}, p_bear={p_bear:.2f})"
+        )
+        if agent_scenario_convergence_warning:
+            agent_scenario_convergence_warning = (
+                f"{agent_scenario_convergence_warning}; {_lc}"
+            )
+        else:
+            agent_scenario_convergence_warning = _lc
+
     result = ForwardValuationResult(
         ticker=ticker,
         cycle_id=cycle_id,
@@ -317,6 +378,9 @@ def compute_forward_valuation(
         analyst_target_mean_usd=analyst_target_mean_usd,
         base_price_underwater=base_price_underwater,
         notes="; ".join(notes_bits) if notes_bits else "",
+        forward_vs_reverse_dcf_gap_pct=forward_vs_reverse_dcf_gap_pct,
+        forward_vs_reverse_dcf_warning=forward_vs_reverse_dcf_warning,
+        agent_scenario_convergence_warning=agent_scenario_convergence_warning,
     )
     _log(ticker, cycle_id, result, reason="computed")
     return result

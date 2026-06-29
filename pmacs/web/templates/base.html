@@ -139,6 +139,19 @@
                 <span id="health-last-cycle">Last cycle: …</span>
             </div>
         </div>
+        <!-- Command palette trigger — opens existing #cmd-k modal (Cmd-K) -->
+        <button type="button"
+                onclick="toggleCmdK()"
+                class="mx-2 md:mx-4 inline-flex items-center gap-2 px-3 py-1.5 text-xs text-text-muted bg-surface-sunken/50 backdrop-blur rounded-xl hover:bg-surface-sunken hover:text-text-secondary transition-all duration-200 border border-border-subtle/60"
+                aria-label="Open command palette (Cmd-K)"
+                aria-keyshortcuts="Meta+K Control+K"
+                title="Search tickers, pages, actions (⌘K)">
+            <svg class="w-3.5 h-3.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <span>Search…</span>
+            <kbd class="ml-1 text-[10px] font-mono opacity-50">⌘K</kbd>
+        </button>
         <div id="cycle-indicator" class="flex-1 text-center text-sm text-text-muted hidden sm:block" role="status" aria-live="polite">
             <span id="cycle-idle-label" class="inline-flex items-center gap-2" style="display:none">
                 <span class="live-dot"></span>

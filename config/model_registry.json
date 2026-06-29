@@ -36,7 +36,7 @@
       "base_url": "https://openrouter.ai/api/v1"
     }
   },
-  "active": "openrouter",
+  "active": "anthropic",
   "personas": {
     "gatekeeper": null,
     "macro_regime": "default",

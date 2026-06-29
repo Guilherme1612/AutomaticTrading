@@ -1065,6 +1065,19 @@ distrusts stale figures.
 explaining that the ticker must be analyzed in a cycle before data is available,
 with a link to the Universe page.
 
+### 16.9a Data-quality warnings (Phase 13)
+
+When the evidence's source itself flags a metric as anomalous (e.g. a
+yfinance `netProfitMarginTTM=251.9%` that fails the `_clamp_numeric_fields`
+plausibility check in `pmacs/agents/base.py`), `pmacs/agents/sanity/memo_scorer.py`
+injects the warning into the MemoWriter prompt as a "DO NOT cite as facts"
+directive. The memo must not cite flagged metrics in THESIS / KEY EVIDENCE
+/ financial_snapshot; instead it cites an alternative source (EDGAR XBRL,
+Yahoo Finance) or omits the metric. This is the memo-side counterpart to
+`PersonaRunner.format_evidence_for_prompt`, which already warns the analyst
+personas — the analyst layer never reaches the operator, but the memo does.
+Operator-visible only when a metric is flagged.
+
 ### 16.9 Memo debate + valuation sections
 
 The memo (rendered in the single-ticker drawer §16.6 and on `/memo/{ticker}`) gains four new sections from the wave-2 debate/audit layer and the deterministic valuation engines (`Architecture.md §9.4b`). These are *displays only* — they do not change the verdict, which is still produced by the unchanged conviction formula (§7.2).

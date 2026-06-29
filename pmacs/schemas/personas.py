@@ -584,6 +584,41 @@ class MemoWriterOutput(BaseModel):
     reverse_dcf: dict | None = None
     scenario_price: dict | None = None
 
+    # ── Allocator-grade memo additions (.planning/memo_allocator_redesign_prompt.md) ──
+    # PASS is a first-class verdict tier (see VerdictTier docstring). When the
+    # LLM emits verdict=PASS, ``pass_reason`` is REQUIRED and must be a non-empty
+    # string ≤ 200 chars. The validator below enforces this; the sanity
+    # validator also surfaces a failed check. Empty verdict for back-compat
+    # reasons — old memos don't have it; new memos should always set it.
+    verdict: Literal["STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS", ""] = ""
+    pass_reason: str | None = None
+
+    # Premise → Mechanism → Outcome → Number causal chain. Renders as the
+    # primary reading path in the hero thesis section. Capped at 5 entries.
+    # Each entry MUST have all four fields — ``number`` is what the operator
+    # quotes when pitching the thesis to an LP.
+    thesis_bullets: list[dict] = Field(default_factory=list)
+
+    # Comparable M&A / take-privates in the same vertical, used to anchor the
+    # bull case. Capped at 5. At least one multiple is required per row.
+    # Empty list renders an explicit "data unavailable" chip (no fabrication).
+    comparable_transactions: list[dict] = Field(default_factory=list)
+
+    # Pre-registered exit criteria with explicit falsifiers. Renders as the
+    # ranked "what breaks the thesis" list. The falsifier is what the
+    # operator commits to monitoring post-entry; the claim is just context.
+    counter_thesis: list[dict] = Field(default_factory=list)
+
+    # Short interest + borrow health, lifted from ShortInterestOutput so the
+    # hero / financial-snapshot can surface it without a separate fetch.
+    # All fields optional — missing values render as `—` chips, not guesses.
+    short_interest_row: dict | None = None
+
+    # Insider / 13F activity summary, lifted from InsiderActivityOutput and
+    # computed 13F diffs. Pre-aggregated by the orchestrator; the LLM never
+    # computes these. Empty dict renders an explicit chip.
+    insider_strip: dict = Field(default_factory=dict)
+
     # Human-readable fallback written alongside JSON
     raw_text: str | None = None
 
@@ -592,12 +627,77 @@ class MemoWriterOutput(BaseModel):
     def _check_verdict_prefix(cls, v: str) -> str:
         if not v:
             return v  # empty is allowed during construction; sanity validator checks
-        valid = ("STRONG_BUY", "BUY", "HOLD", "SKIP")
+        valid = ("STRONG_BUY", "BUY", "HOLD", "SKIP", "PASS")
         if not any(v.startswith(prefix) for prefix in valid):
             raise ValueError(
                 f"verdict_line must start with one of {valid}, got: '{v[:50]}'"
             )
         return v
+
+    @model_validator(mode="after")
+    def _check_allocator_grade_invariants(self) -> "MemoWriterOutput":
+        """Cross-field invariants for the new allocator-grade fields.
+
+        All checks are *fail-soft at the schema layer* — they raise ValueError
+        when the LLM produces garbage, but allow empty defaults so existing
+        memos that pre-date these fields keep loading from the memos table.
+        """
+        # PASS requires a structured reason. Empty pass_reason on a PASS memo
+        # is a *bug* (the spec says "active no-bid, not couldn't decide") —
+        # we reject it so the LLM retries with a real reason.
+        if self.verdict == "PASS" and (not self.pass_reason or not str(self.pass_reason).strip()):
+            raise ValueError(
+                "verdict=PASS requires non-empty pass_reason (active no-bid, not 'couldn't decide')"
+            )
+        if self.pass_reason is not None and len(self.pass_reason) > 200:
+            raise ValueError(
+                f"pass_reason must be <= 200 chars, got {len(self.pass_reason)}"
+            )
+
+        # thesis_bullets: 1-5 entries, all four required fields per entry.
+        if len(self.thesis_bullets) > 5:
+            raise ValueError(
+                f"thesis_bullets capped at 5 entries, got {len(self.thesis_bullets)}"
+            )
+        for i, b in enumerate(self.thesis_bullets):
+            if not isinstance(b, dict):
+                raise ValueError(f"thesis_bullets[{i}] must be a dict, got {type(b).__name__}")
+            for fld in ("premise", "mechanism", "outcome", "number"):
+                v = b.get(fld)
+                if v is None or not str(v).strip():
+                    raise ValueError(f"thesis_bullets[{i}].{fld} is required and must be non-empty")
+
+        # comparable_transactions: ≤ 5 entries, at least one multiple per row.
+        if len(self.comparable_transactions) > 5:
+            raise ValueError(
+                f"comparable_transactions capped at 5 entries, got {len(self.comparable_transactions)}"
+            )
+        for i, c in enumerate(self.comparable_transactions):
+            if not isinstance(c, dict):
+                raise ValueError(f"comparable_transactions[{i}] must be a dict")
+            ev_rev = c.get("ev_revenue_multiple")
+            ev_ebitda = c.get("ev_ebitda_multiple")
+            if ev_rev is None and ev_ebitda is None:
+                raise ValueError(
+                    f"comparable_transactions[{i}] needs at least one of "
+                    f"ev_revenue_multiple / ev_ebitda_multiple"
+                )
+            for mname, mval in (("ev_revenue_multiple", ev_rev), ("ev_ebitda_multiple", ev_ebitda)):
+                if mval is not None and (not isinstance(mval, (int, float)) or mval <= 0 or mval > 100):
+                    raise ValueError(
+                        f"comparable_transactions[{i}].{mname}={mval} must be in (0, 100]"
+                    )
+
+        # counter_thesis: every claim needs a non-empty falsifier.
+        for i, ct in enumerate(self.counter_thesis):
+            if not isinstance(ct, dict):
+                raise ValueError(f"counter_thesis[{i}] must be a dict")
+            if not str(ct.get("claim") or "").strip():
+                raise ValueError(f"counter_thesis[{i}].claim is required")
+            if not str(ct.get("falsifier") or "").strip():
+                raise ValueError(f"counter_thesis[{i}].falsifier is required (operator must commit to a falsifiable trigger)")
+
+        return self
 
 
 # ---------------------------------------------------------------------------

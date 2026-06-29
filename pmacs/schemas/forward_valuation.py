@@ -85,6 +85,17 @@ class ForwardValuationResult(BaseModel):
     # Why a field is None (missing primitive, non-positive margin, etc.). Never
     # fabricated — the engine prefers None + a note over a wrong number.
     notes: str = ""
+    # ── Tier 3 — gap / distress / convergence signals (Commit 3) ──────────
+    # All three default to safe no-ops so existing call sites are unaffected.
+    # When forward_vs_reverse_dcf_gap_pct is set and |gap| > 0.50, the engine
+    # raises forward_vs_reverse_dcf_warning ("LLM hallucination check"); the
+    # memo renders it as a ⚠ WARNING line. base_price_underwater=True is
+    # surfaced into the memo via agent_scenario_convergence_warning prefixed
+    # with the ⚠ DISTRESS tag. Probability convergence (|p_bull - p_bear| <
+    # 0.10) appends a LOW-CONFIDENCE FORWARD VALUATION tag to the same field.
+    forward_vs_reverse_dcf_gap_pct: float | None = None
+    forward_vs_reverse_dcf_warning: str = ""
+    agent_scenario_convergence_warning: str = ""
 
     @property
     def is_available(self) -> bool:

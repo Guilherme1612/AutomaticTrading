@@ -12,7 +12,7 @@
     <ul class="space-y-2" id="decisions-feed">
         {% for d in recent_decisions %}
         <li class="anim-slide-in-right" style="animation-delay: {{ loop.index * 50 }}ms">
-            <a href="/ticker/{{ d.ticker }}"
+            <a href="/memo/{{ d.ticker }}"
                class="flex items-center gap-2 text-sm p-2.5 rounded-xl hover:bg-surface-sunken transition-all duration-200 group">
                 <span class="font-mono font-semibold text-text-primary">{{ d.ticker }}</span>
                 <span class="px-1.5 py-0.5 text-xs rounded-lg font-medium

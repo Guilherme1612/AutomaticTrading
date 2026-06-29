@@ -84,8 +84,8 @@
                 data-status="{{ t.status | lower }}"
                 id="row-{{ t.symbol }}">
                 <td class="px-4 py-3"><input type="checkbox" class="ticker-checkbox rounded border-border" data-ticker="{{ t.symbol }}" aria-label="Select {{ t.symbol }}"></td>
-                <td class="px-4 py-3 font-mono font-medium"><a href="/ticker/{{ t.symbol }}" class="hover:underline hover:text-accent">{{ t.symbol }}</a></td>
-                <td class="px-4 py-3 text-text-secondary"><a href="/ticker/{{ t.symbol }}" class="hover:underline hover:text-accent">{{ t.name }}</a></td>
+                <td class="px-4 py-3 font-mono font-medium">{{ t.symbol }}</td>
+                <td class="px-4 py-3 text-text-secondary">{{ t.name }}</td>
                 <td class="px-4 py-3 text-text-secondary">{{ t.sector }}</td>
                 <td class="px-4 py-3 text-text-muted text-xs">{{ t.subsector or '--' }}</td>
                 <td class="px-4 py-3 text-xs">

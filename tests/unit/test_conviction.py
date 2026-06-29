@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from pmacs.engines.conviction import compute_conviction, verdict_tier
+from pmacs.engines.conviction import (
+    compute_conviction,
+    evaluate_pass_signal,
+    verdict_tier,
+)
 from pmacs.schemas.arbitration import Arbitrated, ArbitrationDecision
 from pmacs.schemas.conviction import VerdictTier
 
@@ -168,3 +172,65 @@ class TestVerdictTier:
     def test_active_holding_invalid_thesis(self):
         """Active holding with invalid thesis -> normal tier logic."""
         assert verdict_tier(0.1, is_active_holding=True, thesis_valid=False) == VerdictTier.SKIP
+
+
+class TestVerdictTierPASS:
+    """PASS verdict = active no-bid (allocator-grade memo).
+
+    PASS overrides the conviction floor. Two triggers:
+      - R:R < 1.5
+      - comps empty AND growth < 10%
+    """
+
+    def test_pass_when_rr_below_threshold(self):
+        # 0.6 conviction would normally be STRONG_BUY; R:R=1.0 is the active no-bid
+        assert verdict_tier(0.6, rr_ratio=1.0) == VerdictTier.PASS
+
+    def test_pass_when_rr_at_threshold_boundary(self):
+        # R:R exactly 1.5 → NOT pass (strict less-than)
+        assert verdict_tier(0.6, rr_ratio=1.5) != VerdictTier.PASS
+
+    def test_pass_when_comps_empty_growth_low(self):
+        # No comps, growth 5% → PASS
+        assert verdict_tier(0.6, comparable_transactions=[], growth_pct=0.05) == VerdictTier.PASS
+
+    def test_no_pass_when_comps_present_even_low_growth(self):
+        # Comps present → don't PASS on growth alone
+        assert verdict_tier(0.6, comparable_transactions=[{"target": "X"}], growth_pct=0.05) != VerdictTier.PASS
+
+    def test_no_pass_when_growth_high_even_no_comps(self):
+        # Growth high → don't PASS on comps alone
+        assert verdict_tier(0.6, comparable_transactions=[], growth_pct=0.25) != VerdictTier.PASS
+
+    def test_pass_overrides_low_conviction(self):
+        # 0.1 conviction would be SKIP; with R:R trigger, PASS wins
+        assert verdict_tier(0.1, rr_ratio=0.8) == VerdictTier.PASS
+
+    def test_no_pass_when_rr_none_and_growth_unknown(self):
+        # No triggers → fall through to normal logic
+        assert verdict_tier(0.1, rr_ratio=None, comparable_transactions=None, growth_pct=None) == VerdictTier.SKIP
+
+
+class TestEvaluatePassSignal:
+    """evaluate_pass_signal is the source of truth for PASS triggers."""
+
+    def test_rr_below_threshold_returns_reason(self):
+        s = evaluate_pass_signal(rr_ratio=0.5, comparable_transactions=None, growth_pct=None)
+        assert s.triggered
+        assert "0.50" in s.reason
+        assert s.reason_code == "rr_below_threshold"
+
+    def test_comps_empty_growth_low(self):
+        s = evaluate_pass_signal(rr_ratio=None, comparable_transactions=[], growth_pct=0.05)
+        assert s.triggered
+        assert s.reason_code == "comps_empty_growth_below_threshold"
+
+    def test_no_signal(self):
+        s = evaluate_pass_signal(rr_ratio=3.0, comparable_transactions=[{"x": 1}], growth_pct=0.20)
+        assert not s.triggered
+        assert s.reason == ""
+
+    def test_rr_takes_precedence_over_comps(self):
+        # When both triggers fire, RR wins (operator-analyst judgment first)
+        s = evaluate_pass_signal(rr_ratio=0.8, comparable_transactions=[], growth_pct=0.05)
+        assert s.reason_code == "rr_below_threshold"

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
@@ -116,6 +117,109 @@ def _get_holding_for_ticker(db, ticker: str) -> dict | None:
     return None
 
 
+def _compute_paper_portfolio_value(db) -> float:
+    """Sum of position_size_usd across all ACTIVE/MONITORING holdings.
+
+    Falls back to ``config/risk.toml`` starting_usd ($5,000) when no active
+    holdings exist. The 5K paper capital is the source of truth for an empty
+    book.
+    """
+    row = db.execute(
+        """SELECT COALESCE(SUM(position_size_usd), 0)
+           FROM holdings
+           WHERE state IN ('ACTIVE', 'MONITORING')"""
+    ).fetchone()
+    total = row[0] if row else 0.0
+    if total and total > 0:
+        return float(total)
+    # Fall back to starting capital
+    try:
+        import tomllib
+        with open("config/risk.toml", "rb") as f:
+            cfg = tomllib.load(f)
+            return float(cfg.get("capital", {}).get("starting_usd", 5000.0))
+    except Exception:
+        return 5000.0
+
+
+def _load_risk_config() -> dict:
+    """Load the risk.toml values the memo card needs."""
+    try:
+        import tomllib
+        with open("config/risk.toml", "rb") as f:
+            cfg = tomllib.load(f)
+            return {
+                "max_position_pct": float(cfg.get("position", {}).get("max_single_position_pct", 0.20)),
+                "default_target_pct": float(cfg.get("pricing", {}).get("default_target_gain_pct", 0.10)),
+                "default_stop_pct": float(cfg.get("pricing", {}).get("default_stop_loss_pct", 0.15)),
+            }
+    except Exception:
+        return {
+            "max_position_pct": 0.20,
+            "default_target_pct": 0.10,
+            "default_stop_pct": 0.15,
+        }
+
+
+def _filter_catalysts_to_horizon(catalysts: list[dict], months: int = 12) -> list[dict]:
+    """Filter catalysts to future-only within the horizon (default 12 months).
+
+    Catalysts with unparseable dates are kept (they show as 'date TBD' in
+    the timeline) but not date-bucketed. Past catalysts are dropped — they
+    surface in the sidebar's 'what already happened' drawer.
+    """
+    if not catalysts:
+        return []
+    now = datetime.now(timezone.utc)
+    horizon_end = now.replace(month=now.month + months if now.month <= 12 - months else 1)
+    # Python's replace() doesn't accept month > 12. We compute manually.
+    total_months = now.year * 12 + now.month - 1 + months
+    horizon_year, horizon_month = divmod(total_months, 12)
+    horizon_month += 1  # 1-indexed
+    horizon_end = now.replace(year=horizon_year, month=horizon_month)
+    out: list[dict] = []
+    for c in catalysts:
+        ds = c.get("expected_date") or ""
+        if not ds or ds in ("TBD", "tbd", ""):
+            out.append(c)
+            continue
+        try:
+            d = datetime.fromisoformat(ds.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            out.append(c)
+            continue
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        if d >= now and d <= horizon_end:
+            out.append(c)
+    return out
+
+
+def _freshness_age_human(ts_str: str | None) -> tuple[str, str]:
+    """Convert an ISO timestamp to (human_label, color_class).
+
+    Color classes: 'fresh' (green, <1h), 'stale-ok' (amber, <24h),
+    'stale-bad' (red, >24h). Returns ('—', 'unknown') for missing input.
+    """
+    if not ts_str:
+        return ("—", "unknown")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return (ts_str[:10] if ts_str else "—", "unknown")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - ts
+    hours = delta.total_seconds() / 3600
+    if hours < 1:
+        return (f"{int(hours * 60)}m ago", "fresh")
+    if hours < 24:
+        return (f"{int(hours)}h ago", "fresh")
+    if hours < 24 * 7:
+        return (f"{int(hours / 24)}d ago", "stale-ok")
+    return (f"{int(hours / 24)}d ago", "stale-bad")
+
+
 @router.get("/memo/{ticker}")
 async def memo_page(request: Request, ticker: str):
     """Render dedicated investment memo page for a ticker."""
@@ -127,16 +231,13 @@ async def memo_page(request: Request, ticker: str):
         _ensure_price_target_column(cfg)
         db = data_layer.get_readonly_db(cfg.sqlite_path)
         try:
-            holding = _get_holding_for_ticker(db, ticker)
             latest_memo = _get_latest_memo_from_table(db, ticker)
-            decisions = data_layer.get_recent_decisions(db, limit=20)
-            ticker_decisions = [d for d in decisions if d["ticker"] == ticker]
             memo_tickers = _get_memo_ticker_list(db)
-            current_mode = data_layer.get_current_mode(db)
         finally:
             db.close()
 
-        # Prev/next navigation
+        # Prev/next navigation — always available so uncycled/unmemoed tickers
+        # can still hop to the next analyzed ticker.
         try:
             idx = memo_tickers.index(ticker)
         except ValueError:
@@ -146,10 +247,12 @@ async def memo_page(request: Request, ticker: str):
         ticker_position = idx + 1 if idx >= 0 else None
         ticker_total = len(memo_tickers)
 
-        if not holding and not ticker_decisions and not latest_memo:
-            # Friendly "not yet analyzed" state, not a system error.
-            # This happens when the ticker exists in the universe but no cycle
-            # has produced a decision yet.
+        # Memo page renders ONLY the full long-form memo (memos.memo_json).
+        # If no cycle has produced a structured memo for this ticker yet, show
+        # the explicit empty state — never a thin fallback derived from a short
+        # decision.thesis_summary line. This keeps the /memo/{ticker} page
+        # long-only by operator directive.
+        if not latest_memo:
             return templates.TemplateResponse(
                 request=request,
                 name="memo.html",
@@ -157,16 +260,25 @@ async def memo_page(request: Request, ticker: str):
                     "page": "memo",
                     "ticker": ticker,
                     "not_analyzed": True,
+                    "prev_ticker": prev_ticker,
+                    "next_ticker": next_ticker,
+                    "ticker_position": ticker_position,
+                    "ticker_total": ticker_total,
                 },
             )
 
-        # Use the dedicated memos table (full structured JSON) as primary source.
-        # Fall back to thesis_summary from holdings/decisions only if no memo exists.
-        if latest_memo:
-            memo = latest_memo
-        else:
-            source = holding or ticker_decisions[0]
-            memo = _parse_memo_json(source.get("thesis_summary"))
+        memo = latest_memo
+
+        # Defer heavier lookups (holdings, decisions, mode) until after the
+        # long-only guard — they are only meaningful when a memo exists.
+        db = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            holding = _get_holding_for_ticker(db, ticker)
+            decisions = data_layer.get_recent_decisions(db, limit=20)
+            ticker_decisions = [d for d in decisions if d["ticker"] == ticker]
+            current_mode = data_layer.get_current_mode(db)
+        finally:
+            db.close()
 
         # Get current price — prefer memo's stored price (captured at decision time),
         # then holdings, then live fetch
@@ -205,6 +317,100 @@ async def memo_page(request: Request, ticker: str):
         # Valuation range
         val_range = memo.get("valuation_range", {})
 
+        # Verdict / conviction: holdings win, else the most-recent decision.
+        # The memo-then-decisions fallback is intentionally skipped because
+        # `memo` is a long-form memo_json (no _verdict field) — by operator
+        # directive the memo page renders the long form only.
+        verdict = (
+            holding.get("verdict") if holding else (
+                ticker_decisions[0]["verdict"] if ticker_decisions else "N/A"
+            )
+        )
+        conviction = (
+            holding.get("conviction_score", 0) if holding else (
+                ticker_decisions[0].get("conviction_score", 0) if ticker_decisions else 0
+            )
+        )
+
+        # ── Allocator-grade context wiring ──────────────────────────────────
+        # The hero card (EV + R:R + Sizing) and the risk/catalyst/timeline
+        # sections need five things that the memo's long-form JSON does not
+        # carry directly: portfolio value, position caps, target/stop prices,
+        # forward valuation expectations, and freshness provenance. All math
+        # lives in Python (Five Non-Negotiables §2 — LLMs never math).
+        risk_cfg = _load_risk_config()
+        db2 = data_layer.get_readonly_db(cfg.sqlite_path)
+        try:
+            paper_portfolio_value = _compute_paper_portfolio_value(db2)
+        finally:
+            db2.close()
+
+        # Target / stop prices:
+        #   1. memo.fair_value (analyst conviction) → target
+        #   2. holding.price_target_usd (active position's anchor) → target
+        #   3. risk.toml default_target_gain_pct on current_price → target
+        # Stop mirrors the same precedence using default_stop_loss_pct.
+        position_target = (
+            memo.get("fair_value")
+            or (holding.get("price_target_usd") if holding else None)
+        )
+        position_stop = None
+        if current_price and current_price > 0:
+            if position_target is None:
+                position_target = current_price * (1 + risk_cfg["default_target_pct"])
+            position_stop = current_price * (1 - risk_cfg["default_stop_pct"])
+
+        # Forward valuation (Phase 7c) — pull expected/bear/base/bull from
+        # the memo's scenario_price block (ForwardValuationEngine output).
+        forward_valuation = memo.get("forward_valuation") or {}
+
+        # Position sizing math — pure function in engines/position_sizing.py.
+        # Returns SizingResult with R:R, share counts at 1/2/5% risk, and
+        # binding-constraint identification. is_available=False when inputs
+        # are degenerate (no live price, stop not below current, etc).
+        sizing = None
+        rr_ratio = None
+        try:
+            from pmacs.engines.position_sizing import (
+                compute_sizing,
+                SizingInputs,
+            )
+            sizing_inputs = SizingInputs(
+                target_price=float(position_target) if position_target else None,
+                stop_price=float(position_stop) if position_stop else None,
+                current_price=float(current_price) if current_price else None,
+                portfolio_value=paper_portfolio_value,
+                max_position_pct=risk_cfg["max_position_pct"],
+            )
+            sizing = compute_sizing(sizing_inputs)
+            rr_ratio = sizing.rr_ratio if sizing.is_available else None
+        except Exception:
+            sizing = None
+            rr_ratio = None
+
+        # Catalysts filtered to the 12-month horizon (future-only).
+        catalyst_calendar = memo.get("catalyst_calendar") or []
+        catalysts_12mo = _filter_catalysts_to_horizon(catalyst_calendar, months=12)
+
+        # Freshness per data category — for the hero's freshness strip.
+        decided_at = memo.get("_decided_at") or memo.get("decided_at")
+        freshness = {
+            "memo": _freshness_age_human(decided_at),
+            "price": _freshness_age_human(memo.get("price_as_of")),
+            "filings": _freshness_age_human(memo.get("filings_as_of")),
+            "sentiment": _freshness_age_human(memo.get("sentiment_as_of")),
+        }
+
+        # PASS verdict surfaces from memo.verdict (set by memo writer persona
+        # when evaluate_pass_signal fires). Falls back to holding verdict,
+        # then "N/A". ``conviction`` is a raw float; the verdict pill uses
+        # the uppercase verdict string.
+        memo_verdict = memo.get("verdict") or ""
+        if memo_verdict:
+            verdict = memo_verdict
+        pass_reason = memo.get("pass_reason") or ""
+        verdict_tier_label = memo_verdict or verdict
+
         return templates.TemplateResponse(
             request=request,
             name="memo.html",
@@ -220,12 +426,24 @@ async def memo_page(request: Request, ticker: str):
                 "agent_results": agent_results,
                 "crucible_result": crucible_result,
                 "ticker_decisions": ticker_decisions[:5],
-                "verdict": holding.get("verdict") if holding else (latest_memo.get("_verdict") if latest_memo else (ticker_decisions[0]["verdict"] if ticker_decisions else "N/A")),
-                "conviction": holding.get("conviction_score", 0) if holding else (latest_memo.get("_conviction_score", 0) if latest_memo else (ticker_decisions[0].get("conviction_score", 0) if ticker_decisions else 0)),
+                "verdict": verdict,
+                "verdict_tier_label": verdict_tier_label,
+                "pass_reason": pass_reason,
+                "conviction": conviction,
                 "prev_ticker": prev_ticker,
                 "next_ticker": next_ticker,
                 "ticker_position": ticker_position,
                 "ticker_total": ticker_total,
+                # Allocator-grade fields
+                "forward_valuation": forward_valuation,
+                "sizing": sizing,
+                "rr_ratio": rr_ratio,
+                "risk_max_single_position_pct": risk_cfg["max_position_pct"],
+                "paper_portfolio_value": paper_portfolio_value,
+                "position_target": position_target,
+                "position_stop": position_stop,
+                "catalysts_12mo": catalysts_12mo,
+                "freshness": freshness,
             },
         )
     except Exception as exc:

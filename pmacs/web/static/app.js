@@ -643,6 +643,10 @@ function closeCmdK() {
     if (el) setModalHidden(el, true);
 }
 
+// Cache for ticker API results by query (debounce + stale-request guard)
+var _cmdKTickerCache = {};
+var _cmdKTickerSeq = 0;
+
 function renderCmdKResults(query) {
     var results = document.getElementById("cmd-k-results");
     if (!results) return;
@@ -652,17 +656,18 @@ function renderCmdKResults(query) {
         return item.name.toLowerCase().indexOf(q) >= 0;
     });
 
-    // If query looks like a ticker (1-5 uppercase letters), add ticker search
-    if (/^[A-Z]{1,5}$/i.test(query)) {
+    // Static "Go to Pipeline filtered" entry for ticker-shaped queries (1-5 letters)
+    var tickerLike = /^[A-Z]{1,5}$/i.test(query);
+    if (tickerLike) {
         var safeQuery = query.toUpperCase().replace(/[^A-Z]/g, "");
         filtered.unshift({
-            name: 'Go to Pipeline filtered: ' + safeQuery,
-            href: '/pipeline?ticker=' + encodeURIComponent(safeQuery),
+            name: 'Open ticker: ' + safeQuery,
+            href: '/ticker/' + encodeURIComponent(safeQuery),
             category: "ticker",
         });
     }
 
-    // If query looks like audit/cycle search
+    // Audit/cycle search
     if (/^(cycle|c-|CYCLE)/i.test(query)) {
         filtered.unshift({
             name: 'Search audit: ' + query.replace(/[<>"'&]/g, ""),
@@ -671,7 +676,7 @@ function renderCmdKResults(query) {
         });
     }
 
-    // If query looks like error code search (E followed by digits)
+    // Error code search
     if (/^E\d{1,3}$/i.test(query)) {
         filtered.unshift({
             name: 'Search debug events: ' + query.toUpperCase(),
@@ -680,9 +685,6 @@ function renderCmdKResults(query) {
         });
     }
 
-    results.innerHTML = "";
-    cmdKActiveIndex = -1;
-
     var categoryLabel = {
         page: "Page",
         action: "Action",
@@ -690,37 +692,98 @@ function renderCmdKResults(query) {
         audit: "Audit",
     };
 
-    filtered.forEach(function (item, idx) {
-        var li = document.createElement("li");
-        li.setAttribute("role", "option");
-        li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-surface-sunken text-sm text-text-primary";
+    function renderItems(items) {
+        results.innerHTML = "";
+        cmdKActiveIndex = -1;
 
-        li.innerHTML =
-            '<span class="text-xs font-mono mr-3 px-1.5 py-0.5 rounded ' +
-            (item.category === "page" ? "bg-accent-soft text-accent" : "") +
-            (item.category === "action" ? "bg-positive-soft text-positive" : "") +
-            (item.category === "ticker" ? "bg-warning-soft text-warning" : "") +
-            (item.category === "audit" ? "bg-crucible-soft text-crucible" : "") +
-            '">' + (categoryLabel[item.category] || "") + '</span>' +
-            '<span class="flex-1">' + escapeHtml(item.name) + '</span>';
+        items.forEach(function (item, idx) {
+            var li = document.createElement("li");
+            li.setAttribute("role", "option");
+            li.dataset.idx = idx;
+            li.className = "flex items-center px-4 py-2.5 cursor-pointer hover:bg-surface-sunken text-sm text-text-primary";
 
-        li.addEventListener("click", function () {
-            executeCmdKItem(item);
+            var badgeClass =
+                item.category === "page" ? "bg-accent-soft text-accent" :
+                item.category === "action" ? "bg-positive-soft text-positive" :
+                item.category === "ticker" ? "bg-warning-soft text-warning" :
+                item.category === "audit" ? "bg-crucible-soft text-crucible" : "";
+
+            var secondary = item.subtitle ? '<span class="text-xs text-text-muted ml-2 truncate">' + escapeHtml(item.subtitle) + '</span>' : '';
+
+            li.innerHTML =
+                '<span class="text-[10px] font-mono mr-3 px-1.5 py-0.5 rounded ' + badgeClass + '">' +
+                (categoryLabel[item.category] || "") + '</span>' +
+                '<span class="flex-1 flex items-center min-w-0"><span class="font-mono font-semibold shrink-0">' + escapeHtml(item.name) + '</span>' + secondary + '</span>';
+
+            li.addEventListener("click", function () {
+                executeCmdKItem(item);
+            });
+            li.addEventListener("mouseenter", function () {
+                cmdKActiveIndex = idx;
+                updateCmdKActiveItem(results);
+            });
+            results.appendChild(li);
         });
-        li.addEventListener("mouseenter", function () {
-            cmdKActiveIndex = idx;
-            updateCmdKActiveItem(results);
-        });
-        results.appendChild(li);
-    });
 
-    // No results state
-    if (filtered.length === 0) {
-        var empty = document.createElement("li");
-        empty.className = "px-4 py-3 text-sm text-text-muted text-center";
-        empty.textContent = 'No results for "' + query + '"';
-        results.appendChild(empty);
+        if (items.length === 0) {
+            var empty = document.createElement("li");
+            empty.className = "px-4 py-3 text-sm text-text-muted text-center";
+            empty.textContent = 'No results for "' + query + '"';
+            results.appendChild(empty);
+        }
     }
+
+    renderItems(filtered);
+
+    // Live ticker search via /api/universe/search — runs in parallel, appends results
+    // when query has at least 1 letter. Debounced via seq-token to ignore stale fetches.
+    if (query && query.trim().length >= 1) {
+        var seq = ++_cmdKTickerSeq;
+        var cacheKey = query.toLowerCase();
+        if (_cmdKTickerCache[cacheKey]) {
+            mergeTickerResults(_cmdKTickerCache[cacheKey], filtered, renderItems, categoryLabel);
+            return;
+        }
+        fetch('/api/universe/search?q=' + encodeURIComponent(query), {
+            headers: { 'Accept': 'application/json' },
+        })
+        .then(function (r) { return r.ok ? r.json() : { results: [] }; })
+        .then(function (data) {
+            if (seq !== _cmdKTickerSeq) return; // stale
+            var matches = (data && Array.isArray(data.results)) ? data.results.slice(0, 12) : [];
+            _cmdKTickerCache[cacheKey] = matches;
+            mergeTickerResults(matches, filtered, renderItems, categoryLabel);
+        })
+        .catch(function () {
+            if (seq !== _cmdKTickerSeq) return;
+            mergeTickerResults([], filtered, renderItems, categoryLabel);
+        });
+    }
+}
+
+function mergeTickerResults(matches, baseFiltered, renderItems, categoryLabel) {
+    var results = document.getElementById("cmd-k-results");
+    if (!results) return;
+    if (!matches.length) return; // base render already shown
+    var tickerItems = matches.map(function (m) {
+        return {
+            name: m.ticker,
+            subtitle: m.name || '',
+            href: '/ticker/' + encodeURIComponent(m.ticker),
+            category: "ticker",
+        };
+    });
+    // Place ticker API results after the static "Open ticker: XXXX" entry if
+    // one was prepended by the tickerLike branch (1-5 letter queries only).
+    // For longer queries (e.g. full company name "NEBIUS") the static entry
+    // is absent — guard the splice so baseFiltered[0] is never undefined.
+    var merged;
+    if (baseFiltered.length > 0) {
+        merged = [baseFiltered[0]].concat(tickerItems).concat(baseFiltered.slice(1));
+    } else {
+        merged = tickerItems;
+    }
+    renderItems(merged);
 }
 
 function updateCmdKActiveItem(results) {
@@ -1972,3 +2035,79 @@ document.addEventListener("htmx:afterRequest", function (event) {
         elt.classList.add("bg-accent-soft", "text-accent");
     }
 });
+
+/* ─── Memo page: reveal-once-per-session + mobile bottom-sheet ────────── */
+
+(function () {
+    "use strict";
+
+    var memoDeck = document.querySelector(".memo-deck");
+    if (memoDeck) {
+        // Reveal-once-per-session gate (per ticker key).
+        // First visit in session: sections animate in. Subsequent visits: render
+        // immediately so the page feels fast (no re-animation on each refresh).
+        var tickerEl = memoDeck.querySelector("[data-memo-ticker]") || memoDeck;
+        var tickerKey = memoDeck.getAttribute("data-memo-ticker") || "default";
+        var storageKey = "pmacs-memo-revealed-" + tickerKey;
+
+        var sections = memoDeck.querySelectorAll(".memo-reveal-once");
+        if (sections.length) {
+            var alreadyRevealed = false;
+            try {
+                alreadyRevealed = !!sessionStorage.getItem(storageKey);
+            } catch (e) {
+                alreadyRevealed = false;
+            }
+
+            if (alreadyRevealed) {
+                sections.forEach(function (s) { s.classList.add("is-revealed"); });
+            } else {
+                var delay = 0;
+                sections.forEach(function (s) {
+                    s.style.transitionDelay = delay + "ms";
+                    s.classList.add("is-revealed");
+                    delay += 70;
+                });
+                try {
+                    sessionStorage.setItem(storageKey, "1");
+                } catch (e) {
+                    // Ignore quota/privacy errors.
+                }
+            }
+        }
+    }
+
+    /* Mobile bottom-sheet for the memo sidebar — always wired (the toggle
+       only shows on <1200px, but the handler is harmless on larger screens). */
+    var toggle = document.querySelector(".memo-sidebar-toggle");
+    var sidebar = document.querySelector(".memo-sidebar");
+    var scrim = document.querySelector(".memo-sidebar__scrim");
+
+    if (toggle && sidebar) {
+        var open = function () {
+            sidebar.classList.add("is-open");
+            if (scrim) scrim.classList.add("is-open");
+            toggle.setAttribute("aria-expanded", "true");
+        };
+        var close = function () {
+            sidebar.classList.remove("is-open");
+            if (scrim) scrim.classList.remove("is-open");
+            toggle.setAttribute("aria-expanded", "false");
+        };
+        toggle.addEventListener("click", function () {
+            if (sidebar.classList.contains("is-open")) {
+                close();
+            } else {
+                open();
+            }
+        });
+        if (scrim) {
+            scrim.addEventListener("click", close);
+        }
+        document.addEventListener("keydown", function (ev) {
+            if (ev.key === "Escape" && sidebar.classList.contains("is-open")) {
+                close();
+            }
+        });
+    }
+})();

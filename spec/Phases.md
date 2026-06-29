@@ -106,7 +106,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **What gets built:**
 - `pmacs/schemas/*.py` — ALL Pydantic models (complete, even for engines not yet implemented)
 - `pmacs/data/canonical.py` — canonical JSON serialization
-- `pmacs/storage/sqlite.py` — SQLite initialization with all tables from `Architecture.md §8.5`
+- `pmacs/storage/sqlite.py` — SQLite initialization with all tables from `Architecture.md §8.5 + §8.5a (holdings, decisions, memos, lessons, failure_classifications, scan_records, pricing_table, budget_state, budget_history, wizard_state)`
 - `pmacs/storage/audit.py` — hash-chained audit writer + verifier
 - `pmacs/storage/keychain.py` — macOS Keychain wrapper
 - `pmacs/config.py` — config loader for `config/*.toml` + `config/model_registry.json`
@@ -205,7 +205,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/nervous/api.py` — FastAPI app with `/events` SSE
 - `pmacs/nervous/sse_publisher.py`
 - `pmacs/nervous/checkpoint.py` — cycle resume
-- `pmacs/nervous/auth.py` — session token verification
+- `pmacs/nervous/auth.py` — session token verification (HMAC-signed cookie + CSRF token; server-side TOTP gate removed at PR #2, see Phase 15 wrap-up below)
 - `pmacs/execution/service.py` — stub (accepts TradePlan via UDS, logs, returns mock fill)
 - `pmacs/execution/signing.py` — Ed25519 keypair generation and signing
 - `launchd/*.plist` — all 7 plists
@@ -986,6 +986,21 @@ At three points in the build, stop and explicitly verify risk properties before 
 
 **If any fails:** Do not proceed to Phase 15. The Mutation Engine is the highest-risk component — an unrestricted self-modifying system will destroy itself.
 
+### 6.4 Checkpoint D: after Phase 16 (Token-Cost Accounting)
+
+**Verify:**
+- [ ] `pmacs/billing/budget_enforcer.enforce_budgets` blocks a cycle whose estimate exceeds the per-cycle soft cap; logs `CYCLE_BLOCKED_BUDGET_CYCLE` debug event
+- [ ] Crossing the daily hard cap mid-day engages `CYCLE_BLOCKED_BUDGET_DAILY` trigger and refuses further cycle starts; operator-disengage required to resume
+- [ ] Crossing the monthly hard cap engages `CYCLE_BLOCKED_BUDGET_MONTHLY` trigger
+- [ ] Runaway detection (1.5× rolling 7-day avg cycle cost) engages kill switch with the same trigger taxonomy
+- [ ] `usage_logger.log_usage` persists `api_usage` to DuckDB and updates `budget_state` totals; both survive process restart
+- [ ] `period_roller.check_and_roll` archives prior totals to `budget_history` on day/month boundary — no silent reset of `total_cost_usd`
+- [ ] Dashboard cost widget updates via the `cost` SSE stream during a live cycle
+- [ ] Settings → Budget → Save caps writes to `config/risk.toml [billing]` atomically; `_load_billing_caps_from_risk_toml` reads the new caps on next cycle start
+- [ ] Per-persona breakdown populates after ≥1 cycle per persona; Pricing table fetches OpenRouter `/api/v1/models` and renders per-1M prices
+
+**If any fails:** Do not proceed to LIVE_EARLY. Phase 16 is the operator's last-look before real money — billing that silently mis-accounts or fails to enforce caps would erode trust in the system's own metrics.
+
 ---
 
 ## 7. What "done" means
@@ -1019,8 +1034,11 @@ Phase 15 complete + PAPER_VALIDATED mode gates pass + operator reviews the full 
 | Phase 5-8 (pipeline + paper trading) | 26-37 | 45-65 |
 | Phase 9-12 (monitoring + calibration + FDE) | 24-38 | 69-103 |
 | Phase 13-15 (episodic + mutation + polish) | 20-29 | 89-132 |
+| Phase 7b (debate + audit + reverse-DCF) | 6-9 | 95-141 |
+| Phase 7c (forward-valuation) | 3-5 | 98-146 |
+| Phase 16 (token-cost accounting) | 5-8 | 103-154 |
 
-**Realistic: 3.5-5 months** of focused development to reach Phase 15. Paper trading (Phase 8) can start at **6-10 weeks**. This assumes one developer (the operator, aided by Claude Code) working consistently.
+**Realistic: 4-5.5 months** of focused development to reach Phase 15 + 16. Paper trading (Phase 8) can start at **6-10 weeks**. This assumes one developer (the operator, aided by Claude Code) working consistently.
 
 The timeline is honest, not optimistic. Rushed phases produce fragile systems. PMACS is designed to run for years; an extra week in Phase 4 to get the kill switch right is a better investment than saving a week and debugging it later in LIVE_EARLY.
 
@@ -1057,9 +1075,12 @@ This file tells you *when each persona ships.* `Agents.md` tells you *what each 
 - Phase 5 introduces MacroRegime, CatalystSummarizer, MoatAnalyst (`Agents.md §5-§7`)
 - Phase 6 introduces GrowthHunter, InsiderActivity, ShortInterest, Forensics (`Agents.md §8-§11`)
 - Phase 7 introduces the Crucible (`Agents.md §12`) and MemoWriter (`Agents.md §13`)
+- Phase 7b introduces BullAdvocate + BearAdvocate + CrossPersonaAuditor (`Agents.md §11b-§11d`), ReverseDcfEngine + ScenarioPriceEngine, and the auditor-only 5 reasoning-flaw FDE taxonomy types (`Agents.md §15.4`)
+- Phase 7c introduces the ValuationAgent (`Agents.md §13b`) + ForwardValuationEngine
 - Phase 12 introduces the FDE 18-taxonomy classifier (`Agents.md §15`)
 - Phase 13 introduces episodic context injection (`Agents.md §18`)
 - Phase 14 introduces Mutation Engine candidate generation rules (`Agents.md §17`)
+- Phase 15 introduces the Simulation-persona safe-default fallback + MemoScorer (`Agents.md §13.2a`)
 
 ### 8.4 What this file does NOT contain
 

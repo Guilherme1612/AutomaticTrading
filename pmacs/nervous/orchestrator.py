@@ -1323,8 +1323,15 @@ class CycleOrchestrator:
             return result  # abort path
         holding, verdict, conviction_score, risk_result, ev_result, sizing_result, is_bootstrap, op = result
 
-        # -- Steps 13m-13n: Memo + scan record ---
-        op = self._step_13mn_post_decision(holding, ticker, cycle_id, op, evidence_packets, brief, verdict, conviction_score, arbitrated, crucible_severity)
+        # -- Steps 13m-13n: Memo + scan record --
+        op = self._step_13mn_post_decision(
+            holding, ticker, cycle_id, op,
+            evidence_packets, brief, verdict, conviction_score,
+            arbitrated, crucible_severity,
+            per_persona_calibration=getattr(
+                self, "_per_persona_calibration_for_ticker", None
+            ) or None,
+        )
 
         # -- Steps 13o-13p: Execution + catastrophe net ---
         op = self._step_13op_execution(holding, ticker, cycle_id, op, verdict, conviction_score, risk_result, sizing_result, ev_result, arbitrated)
@@ -1448,6 +1455,26 @@ class CycleOrchestrator:
                     affinity_data = {"avg_brier": rows[0][0], "cycle_count": rows[0][1]}
             except Exception:
                 pass
+        # Per-persona DuckDB calibration for THIS ticker — drives the
+        # "## Persona Arbitration Weights" table in the memo (Tier 4). Returns
+        # a dict mapping persona name → avg_brier so MemoWriter can mark
+        # personas with ticker-level brier > 0.25 as LOW CONFIDENCE.
+        per_persona_calibration: dict[str, float] = {}
+        if duckdb_adapter is not None:
+            try:
+                rows = duckdb_adapter.execute(
+                    "SELECT persona, avg_brier FROM persona_ticker_affinity "
+                    "WHERE ticker = ? AND cycle_count >= 5",
+                    [ticker],
+                )
+                for r in rows or []:
+                    if len(r) >= 2 and r[1] is not None:
+                        per_persona_calibration[str(r[0])] = float(r[1])
+            except Exception:
+                pass
+        # Stash so _step_13mn_post_decision can read it without re-querying.
+        # Best-effort: if the affinity table is empty, this is just {}.
+        self._per_persona_calibration_for_ticker = per_persona_calibration
 
         # Prior verdict for this ticker (long-term memory)
         prior_verdict: str | None = None
@@ -1455,6 +1482,18 @@ class CycleOrchestrator:
         prior_key_signal: str | None = None
         prior_decided_at: str | None = None
         ticker_analysis_count: int = 0
+        # Tier 2A — rich prior-memo context (full thesis, fair_value, methodology,
+        # evidence, risks, what_would_change_my_mind, forward-expected price).
+        # Populated below from the most-recent memos.memo_json so the next cycle's
+        # personas see the prior operator-grade memo in full rather than the
+        # 200-char truncated raw_text snippet.
+        prior_thesis: str | None = None
+        prior_fair_value: str | None = None
+        prior_valuation_methodology: str | None = None
+        prior_key_evidence: list[str] | None = None
+        prior_key_risks: list[str] | None = None
+        prior_what_changed: list[str] | None = None
+        prior_forward_expected_price_usd: float | None = None
         try:
             conn_prior = _sql_connect(self._db_path)
             try:
@@ -1503,6 +1542,36 @@ class CycleOrchestrator:
                     if mj_rows and mj_rows[0][0]:
                         memo_data = _json.loads(mj_rows[0][0])
                         prior_crucible_severity = memo_data.get("crucible_severity")
+                        # Tier 2A — extract the rich prior-memo summary and pass
+                        # through to build_context_brief. Reuses the
+                        # memo_scorer.extract_prior_memo_summary helper so the
+                        # parse path is shared with the scorer retry path. The
+                        # helper is best-effort: it returns {} on any failure
+                        # so a malformed memo_json never blocks the brief.
+                        try:
+                            from pmacs.agents.sanity.memo_scorer import (
+                                extract_prior_memo_summary,
+                            )
+                            _psm = extract_prior_memo_summary(mj_rows[0][0])
+                            if _psm:
+                                prior_thesis = _psm.get("thesis")
+                                prior_fair_value = _psm.get("fair_value")
+                                prior_valuation_methodology = _psm.get(
+                                    "valuation_methodology"
+                                )
+                                prior_key_evidence = _psm.get("key_evidence") or None
+                                prior_key_risks = _psm.get("key_risks") or None
+                                prior_what_changed = _psm.get(
+                                    "what_would_change_my_mind"
+                                ) or None
+                                _pfep = _psm.get("forward_expected_price_usd")
+                                if isinstance(_pfep, (int, float)):
+                                    prior_forward_expected_price_usd = float(_pfep)
+                                # prior_conviction / prior_crucible_severity
+                                # already populated above from the raw SQL;
+                                # helper output is a fallback only.
+                        except Exception:
+                            pass
                 except (ValueError, TypeError):
                     pass
                 # Store for drift detection in crucible step
@@ -1529,6 +1598,13 @@ class CycleOrchestrator:
                 ticker_analysis_count=ticker_analysis_count,
                 prior_agent_signals=prior_agent_signals,
                 prior_crucible_severity=prior_crucible_severity,
+                prior_thesis=prior_thesis,
+                prior_fair_value=prior_fair_value,
+                prior_valuation_methodology=prior_valuation_methodology,
+                prior_key_evidence=prior_key_evidence,
+                prior_key_risks=prior_key_risks,
+                prior_what_changed=prior_what_changed,
+                prior_forward_expected_price_usd=prior_forward_expected_price_usd,
             )
         except Exception as exc:
             log_debug(
@@ -1809,6 +1885,7 @@ class CycleOrchestrator:
         # --- Forward valuation (ValuationAgent → ForwardValuationEngine) ---
         forward = self._run_forward_valuation(
             ticker, cycle_id, evidence_packets, brief, current_price_num,
+            reverse_dcf_fair_value_usd=rdcf.fair_value_usd,
         )
 
         # --- Choose bull/base/bear for scenario_price ---
@@ -1880,6 +1957,7 @@ class CycleOrchestrator:
         evidence_packets: list[Any],
         brief: str | None,
         current_price_usd: float | None,
+        reverse_dcf_fair_value_usd: float | None = None,
     ):
         """Run the ValuationAgent + ForwardValuationEngine (Architecture.md §9.4b).
 
@@ -1887,6 +1965,11 @@ class CycleOrchestrator:
         returns None, parse error, missing primitives) degrades to None and the
         caller falls back to the reverse-DCF sensitivity grid. Never raises into
         the cycle. The LLM never emits the price — only assumptions (§1.6).
+
+        ``reverse_dcf_fair_value_usd`` (Commit 3, Tier 3A) is the engine's
+        own fair-value estimate for cross-checking the forward base price.
+        When the forward base diverges >50% from this value, the engine raises
+        ``forward_vs_reverse_dcf_warning`` so the memo can surface it.
         """
         import json as _json
         from pmacs.agents.valuation_agent import ValuationAgentRunner
@@ -1970,6 +2053,7 @@ class CycleOrchestrator:
             current_price_usd=current_price_usd,
             current_ev_sales=current_ev_sales,
             analyst_target_mean_usd=analyst_target_mean,
+            reverse_dcf_fair_value_usd=reverse_dcf_fair_value_usd,
         )
 
     def _extract_valuation_inputs(
@@ -2834,6 +2918,7 @@ class CycleOrchestrator:
         evidence_packets: list, brief: str,
         verdict: Any, conviction_score: float, arbitrated: Any,
         crucible_severity: float = 0.0,
+        per_persona_calibration: dict | None = None,
     ) -> int:
         """Steps 13m-13n: Memo writer + scan record."""
         from pmacs.agents.memo_writer import MemoWriterRunner
@@ -2880,6 +2965,8 @@ class CycleOrchestrator:
                 forward_valuation=getattr(self, "_last_forward_valuation", None),
                 scenario_price=getattr(self, "_last_scenario_price", None),
                 data_quality_warnings=data_quality_warnings,
+                persona_weights=getattr(arbitrated, "persona_weights", None),
+                per_persona_calibration=per_persona_calibration,
             )
             memo_output = memo_runner.run(evidence=evidence_packets, episodic_context=brief)
             if memo_output is not None:
@@ -2890,6 +2977,126 @@ class CycleOrchestrator:
                 log_debug("SYMBOL_MEMO_SKIPPED",
                     payload={"cycle_id": cycle_id, "ticker": ticker},
                     level="INFO", cycle_id=cycle_id, msg=f"Symbol {ticker} memo: skipped (LLM returned None)")
+
+            # ── Memo quality scorer (Agents.md §13.5, Tier 1A) ────────────────
+            # score_memo() is fully implemented but was dead code. Activate it here
+            # with a cost-capped 1-retry on low score (<70). On the retry, the scorer
+            # feedback is injected into the prompt via set_analytical_context(...)
+            # so the LLM knows what to fix. Whatever comes out of the retry is
+            # accepted (no loop) — cost cap is enforced by the LLM provider budget
+            # in risk.toml, not by the orchestrator. The 2nd run replaces
+            # memo_output wholesale; previous output is discarded.
+            memo_score_total: float | None = None
+            memo_grade_str: str | None = None
+            memo_retry_count: int = 0
+            try:
+                from pmacs.agents.sanity.memo_scorer import (
+                    score_memo,
+                    format_retry_feedback,
+                )
+                # Parse memo_output to a dict for scoring. Best effort — if parsing
+                # fails (LLM returned non-JSON or a list), we still attempt the
+                # score on the raw_text fallback so the column is populated.
+                _parsed_for_score: dict = {}
+                if memo_output is not None:
+                    _raw = getattr(memo_output, "raw_output", "") or ""
+                    if _raw:
+                        try:
+                            import json as _scj
+                            _p = _scj.loads(_raw)
+                            if isinstance(_p, dict):
+                                _parsed_for_score = _p
+                        except (ValueError, TypeError):
+                            pass
+                # Build agent_results from the arbitrated DirectionalProbability
+                # list so the scorer has per-persona key_signal/analysis. Mirrors
+                # the agent_signals shape memo_writer set_analytical_context already
+                # produces, so the scorer dimension check sees the same data.
+                _agent_results: list[dict] = []
+                _dps_for_score = getattr(arbitrated, "persona_outputs", None) or []
+                for _dp in _dps_for_score:
+                    _pname = getattr(getattr(_dp, "persona", None), "value",
+                                     str(getattr(_dp, "persona", "")))
+                    _pu = float(getattr(_dp, "p_up", 0.0))
+                    _pd = float(getattr(_dp, "p_down", 0.0))
+                    _dir = ("bullish" if _pu > _pd + 0.05
+                            else "bearish" if _pd > _pu + 0.05
+                            else "neutral")
+                    _agent_results.append({
+                        "persona": _pname,
+                        "key_signal": _dir,
+                        "analysis": (getattr(_dp, "reasoning", "") or "")[:500],
+                        "p_up": _pu,
+                        "p_down": _pd,
+                    })
+                _verdict_str = verdict.value if hasattr(verdict, "value") else str(verdict)
+                score = score_memo(
+                    _parsed_for_score,
+                    evidence=evidence_packets,
+                    agent_results=_agent_results,
+                    crucible_attacks=self._last_crucible_attacks,
+                    conviction=conviction_score,
+                    verdict=_verdict_str,
+                )
+                # Cost-capped 1-retry: if score is low OR critical issues, re-run
+                # with feedback injected. We deliberately do not loop — risk.toml
+                # $20/day budget cap is the outer bound.
+                if not score.passed or score.total < 70.0:
+                    memo_retry_count = 1
+                    _fb = format_retry_feedback(score)
+                    memo_runner.set_analytical_context(memo_feedback=_fb)
+                    _retry = memo_runner.run(
+                        evidence=evidence_packets, episodic_context=brief
+                    )
+                    if _retry is not None:
+                        memo_output = _retry
+                        # Re-parse the retry and re-score (best effort — accept
+                        # whatever comes out, no second retry).
+                        _raw2 = getattr(_retry, "raw_output", "") or ""
+                        if _raw2:
+                            try:
+                                import json as _scj2
+                                _p2 = _scj2.loads(_raw2)
+                                if isinstance(_p2, dict):
+                                    _parsed_for_score = _p2
+                            except (ValueError, TypeError):
+                                pass
+                        score = score_memo(
+                            _parsed_for_score,
+                            evidence=evidence_packets,
+                            agent_results=_agent_results,
+                            crucible_attacks=self._last_crucible_attacks,
+                            conviction=conviction_score,
+                            verdict=_verdict_str,
+                        )
+                memo_score_total = float(score.total)
+                memo_grade_str = score.grade
+                # Dimension breakdown for the audit log (operator-eye). Keep it
+                # compact — full ScoreDimension objects stay in memory only.
+                _dim_brief = [
+                    {"name": d.name, "score": round(d.score, 1),
+                     "max": d.max_score}
+                    for d in score.dimensions
+                ]
+                log_debug("MEMO_SCORED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "score": round(memo_score_total, 1),
+                             "grade": memo_grade_str,
+                             "retry_count": memo_retry_count,
+                             "critical_issues": list(score.critical_issues)[:5],
+                             "dimensions": _dim_brief},
+                    level="INFO", cycle_id=cycle_id,
+                    msg=f"Symbol {ticker} memo scored {memo_score_total:.0f}/100 "
+                        f"(Grade {memo_grade_str}, retries={memo_retry_count})")
+            except Exception as exc:
+                # Scorer failure must NEVER abort the cycle — best-effort. The
+                # memo persists without score/grade (matches pre-activation behavior).
+                log_debug("MEMO_SCORER_FAILED",
+                    payload={"cycle_id": cycle_id, "ticker": ticker,
+                             "error": str(exc)},
+                    level="WARN", error_code="MEMO_WRITER_FAILED", cycle_id=cycle_id,
+                    msg=f"Memo scorer failed for {ticker} ({type(exc).__name__}), "
+                        f"continuing without score")
         except Exception as exc:
             log_debug("SYMBOL_MEMO_EXCEPTION",
                 payload={"cycle_id": cycle_id, "ticker": ticker, "error": str(exc)},
@@ -3052,6 +3259,15 @@ class CycleOrchestrator:
                 memo_dict["crucible_thesis_survives"] = bool(
                     getattr(self, "_last_crucible_thesis_survives", True)
                 )
+            # Inject the deterministic scorer results (Agents.md §13.5). Authoritative —
+            # overrides any LLM-stated score; the LLM never produces memo_score itself.
+            if memo_score_total is not None:
+                memo_dict["memo_score"] = float(memo_score_total)
+            if memo_grade_str is not None:
+                memo_dict["memo_grade"] = memo_grade_str
+            if memo_retry_count:
+                memo_dict["memo_score_retry_count"] = int(memo_retry_count)
+
             memo_json_str = _persist_j.dumps(memo_dict)
             raw_text = memo_dict.get("raw_text") or memo_json_str
             conn = _sql_connect(self._db_path)

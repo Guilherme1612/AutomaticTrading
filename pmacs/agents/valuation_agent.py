@@ -53,6 +53,11 @@ class ValuationAgentRunner(PersonaRunner):
         - Each scenario's ``rationale`` (max_length=800) frequently exceeds.
         - Top-level ``evidence_ids`` may be empty — padded.
         - Literal enums (margin_trajectory, acquisition_confidence) normalized.
+        - Out-of-envelope numeric assumptions (growth > ceiling, margin < floor)
+          clamped to the schema bound as a safety net — preferred over a 3-retry
+          abort that drops the whole forward valuation. Each clamp is audit-logged.
+          NOTE: the envelope itself was widened (hypergrowth/pre-profit) so the
+          common case now passes without clamping; this catches true outliers.
         """
         all_fixes: list[dict[str, Any]] = []
         model_cls = self.get_pydantic_model()
@@ -61,6 +66,9 @@ class ValuationAgentRunner(PersonaRunner):
         all_fixes.extend(fixes)
 
         parsed, fixes = self._truncate_string_fields(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        parsed, fixes = self._clamp_numeric_fields(parsed, model_cls)
         all_fixes.extend(fixes)
 
         parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)

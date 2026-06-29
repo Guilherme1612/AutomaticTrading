@@ -124,7 +124,7 @@ This independence prevents correlated hallucination. If MoatAnalyst hallucinates
 | 8 | **BullAdvocate** | Yes | Second-wave. Reads all wave-1 persona outputs; argues the bull case, surfacing evidence the consensus under-weighted | Wave 2 (after slots 0-2, before Arbitration) |
 | 9 | **BearAdvocate** | Yes | Second-wave. Reads all wave-1 persona outputs; argues the bear case, surfacing evidence the consensus under-weighted | Wave 2 |
 | 10 | **CrossPersonaAuditor** | Yes | Second-wave. Audits wave-1 outputs for citation gaps, unsupported conclusions, conflicting conclusions, number misuse. Emits structured flags — **never probabilities** | Wave 2 |
-| — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence + auditor flags. Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
+| — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence + auditor flags (wave-2 only — see `§11d.6`). Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
 | — | **MemoWriter** | Yes | Reads all persona outputs + Arbitrated + Crucible. Produces the operator-facing memo. | Runs after Crucible |
 | — | **ValuationAgent** | Yes | Post-arbitration. Emits bull/base/bear forward-valuation ASSUMPTIONS (revenue growth path, margin trajectory, EBITDA margin at horizon, acquisition impact, exit EV/EBITDA multiple) with rationale + per-scenario `probability_of_occurrence`. Consumed by the deterministic `ForwardValuationEngine` (Architecture.md §9.4b). Does **not** enter Arbitration, does **not** amend conviction, does **not** emit a price. | Runs after Arbitration, before/within valuation triangulation (step 13e5) |
 | — | **Simulation** | No (deterministic Python) | Fallback persona that produces conservative, low-conviction outputs when the LLM backend is unreachable (connection error, 401 invalid key, budget breach, or all retries exhausted in live mode). Produces a near-uniform `(0.34, 0.33, 0.33)` distribution with reasoning strings carrying a `SIMULATION ` prefix so downstream consumers can detect fallback vs. genuine LLM output. Live-mode fallback writes a HOLD-on-abort to `memos` + `decisions` so the cycle never silently loses the operator's view of the symbol. Triggered after 3 failed retries with temperature bumped +0.05 per retry (`pmacs/agents/base.py::_call_llm` retry policy). | Runs when LLM backend is unreachable
@@ -1151,6 +1151,8 @@ Produce the operator-facing memo. The MemoWriter reads all persona outputs, the 
 
 ### 13.2 Evidence consumed
 
+(*Memo accuracy scoring is documented separately as `§13.2a` below — added during Phase 13 to give the system a self-check on every emitted memo.*)
+
 - All wave-1 persona outputs (as structured JSON)
 - Wave-2 BullAdvocate + BearAdvocate outputs (debate arguments)
 - Wave-2 CrossPersonaAuditor flags (CITATION_GAP / etc.)
@@ -1398,6 +1400,18 @@ If MoatAnalyst hallucinates a "data network effect" moat and GrowthHunter indepe
 If GrowthHunter instead read MoatAnalyst's output and anchored on it, the hallucination propagates and the disagreement disappears. Arbitration sees false consensus. The system makes a bad trade.
 
 Independence prevents correlated hallucination. The Crucible is the last line of defense for hallucinations that survive independence (e.g., a base-model bias toward optimism on tech names).
+
+### 1.4 Persona roster — current vs. spec-origin
+
+The current implementation registers **14 LLM personas + 1 deterministic fallback**:
+
+- 10 analysis personas (wave-1): MacroRegime, CatalystSummarizer, MoatAnalyst, GrowthHunter, InsiderActivity, ShortInterest, Forensics (`§5`-`§11`), plus the deterministic Gatekeeper (`§4`).
+- 3 wave-2 personas: BullAdvocate (`§11b`), BearAdvocate (`§11c`), CrossPersonaAuditor (`§11d`).
+- 2 synthesis personas: Crucible (`§12`), MemoWriter (`§13`).
+- 1 post-arbitration valuation persona: ValuationAgent (`§13b`).
+- 1 deterministic fallback: Simulation (`pmacs/agents/simulation.py`) — fires when the LLM backend is unreachable after retries; produces a `(0.34, 0.33, 0.33)` near-uniform distribution marked with a `SIMULATION ` prefix.
+
+This is the spec-authoritative roster count; the cross-references in `§2` and `Architecture.md §1.4` should be kept in sync.
 
 ### 14.4 Why wave-2 synthesis does not violate independence
 

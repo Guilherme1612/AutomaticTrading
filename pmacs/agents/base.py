@@ -266,19 +266,28 @@ class PersonaRunner(ABC):
                 )
                 continue
 
-            # All three layers passed — build PersonaOutput
+            # All three layers passed — build PersonaOutput.
+            # Store the NORMALIZED JSON (post _pre_validate + model_dump) in
+            # raw_output so downstream re-parsers (e.g. the orchestrator's
+            # ValuationAgentOutput.model_validate(json.loads(raw_output))) see
+            # the truncated/clamp-corrected form that actually passed all three
+            # layers — not the original, which may carry an over-length rationale
+            # or out-of-envelope value that the normalization fixed and would
+            # re-fail downstream. The original LLM bytes are preserved in the
+            # audit call below (output=raw_output, the pre-normalization text).
+            normalized_json = json.dumps(parsed, default=str)
             persona_output = PersonaOutput(
                 persona=self._get_persona_enum(),
                 ticker=self._extract_ticker(evidence),
                 cycle_id=self.cycle_id,
-                raw_output=raw_output,
+                raw_output=normalized_json,
                 grammar_version=self.grammar_name,
                 model_hash=model_hash,
                 temperature=current_temp,
                 retry_count=attempt,
             )
 
-            # Audit successful call
+            # Audit successful call (preserves the ORIGINAL pre-normalization text)
             self._audit_llm_call(
                 prompt=prompt,
                 output=raw_output,
@@ -1727,6 +1736,107 @@ class PersonaRunner(ABC):
                             "after_len": len(new_value),
                         })
                         obj[fname] = new_value
+            return obj
+
+        result = _visit(result, model_cls, "")
+        return result, fixes
+
+    @staticmethod
+    def _clamp_numeric_fields(
+        parsed: dict[str, Any],
+        model_cls: type[BaseModel],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Clamp numeric fields that fall outside the schema's ge/le/gt/lt bounds.
+
+        The companion to the string-truncation helper, but for numbers. When the
+        LLM emits an out-of-envelope value (e.g. ebitda_margin -0.95 against a
+        ge=-0.50 bound, or revenue_growth 1.5 against le=1.0), this clamps it to
+        the nearest allowed value and records the fix — instead of letting
+        Pydantic hard-reject and abort the whole persona after N retries.
+
+        Recursion mirrors _truncate_string_fields / _normalize_literal_enums.
+        Returns (modified_parsed, fixes). Each fix is
+        ``{"field": "<path>", "type": "numeric_clamped",
+           "before": <num>, "after": <num>, "bound": "<ge|le|gt|lt>"}``.
+
+        NOTE: clamping changes the LLM's intended assumption. The recorded fix is
+        audit-logged via _log_normalization so the operator sees the degradation.
+        Clamping is preferred over abort ONLY when widening the schema bound is
+        not the right answer (e.g. a genuinely implausible outlier). For a
+        structurally too-narrow envelope (hypergrowth/pre-profit), WIDEN the
+        bound — do not clamp, since clamping would misrepresent reality.
+        """
+        fixes: list[dict[str, Any]] = []
+        result = dict(parsed)
+
+        def _bounds(finfo) -> dict[str, float]:
+            """Extract ge/le/gt/lt from FieldInfo metadata."""
+            b: dict[str, float] = {}
+            for m in getattr(finfo, "metadata", []) or []:
+                for attr in ("ge", "le", "gt", "lt"):
+                    v = getattr(m, attr, None)
+                    if v is not None:
+                        b[attr] = float(v)
+            return b
+
+        def _clamp_one(v: float, b: dict[str, float]) -> tuple[float, str | None]:
+            if "le" in b and v > b["le"]:
+                return b["le"], "le"
+            if "lt" in b and v >= b["lt"]:
+                # clamp just inside an exclusive upper bound
+                return b["lt"] - abs(b["lt"]) * 1e-9 - 1e-9, "lt"
+            if "ge" in b and v < b["ge"]:
+                return b["ge"], "ge"
+            if "gt" in b and v <= b["gt"]:
+                return b["gt"] + abs(b["gt"]) * 1e-9 + 1e-9, "gt"
+            return v, None
+
+        def _visit(obj: Any, model: type[BaseModel], path: str) -> Any:
+            if not isinstance(obj, dict) or not hasattr(model, "model_fields"):
+                return obj
+            for fname, finfo in model.model_fields.items():
+                if fname not in obj:
+                    continue
+                ann = finfo.annotation
+                value = obj.get(fname)
+                if (
+                    isinstance(ann, type)
+                    and issubclass(ann, BaseModel)
+                    and isinstance(value, dict)
+                ):
+                    obj[fname] = _visit(value, ann, f"{path}.{fname}" if path else fname)
+                    continue
+                if (
+                    hasattr(ann, "__args__")
+                    and isinstance(value, list)
+                    and len(ann.__args__) > 0
+                ):
+                    inner = ann.__args__[0]
+                    if isinstance(inner, type) and issubclass(inner, BaseModel):
+                        obj[fname] = [
+                            _visit(item, inner, f"{path}.{fname}[{i}]")
+                            for i, item in enumerate(value)
+                            if isinstance(item, dict)
+                        ]
+                        continue
+                b = _bounds(finfo)
+                if not b:
+                    continue
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    nv, which = _clamp_one(float(value), b)
+                    if which is not None:
+                        # preserve int-ness when the original was int and bound is int-like
+                        out = nv
+                        if isinstance(value, int) and float(nv).is_integer():
+                            out = int(nv)
+                        fixes.append({
+                            "field": f"{path}.{fname}" if path else fname,
+                            "type": "numeric_clamped",
+                            "before": value,
+                            "after": out,
+                            "bound": which,
+                        })
+                        obj[fname] = out
             return obj
 
         result = _visit(result, model_cls, "")

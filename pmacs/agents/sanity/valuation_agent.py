@@ -81,17 +81,49 @@ class ValuationAgentSanity(BaseSanityValidator):
         # --- per-scenario plausibility + citation checks ---
         for name in ("bull", "base", "bear"):
             block = output.get(name, {}) or {}
-            exit_mult = block.get("exit_multiple", 0.0)
-            if not isinstance(exit_mult, (int, float)) or not (0.5 <= float(exit_mult) <= 80.0):
+            exit_mult = block.get("exit_multiple")
+            if exit_mult is not None:
+                if not isinstance(exit_mult, (int, float)) or not (0.5 <= float(exit_mult) <= 80.0):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"{name} exit_multiple {exit_mult} outside plausible bounds [0.5, 80]",
+                    )
+            # exit_sales_multiple (EV/Sales) — required for pre-profit scenarios
+            # (ebitda_margin <= 0). Bound [0, 100]; nullable for profitable names.
+            esm = block.get("exit_sales_multiple")
+            margin_v = block.get("ebitda_margin_at_horizon_pct", 0.0)
+            pre_profit = isinstance(margin_v, (int, float)) and float(margin_v) <= 0.0
+            if esm is not None:
+                if not isinstance(esm, (int, float)) or not (0.0 <= float(esm) <= 100.0):
+                    return SanityResult(
+                        passed=False,
+                        reason=f"{name} exit_sales_multiple {esm} outside plausible bounds [0, 100]",
+                    )
+            elif pre_profit:
                 return SanityResult(
                     passed=False,
-                    reason=f"{name} exit_multiple {exit_mult} outside plausible bounds [0.5, 80]",
+                    reason=(
+                        f"{name} is pre-profit (ebitda_margin {margin_v} <= 0) but "
+                        f"exit_sales_multiple is missing — required for the EV/Sales path"
+                    ),
+                )
+            # At least one exit multiple must be provided per scenario.
+            if exit_mult is None and esm is None:
+                return SanityResult(
+                    passed=False,
+                    reason=(
+                        f"{name} has neither exit_multiple nor exit_sales_multiple — "
+                        f"at least one exit multiple is required"
+                    ),
                 )
             margin = block.get("ebitda_margin_at_horizon_pct", 0.0)
-            if not isinstance(margin, (int, float)) or not (-0.10 <= float(margin) <= 0.85):
+            # Widened from spec §13b [-0.10, 0.85] to [-0.50, 0.90] to match the
+            # widened schema envelope (hypergrowth/pre-profit names carry -15% to
+            # -35% EBITDA margins at the horizon). Spec amendment pending.
+            if not isinstance(margin, (int, float)) or not (-0.50 <= float(margin) <= 0.90):
                 return SanityResult(
                     passed=False,
-                    reason=f"{name} ebitda_margin {margin} outside plausible bounds [-0.10, 0.85]",
+                    reason=f"{name} ebitda_margin {margin} outside plausible bounds [-0.50, 0.90]",
                 )
 
             # margin_trajectory must agree with margin_delta_pct sign

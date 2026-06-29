@@ -239,7 +239,9 @@ async def universe_search(q: str = ""):
         except Exception:
             pass
 
-    # 2. Fallback: Finnhub symbol search (filter to US exchanges, prefix match only)
+    # 2. Fallback: Finnhub symbol search. Prefer symbol-prefix matches but also
+    #    accept name-substring matches so typing "NEBIUS" / "Apple" finds the
+    #    company by name when the operator doesn't know the ticker.
     if len(results) < 3:
         finnhub_key = _get_api_key("pmacs.data.finnhub", "api_key")
         if finnhub_key:
@@ -250,9 +252,14 @@ async def universe_search(q: str = ""):
                 _us_exchanges = {"", "US", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "OTC"}
                 for item in data.get("result", []):
                     sym = item.get("symbol", "")
-                    # Only include if ticker starts with query and looks like a US listing
-                    if (sym and sym.startswith(q) and sym not in existing
-                            and ("." not in sym) and ("-" not in sym)):
+                    desc = (item.get("description") or "").upper()
+                    if not sym or sym in existing or "." in sym or "-" in sym:
+                        continue
+                    sym_match = sym.startswith(q)
+                    # Case-insensitive name substring match for full-company-name
+                    # queries like "NEBIUS", "APPLE", "PALANTIR".
+                    name_match = (q in desc) and len(desc) >= len(q)
+                    if sym_match or name_match:
                         results.append({
                             "ticker": sym,
                             "name": item.get("description", ""),

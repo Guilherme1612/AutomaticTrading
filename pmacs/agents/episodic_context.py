@@ -203,6 +203,13 @@ def build_context_brief(
     ticker_analysis_count: int = 0,
     prior_agent_signals: list[dict] | None = None,
     prior_crucible_severity: float | None = None,
+    prior_thesis: str | None = None,
+    prior_fair_value: str | None = None,
+    prior_valuation_methodology: str | None = None,
+    prior_key_evidence: list[str] | None = None,
+    prior_key_risks: list[str] | None = None,
+    prior_what_changed: list[str] | None = None,
+    prior_forward_expected_price_usd: float | None = None,
 ) -> str:
     """Build a ~400-word context brief for a persona run (first analysis) or ~700 words (repeat).
 
@@ -354,6 +361,56 @@ def build_context_brief(
             f"If severity was high (>0.5), verify that the issue identified "
             f"has been resolved or is no longer relevant."
         )
+
+    # --- Prior memo context (Commit 2 — Tier 2A) ------------------------------
+    # Re-injects the full prior memo's thesis, fair_value, valuation_methodology,
+    # key_evidence, key_risks, what_would_change_my_mind, and the LLM-free
+    # forward-valuation expected price. This is the missing context: previously
+    # the orchestrator pulled only 7 fields and truncated prior_key_signal to
+    # 200 chars. On cycle 2+ the LLM now sees the prior operator-grade memo
+    # in full so it does not re-derive facts already in the persisted record.
+    # Gated on ticker_analysis_count >= 1 (no prior memo for first cycle).
+    if ticker_analysis_count >= 1 and (
+        prior_thesis or prior_fair_value or prior_valuation_methodology
+        or prior_key_evidence or prior_key_risks or prior_what_changed
+        or prior_forward_expected_price_usd is not None
+    ):
+        memo_lines: list[str] = []
+        memo_lines.append(
+            f"[PRIOR MEMO CONTEXT — last cycle for {ticker} on {prior_decided_at or '?'}]"
+        )
+        if prior_thesis:
+            memo_lines.append(f"  Thesis: {prior_thesis[:600]}")
+        if prior_verdict:
+            memo_lines.append(f"  Verdict: {prior_verdict}")
+        if prior_conviction is not None:
+            memo_lines.append(f"  Prior conviction: {prior_conviction:+.2f}")
+        if prior_fair_value:
+            memo_lines.append(f"  Prior fair value: {prior_fair_value}")
+        if prior_valuation_methodology:
+            memo_lines.append(
+                f"  Prior methodology: {prior_valuation_methodology[:400]}"
+            )
+        if prior_key_evidence:
+            memo_lines.append(
+                "  Prior key evidence: "
+                + "; ".join(str(x)[:120] for x in prior_key_evidence[:5])
+            )
+        if prior_key_risks:
+            memo_lines.append(
+                "  Prior key risks: "
+                + "; ".join(str(x)[:120] for x in prior_key_risks[:5])
+            )
+        if prior_what_changed:
+            memo_lines.append(
+                "  What would change the prior call: "
+                + "; ".join(str(x)[:120] for x in prior_what_changed[:3])
+            )
+        if prior_forward_expected_price_usd is not None:
+            memo_lines.append(
+                f"  Prior forward-expected price: ${prior_forward_expected_price_usd:,.2f}"
+            )
+        sections.append("\n".join(memo_lines))
 
     brief = " ".join(sections)
     words = brief.split()

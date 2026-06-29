@@ -48,6 +48,10 @@ class MemoWriterRunner(PersonaRunner):
         forward_valuation: object | None = None,
         scenario_price: object | None = None,
         data_quality_warnings: list[str] | None = None,
+        memo_feedback: str | None = None,
+        prior_memo_summary: dict | None = None,
+        persona_weights: list | None = None,
+        per_persona_calibration: dict | None = None,
     ) -> None:
         """Inject the full analytical synthesis so the memo has real numbers.
 
@@ -78,6 +82,32 @@ class MemoWriterRunner(PersonaRunner):
                 )
             else:
                 lines.append(f"decision={getattr(decision, 'value', decision)} (probabilities unavailable)")
+
+        # ── Persona Arbitration Weights (Commit 4 — Tier 4) ───────────────────
+        # Surfaces who drove the verdict and how reliable each persona is on THIS
+        # ticker (per-persona DuckDB calibration). The operator can see, in the
+        # memo, which personas were weighted highest and which are calibrated.
+        if persona_weights:
+            try:
+                from pmacs.agents.sanity.memo_scorer import (
+                    format_persona_weight_table,
+                )
+                _tbl = format_persona_weight_table(
+                    persona_weights,
+                    per_persona_calibration=per_persona_calibration,
+                )
+                if _tbl:
+                    lines.append("\n## Persona Arbitration Weights")
+                    lines.append(
+                        "Sorted desc by arbitration weight. "
+                        "'ticker_brier' = this persona's avg brier on THIS "
+                        "ticker (DuckDB persona_ticker_affinity, n>=5). "
+                        "Brier >0.25 → LOW CONFIDENCE on this ticker."
+                    )
+                    lines.append(_tbl)
+            except Exception:
+                # Best-effort: never abort memo rendering on a formatting hiccup.
+                pass
 
         if conviction_score is not None:
             verdict_str = getattr(verdict, "value", str(verdict)) if verdict else "?"
@@ -200,15 +230,64 @@ class MemoWriterRunner(PersonaRunner):
                 g = base_pt.revenue_growth_path_pct
                 m = base_pt.ebitda_margin_at_horizon_pct
                 x = base_pt.exit_multiple
+                xs = getattr(base_pt, "exit_sales_multiple", None)
+                path = getattr(base_pt, "valuation_path", None)
                 parts = []
                 if g is not None:
                     parts.append(f"revenue growth {g*100:.1f}% to horizon")
                 if m is not None:
                     parts.append(f"EBITDA margin {m*100:.1f}%")
-                if x is not None:
+                if path == "ev_sales" and xs is not None:
+                    parts.append(f"exit EV/Sales {xs:.1f}x (pre-profit path)")
+                elif x is not None:
                     parts.append(f"exit EV/EBITDA {x:.1f}x")
+                elif xs is not None:
+                    parts.append(f"exit EV/Sales {xs:.1f}x")
                 if parts:
                     lines.append(f"  Base-case assumptions: {', '.join(parts)}")
+            # ── The non-obvious reconciliation: model vs market vs Wall Street ──
+            # Most memos state a fair value and stop. The operator's edge is seeing
+            # the GAP between (a) the multiple the market pays today, (b) the
+            # multiple the agent assumed at the horizon, and (c) the analyst PT —
+            # and judging which view the evidence actually supports. Surface all
+            # three explicitly so the memo reader can reconcile them.
+            cur = getattr(forward_valuation, "current_price_usd", None)
+            cur_ev_sales = getattr(forward_valuation, "current_ev_sales", None)
+            pt_mean = getattr(forward_valuation, "analyst_target_mean_usd", None)
+            base_px = forward_valuation.base_price
+            gap_parts: list[str] = []
+            if cur_ev_sales is not None:
+                gap_parts.append(f"market pays {cur_ev_sales:.1f}x EV/Sales today")
+                if base_pt is not None and getattr(base_pt, "valuation_path", None) == "ev_sales" and getattr(base_pt, "exit_sales_multiple", None) is not None:
+                    gap_parts.append(
+                        f"agent assumes {base_pt.exit_sales_multiple:.1f}x at horizon "
+                        f"({(base_pt.exit_sales_multiple/cur_ev_sales - 1)*100:+.0f}% vs market)"
+                    )
+            if base_px and cur and cur > 0:
+                gap_parts.append(f"model base {base_px/cur - 1:+.1%} vs current ${cur:,.2f}")
+            if base_px and pt_mean and pt_mean > 0:
+                gap_parts.append(f"model base {base_px/pt_mean - 1:+.1%} vs analyst PT ${pt_mean:,.2f}")
+            if gap_parts:
+                lines.append("  Reconciliation: " + "; ".join(gap_parts))
+            # ── Tier 3 — forward valuation warnings (Commit 3) ───────────────
+            # Three warnings can stack here (in priority order):
+            #   1. forward_vs_reverse_dcf_warning: >50% gap vs reverse-DCF → LLM
+            #      hallucination check
+            #   2. agent_scenario_convergence_warning: includes ⚠ DISTRESS tag
+            #      when base_price_underwater, plus LOW-CONFIDENCE FORWARD
+            #      VALUATION when |p_bull - p_bear| < 0.10
+            _dcf_warn = getattr(forward_valuation, "forward_vs_reverse_dcf_warning", "")
+            if _dcf_warn:
+                lines.append(f"  WARNING: {_dcf_warn}")
+            _conv_warn = getattr(
+                forward_valuation, "agent_scenario_convergence_warning", ""
+            )
+            if _conv_warn:
+                # Multi-warning strings are joined with '; ' by the engine;
+                # render verbatim so the operator sees the whole chain.
+                for _w in _conv_warn.split("; "):
+                    if _w.strip():
+                        lines.append(f"  WARNING: {_w.strip()}")
         elif forward_valuation is not None:
             notes = getattr(forward_valuation, "notes", "") or "unavailable"
             lines.append(f"\n## Forward Valuation\n  Unavailable ({notes}).")
@@ -242,6 +321,67 @@ class MemoWriterRunner(PersonaRunner):
             )
             for w in data_quality_warnings[:10]:
                 lines.append(f"  - {w}")
+
+        # ── Memo quality feedback (memo_scorer retry, Agents.md §13.5) ─────────
+        # On a low-quality first draft, the orchestrator invokes score_memo() and
+        # re-runs memo_writer.run() once with this block injected. The LLM sees
+        # the per-dimension score + critical issues and rewrites accordingly. This
+        # is the cost-capped 1-retry loop (operator directive; risk.toml budget).
+        if memo_feedback:
+            lines.append("\n## Memo Quality Feedback (fix these issues)")
+            lines.append(
+                "IMPORTANT: This is a re-run. The previous draft scored low. "
+                "Address the issues below — do not regress on already-correct fields."
+            )
+            lines.append(memo_feedback)
+
+        # ── Prior memo context (Commit 2 — Tier 2A, redundant injection) ──────
+        # The persona brief (episodic_context) already carries the prior memo
+        # summary, but the memo writer sometimes benefits from a second copy in
+        # the analytical block so it can write a "what changed since last memo"
+        # paragraph without having to cross-reference two sections. Best-effort:
+        # missing fields are skipped; empty prior_memo_summary renders nothing.
+        if prior_memo_summary:
+            _ps = prior_memo_summary
+            _any = any(_ps.get(k) for k in (
+                "thesis", "verdict_line", "fair_value", "valuation_methodology",
+                "key_evidence", "key_risks", "what_would_change_my_mind",
+            )) or _ps.get("forward_expected_price_usd") is not None
+            if _any:
+                lines.append("\n## Prior Memo Context (last analysis)")
+                if _ps.get("thesis"):
+                    lines.append(f"  Thesis: {_ps['thesis'][:500]}")
+                if _ps.get("verdict_line"):
+                    lines.append(f"  Verdict line: {_ps['verdict_line']}")
+                if _ps.get("fair_value"):
+                    lines.append(f"  Fair value: {_ps['fair_value']}")
+                if _ps.get("valuation_methodology"):
+                    lines.append(
+                        f"  Methodology: {_ps['valuation_methodology'][:300]}"
+                    )
+                if _ps.get("key_evidence"):
+                    lines.append(
+                        "  Evidence: "
+                        + "; ".join(str(x)[:100] for x in _ps["key_evidence"][:5])
+                    )
+                if _ps.get("key_risks"):
+                    lines.append(
+                        "  Risks: "
+                        + "; ".join(str(x)[:100] for x in _ps["key_risks"][:5])
+                    )
+                if _ps.get("what_would_change_my_mind"):
+                    lines.append(
+                        "  What would change my mind: "
+                        + "; ".join(
+                            str(x)[:100]
+                            for x in _ps["what_would_change_my_mind"][:3]
+                        )
+                    )
+                _pfep = _ps.get("forward_expected_price_usd")
+                if isinstance(_pfep, (int, float)):
+                    lines.append(
+                        f"  Prior forward-expected price: ${float(_pfep):,.2f}"
+                    )
 
         self._analytical_context = "\n".join(lines)
 

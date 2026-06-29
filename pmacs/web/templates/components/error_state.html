@@ -2,10 +2,10 @@
 <!-- Usage: include "components/error_state.html" -->
 <!-- Context variables: error_code, error_description, error_explanation, error_actions, error_spec_ref -->
 
-<div class="card card-accent-red bg-negative-soft anim-fade-in" role="alert">
+<div class="error-state anim-fade-in" role="alert">
     <!-- Header: error code + description -->
     <div class="flex items-start gap-3 mb-3">
-        <svg class="w-5 h-5 text-negative mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <svg class="error-state__icon flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
         </svg>
         <div>
@@ -18,7 +18,7 @@
 
     <!-- What this means (expander) -->
     {% if error_explanation %}
-    <details class="mb-3">
+    <details class="mb-3 w-full max-w-md text-left">
         <summary class="text-xs text-text-secondary cursor-pointer hover:text-text-primary transition-colors font-medium">What this means</summary>
         <p class="text-xs text-text-secondary mt-2 pl-4 leading-relaxed">{{ error_explanation }}</p>
     </details>
@@ -26,7 +26,7 @@
 
     <!-- What to try -->
     {% if error_actions %}
-    <div class="mb-3">
+    <div class="mb-3 w-full max-w-md text-left">
         <p class="text-xs font-medium text-text-primary mb-1">What to try:</p>
         <ul class="text-xs text-text-secondary space-y-1 pl-4 list-disc">
             {% for action in error_actions %}

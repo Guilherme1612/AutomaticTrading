@@ -942,6 +942,7 @@ Each card shows:
 - Ticker (mono, large) + verdict color border
 - Current price + day change
 - Conviction score (numeric + small bar)
+- **Priority band chip** (inline `<select>` — `P1 · HIGHEST` / `P2 · HIGH` / `P3 · NORM` / `P4 · BG`) colored to match the current band. Changing the chip POSTs `/pipeline/queue/reorder` to update the band's `priority_band` column on the queue row, re-tints the chip on success, and reverts on error. Defaults to P3 when the row has no band. See §16.5 for the multi-band queue semantics.
 - Final memo (truncated to 2 lines, click to expand)
 - Cycle date
 - Action buttons (visible on hover):
@@ -959,6 +960,8 @@ Multi-band priority queue:
 - **P4** (background, runs only if cycle has time)
 
 Drag tickers between bands. "Promote all in P1 to head of next cycle" button. Pin/unpin per ticker. Saved priority schemes (operator can name and recall).
+
+> **Implementation note (Phase 8):** the right-rail drag-target lane set above is not built yet. The P1–P4 affordance is currently surfaced inline as the per-card priority band chip (§16.4) and changes POST to `/pipeline/queue/reorder` with `{ticker, from_band, to_band}`. The drag-between-bands UI is a follow-up.
 
 ### 16.6 Single-ticker detail drawer
 

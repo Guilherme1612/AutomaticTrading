@@ -779,20 +779,40 @@ class ValuationScenarioAssumptions(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Revenue CAGR to the horizon (fraction). Negative = contraction.
-    revenue_growth_path_pct: float = Field(ge=-0.50, le=1.00)
+    # Widened from spec §13b [ge -0.5, le 1.0] to [ge -0.6, le 3.0] so
+    # hypergrowth names (NBIS/ONDS doing 100-300%+ YoY) are representable
+    # instead of hard-rejected → valuation abort. Spec amendment pending.
+    revenue_growth_path_pct: float = Field(ge=-0.60, le=3.00)
     # Margin direction the agent expects over the horizon.
     margin_trajectory: Literal["COMPRESSING", "EXPANDING", "STABLE"]
     # Signed margin delta to apply (fraction, e.g. -0.03 = -3pp).
-    margin_delta_pct: float = Field(ge=-0.20, le=0.20)
+    # Widened from spec §13b [±0.20] to [±0.40] so a pre-profit company
+    # pivoting from -35% to +5% margin (a +40pp swing) is representable.
+    margin_delta_pct: float = Field(ge=-0.40, le=0.40)
     # EBITDA margin the agent assumes at the horizon (fraction).
-    ebitda_margin_at_horizon_pct: float = Field(ge=-0.10, le=0.90)
+    # Widened from spec §13b [ge -0.10] to [ge -0.50] so pre-profit AI-infra
+    # names with -15% to -35% EBITDA margins are representable. A company
+    # whose IMPROVED horizon margin is still -20% was unrepresentable under
+    # the old -10% floor, silently aborting the whole forward valuation.
+    ebitda_margin_at_horizon_pct: float = Field(ge=-0.50, le=0.90)
     # Acquisition revenue contribution as a fraction of current revenue
     # (low-confidence — LLM-inferred from filings/press narrative, no hard deal
     # number). 0.0 when acquisitions are N/A or immaterial.
     acquisition_revenue_contribution_pct: float = Field(ge=0.0, le=0.50, default=0.0)
     acquisition_confidence: Literal["HIGH", "MODERATE", "LOW", "NONE"] = "NONE"
-    # Exit EV/EBITDA multiple the agent assumes at the horizon.
-    exit_multiple: float = Field(gt=0.0, le=100.0)
+    # Exit EV/EBITDA multiple the agent assumes at the horizon. Nullable: for
+    # pre-profit scenarios (ebitda_margin <= 0) the engine uses the EV/Sales path
+    # via exit_sales_multiple instead, so exit_multiple should be null there.
+    # At least one of exit_multiple / exit_sales_multiple must be set per scenario
+    # (enforced in sanity).
+    exit_multiple: float | None = Field(default=None, gt=0.0, le=100.0)
+    # Exit EV/Sales multiple — REQUIRED for pre-profit scenarios (when
+    # ebitda_margin_at_horizon_pct <= 0), since EV/EBITDA is meaningless for
+    # negative EBITDA. Optional for profitable names. The engine uses the
+    # EV/Sales path (forward_ev = forward_revenue * exit_sales_multiple) when
+    # EBITDA <= 0 and this is provided; otherwise the scenario degrades to no
+    # price. Typical range 1x-50x for hypergrowth pre-profit names.
+    exit_sales_multiple: float | None = Field(default=None, ge=0.0, le=100.0)
     rationale: str = Field(max_length=800)
     # The agent's probability THIS scenario occurs. Bull/base/bear must sum ~1.0.
     probability_of_occurrence: float = Field(ge=0.0, le=1.0)
@@ -801,7 +821,7 @@ class ValuationScenarioAssumptions(BaseModel):
     @field_validator(
         "revenue_growth_path_pct", "margin_delta_pct",
         "ebitda_margin_at_horizon_pct", "acquisition_revenue_contribution_pct",
-        "exit_multiple", "probability_of_occurrence",
+        "exit_multiple", "exit_sales_multiple", "probability_of_occurrence",
         mode="before",
     )
     @classmethod
@@ -868,6 +888,20 @@ class ValuationAgentOutput(BaseModel):
             raise ValueError("degenerate distribution: all mass on bull")
         if p_bear == 1.0 and p_base == 0.0 and p_bull == 0.0:
             raise ValueError("degenerate distribution: all mass on bear")
+
+        # Scenario growth ordering: bull >= base >= bear (V-003 — mirrors the
+        # sanity-layer check so schema and sanity agree on the same invariant;
+        # a producer that bypasses sanity still cannot pass a wrong-ordered
+        # output downstream).
+        g_bull = self.bull.revenue_growth_path_pct
+        g_base = self.base.revenue_growth_path_pct
+        g_bear = self.bear.revenue_growth_path_pct
+        if all(isinstance(x, (int, float)) for x in (g_bull, g_base, g_bear)):
+            if g_bull < g_base - 0.001 or g_bear > g_base + 0.001:
+                raise ValueError(
+                    f"revenue_growth_path_pct not ordered bull>=base>=bear: "
+                    f"bull={g_bull} base={g_base} bear={g_bear}"
+                )
 
         # Acquisition contribution > 0 must carry a LOW/MODERATE confidence flag
         # (the operator's "no fabricated deal numbers" guardrail) and be noted in

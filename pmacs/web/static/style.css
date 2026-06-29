@@ -1324,6 +1324,49 @@ textarea:focus-visible {
     border-radius: 2px;
 }
 
+/* ─── Workspace Tabs (F-004) ─────────────────────────────────────────── */
+/* Active state is data-attribute driven so it survives without JS. */
+.ws-tab {
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ws-tab:hover {
+    background: var(--surface-sunken);
+}
+.ws-tab[aria-selected="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.ws-tab[aria-selected="true"]:hover {
+    filter: brightness(0.97);
+}
+
+/* ─── Persona Details Marker (F-010) ────────────────────────────────── */
+/* <details> open/closed chevron. Apply class="pm-details" to the <details>. */
+details.pm-details > summary { list-style: none; cursor: pointer; }
+details.pm-details > summary::-webkit-details-marker { display: none; }
+details.pm-details > summary::after {
+    content: '\25B8';
+    margin-left: auto;
+    padding-left: 0.5rem;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+details.pm-details[open] > summary::after {
+    transform: rotate(90deg);
+}
+
+/* ─── Eyebrow Micro-Label (F-011, F-014) ────────────────────────────── */
+/* Consolidates the 10px uppercase tracking-widest label pattern that
+   appears ~30 times on /ticker/{ticker}. Higher contrast than
+   text-text-muted at 10-12px to clear WCAG AA. */
+.pmacs-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+}
+
 /* ─── Modal Backdrop ──────────────────────────────────────────────────── */
 
 #blocking-modal,

@@ -94,7 +94,7 @@
     {% set loading_eta_seconds = 12 %}
     {% set loading_cancel = true %}
     {% include "components/loading_state.html" %}
-    <p class="text-xs text-text-muted text-center -mt-4 mb-4">This page will populate once the first fetch completes. The skeleton matches the workspace shape.</p>
+    <p class="text-xs text-text-muted text-center mb-4">This page will populate once the first fetch completes. The skeleton matches the workspace shape.</p>
     {%- else -%}
     <p class="text-sm text-text-secondary mb-4">
         This ticker hasn't been analyzed in a cycle, so no evidence has been collected.
@@ -156,13 +156,13 @@
         {% endif %}
     </div>
 </div>
-<nav class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
-    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
-    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo" aria-selected="false">Memo</button>
-    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas" aria-selected="false">Personas</button>
-    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage" aria-selected="false">Lineage</button>
-    <button type="button" class="ws-tab px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures" aria-selected="false">Failures</button>
-</nav>
+<div class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
+    <button type="button" role="tab" id="ws-tab-fundamentals" aria-controls="ws-fundamentals" tabindex="0" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
+    <button type="button" role="tab" id="ws-tab-memo"       aria-controls="ws-memo"       tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo"       aria-selected="false">Memo</button>
+    <button type="button" role="tab" id="ws-tab-personas"   aria-controls="ws-personas"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="personas"   aria-selected="false">Personas</button>
+    <button type="button" role="tab" id="ws-tab-lineage"    aria-controls="ws-lineage"    tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="lineage"    aria-selected="false">Lineage</button>
+    <button type="button" role="tab" id="ws-tab-failures"   aria-controls="ws-failures"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures"   aria-selected="false">Failures</button>
+</div>
 {% endif %}
 <div id="ws-fundamentals" class="ws-panel">
 {% macro fmt(value, unit="") -%}
@@ -804,7 +804,7 @@
 </div>{# /ws-fundamentals #}
 
 {# ── Memo tab (Source.md §16.6 + §16.9) — rendered from the persisted memo_json ── #}
-<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+<section id="ws-memo" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-memo" tabindex="0">
     {% if ws_memo %}
     <div class="space-y-5">
         {% if ws_memo.verdict_line %}
@@ -875,7 +875,7 @@
 </section>
 
 {# ── Personas tab (Source.md §15.4 / §16.6 per-persona accordion) ── #}
-<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+<section id="ws-personas" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-personas" tabindex="0">
     {% if ws_agent_results|length > 0 %}
     {% set _aff_by = {} %}
     {% for a in ws_persona_affinity %}{% set _ = _aff_by.update({a.persona: a}) %}{% endfor %}
@@ -913,7 +913,7 @@
 </section>
 
 {# ── Lineage tab (Source.md §16.6 position lineage + historical decisions) ── #}
-<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+<section id="ws-lineage" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-lineage" tabindex="0">
     <div class="space-y-5">
         {% if ws_holding %}
         <div class="card card-elevated p-5 reveal">
@@ -985,7 +985,7 @@
 </section>
 
 {# ── Failures tab (Source.md §16.6 failure history; Agents.md FDE taxonomy) ── #}
-<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tablist">
+<section id="ws-failures" class="ws-panel hidden" role="tabpanel" aria-labelledby="ws-tab-failures" tabindex="0">
     {% if ws_failures|length > 0 %}
     <div class="space-y-3">
         {% for f in ws_failures %}
@@ -1023,6 +1023,7 @@
         tabs.forEach(function (b) {
             var on = b.getAttribute('data-ws-tab') === name;
             b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.setAttribute('tabindex', on ? '0' : '-1');
             b.classList.toggle('bg-accent-soft', on);
             b.classList.toggle('text-accent', on);
             b.classList.toggle('text-text-secondary', !on);
@@ -1031,6 +1032,25 @@
     }
     tabs.forEach(function (b) {
         b.addEventListener('click', function () { activate(b.getAttribute('data-ws-tab')); });
+        // Keyboard navigation (WAI-ARIA tabs pattern): Arrow/Home/End moves
+        // focus across the tab list and activates the new tab; tabindex
+        // roving is reflected back into the DOM after activation.
+        b.addEventListener('keydown', function (e) {
+            var ids = Array.prototype.map.call(tabs, function (t) {
+                return t.getAttribute('data-ws-tab');
+            });
+            var i = ids.indexOf(b.getAttribute('data-ws-tab'));
+            var next = -1;
+            if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+            else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+            else if (e.key === 'Home') next = 0;
+            else if (e.key === 'End') next = tabs.length - 1;
+            if (next < 0) return;
+            e.preventDefault();
+            var target = tabs[next];
+            target.focus();
+            activate(target.getAttribute('data-ws-tab'));
+        });
     });
     // Deep link: /ticker/{ticker}#memo  → open that tab.
     var initial = (location.hash || '').replace('#', '');

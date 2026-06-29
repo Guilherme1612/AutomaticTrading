@@ -95,7 +95,7 @@ Implements `Source.md §4` promise 2 (mode-pure inference) and `Source.md §6` d
 
 - `pmacs-execution` is the ONLY process that imports broker SDK code.
 - `pmacs-inference` (llama-server) has zero internet egress (enforced by `pf` rules in `ops/install_pf_rules.sh`).
-- `pmacs-dashboard` has read-only DB access; writes go through `pmacs-nervous` via authenticated POST.
+- `pmacs-web` (combined dashboard + nervous) has read-only DB access for dashboard routes; writes go through authenticated POST endpoints in the same process.
 - `pmacs-mutation` reads from storage; writes only to its own scoped tables (`mutation_*`).
 - Verified at runtime by `pmacs cortex audit-isolation` (cron'd hourly).
 
@@ -182,7 +182,7 @@ CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
 
 ### 1.15 SSE event stream is the only realtime UI channel
 
-`pmacs-dashboard` does NOT poll DBs at fast intervals. It opens an SSE connection to `pmacs-nervous` `/events` and renders updates as they stream. This is structural to keep the dashboard read-only and the nervous-system the single writer. See §4.3.
+`pmacs-web` does NOT poll DBs at fast intervals. It opens an SSE connection to the nervous subsystem `/events` and renders updates as they stream. This is structural to keep the dashboard read-only and the nervous-system the single writer. See §4.3.
 
 ---
 
@@ -230,7 +230,7 @@ CI grep-fails on attempts to load code-versioned values from `Settings.read()`.
 
 ### 2.1 Data flow rules (allowed paths)
 
-- **L7 → L2 storage** (read-only via `pmacs-dashboard`)
+- **L7 → L2 storage** (read-only via `pmacs-web`)
 - **L7 → L5 nervous** (write actions, operator-confirmed POST)
 - **L7 ← L5 nervous** via SSE (real-time event stream, see §4.3)
 - **L5 → L4 agents** (LLM call orchestration)
@@ -248,7 +248,7 @@ Any other data flow is forbidden. Verified by `pmacs cortex audit-isolation`.
 
 ### 2.2 ADR: Why dashboard process stays separate
 
-Reviewers periodically ask why `pmacs-dashboard` isn't merged into `pmacs-nervous` since both are FastAPI servers. The answer: **attack surface isolation**. The dashboard runs HTMX/SSE endpoints the operator's browser hits constantly. Nervous has the orchestration logic and SQLite write access. A vulnerability in dashboard HTTP handling (XSS, CSRF, header injection, debugger leak) cannot escalate to write access because the dashboard process literally cannot write — its SQLite connection is opened with `mode=ro` and its filesystem permissions deny write. This defense-in-depth is intentional. Cost: one extra launchd plist.
+The dashboard and nervous API are merged into a single `pmacs-web` process running on :8000. Dashboard routes open SQLite with `mode=ro`; write endpoints are authenticated POST handlers in the same process. This simplifies deployment at the cost of reduced attack surface isolation — a vulnerability in dashboard HTTP handling could theoretically escalate to write access. The tradeoff is accepted for the single-operator, loopback-only deployment model.
 
 See ADR-001 in §21.
 
@@ -270,253 +270,423 @@ pmacs/
 │   ├── cli.py                      # `pmacs <command>` entry point
 │   ├── config.py                   # loads config/*.toml + Keychain
 │   ├── constants.py                # CI-tested anti-pattern thresholds (do not edit casually)
+│   ├── stop_loss_daemon.py         # the pmacs-stoploss process body (top-level for launchd)
+│   ├── billing/                   # Phase 16 token-cost accounting + budget enforcement
+│   │   ├── __init__.py
+│   │   ├── budget_enforcer.py     # 3-tier cap check (cycle/daily/monthly) + runaway detection
+│   │   ├── cost_calculator.py     # compute_cost(prompt_t, completion_t, ...) → USD
+│   │   ├── drift_monitor.py       # p90 estimate drift per persona (warn > 20%)
+│   │   ├── period_roller.py       # Lazy daily/monthly period rollover
+│   │   ├── pricing.py             # OpenRouter /api/v1/models cache + refresh
+│   │   ├── reconciler.py          # Background OpenRouter /generation reconciliation
+│   │   ├── token_estimator.py     # Pre-call prompt/completion token estimate
+│   │   └── usage_logger.py        # DuckDB api_usage + SQLite budget_state update + SSE
 │   ├── schemas/
 │   │   ├── __init__.py
+│   │   ├── agents.py               # PersonaOutput base classes
 │   │   ├── arbitration.py
-│   │   ├── pricing.py
-│   │   ├── sizing.py
+│   │   ├── attribution.py
+│   │   ├── billing.py             # Billing schemas
 │   │   ├── calibration.py
-│   │   ├── opportunity_cost.py
-│   │   ├── fundamental.py
-│   │   ├── data.py                 # Evidence, EvidencePacket
 │   │   ├── catalysts.py
 │   │   ├── contracts.py            # Holding (with state machine), Thesis
-│   │   ├── agents.py               # PersonaOutput base classes
-│   │   ├── trade.py                # TradePlan (signed)
-│   │   ├── memory.py
-│   │   ├── queue.py
-│   │   ├── lessons.py
-│   │   ├── attribution.py
-│   │   ├── overrides.py
-│   │   ├── flywheel.py
-│   │   ├── sim.py                  # paper ledger
-│   │   ├── portfolio.py
-│   │   ├── reconciliation.py
-│   │   ├── stop_loss.py            # StopTrigger
+│   │   ├── conviction.py           # Conviction (operator-facing scalar from Source.md §7.2)
 │   │   ├── currency.py             # FxRate (with usd_per_eur convention)
-│   │   ├── freshness.py            # FreshnessResult (no packet mutation)
+│   │   ├── data.py                 # Evidence, EvidencePacket
 │   │   ├── failure.py              # FailedAssumption, FailureClassification (taxonomy in Agents.md §15)
+│   │   ├── flywheel.py
+│   │   ├── forward_valuation.py   # Forward valuation schemas
+│   │   ├── freshness.py           # FreshnessResult (no packet mutation)
+│   │   ├── fundamental.py
+│   │   ├── lessons.py
+│   │   ├── memory.py
 │   │   ├── mutation.py             # MutationCandidate, MutationOutcome, MutationProposal
-│   │   ├── conviction.py           # NEW: Conviction (operator-facing scalar from Source.md §7.2)
-│   │   └── system.py               # Mode, KillSwitchState, etc.
+│   │   ├── overrides.py
+│   │   ├── personas.py            # Persona configuration schemas
+│   │   ├── portfolio.py
+│   │   ├── pricing.py
+│   │   ├── queue.py
+│   │   ├── reconciliation.py
+│   │   ├── resolution.py           # Catalyst resolution schemas
+│   │   ├── reverse_dcf.py         # Reverse DCF schemas
+│   │   ├── scenario_price.py      # Scenario price schemas
+│   │   ├── sim.py                  # paper ledger
+│   │   ├── sizing.py
+│   │   ├── stop_loss.py            # StopTrigger
+│   │   ├── system.py               # Mode, KillSwitchState, etc.
+│   │   ├── ticker_metrics.py      # Ticker metrics schemas
+│   │   └── trade.py                # TradePlan (signed)
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── gateway.py              # rate-limited HTTP wrapper
-│   │   ├── staleness.py            # FreshnessResult-returning, no mutation
-│   │   ├── corp_actions.py         # splits, dividends, mergers
-│   │   ├── universe.py             # operator-curated list management
-│   │   ├── fx.py                   # ECB EUR/USD, usd_per_eur convention
 │   │   ├── canonical.py            # canonical_json + helpers
+│   │   ├── corp_actions.py         # splits, dividends, mergers
+│   │   ├── evidence_router.py     # Routes evidence to appropriate personas
+│   │   ├── fx.py                   # ECB EUR/USD, usd_per_eur convention
+│   │   ├── gateway.py              # rate-limited HTTP wrapper
+│   │   ├── price_cache.py         # In-memory price cache for fast lookups
+│   │   ├── refresh_fundamentals_cache.py  # Background fundamentals refresh
+│   │   ├── refresh_technical_cache.py    # Background technical data refresh
+│   │   ├── staleness.py            # FreshnessResult-returning, no mutation
+│   │   ├── universe.py             # operator-curated list management
 │   │   ├── sources/
-│   │   │   ├── edgar.py
-│   │   │   ├── polygon.py
-│   │   │   ├── finnhub.py
+│   │   │   ├── __init__.py
+│   │   │   ├── _html.py           # HTML parsing utilities
 │   │   │   ├── alpaca_data.py
-│   │   │   ├── openfda.py
-│   │   │   ├── finra.py
-│   │   │   ├── form4.py
-│   │   │   ├── ir_pages.py
-│   │   │   ├── press.py
-│   │   │   ├── fomc.py
-│   │   │   ├── fred.py
 │   │   │   ├── ecb.py
-│   │   │   └── fundamentals.py
+│   │   │   ├── edgar.py
+│   │   │   ├── edgar_kpi.py       # EDGAR KPI extraction
+│   │   │   ├── finnhub.py
+│   │   │   ├── finra.py
+│   │   │   ├── fomc.py
+│   │   │   ├── form4.py
+│   │   │   ├── fred.py
+│   │   │   ├── fundamentals.py
+│   │   │   ├── ir_pages.py
+│   │   │   ├── openfda.py
+│   │   │   ├── polygon.py
+│   │   │   ├── press.py
+│   │   │   ├── technical.py       # Technical indicators
+│   │   │   ├── yahoo.py           # Yahoo Finance data
+│   │   │   └── yfinance_fundamentals.py  # yfinance fundamentals
 │   │   └── resolution/
+│   │       ├── __init__.py
 │   │       ├── catalyst_detector.py
+│   │       ├── corroboration.py
+│   │       ├── detector.py         # Resolution detector
 │   │       ├── earnings_resolver.py
-│   │       ├── fda_resolver.py
-│   │       └── corroboration.py
+│   │       └── fda_resolver.py
 │   ├── storage/
 │   │   ├── __init__.py
+│   │   ├── audit.py                # hash-chained writer + verifier
+│   │   ├── consistency.py          # cross-DB reconciler
+│   │   ├── dead_letter.py         # Failed write recovery
+│   │   ├── duckdb.py
+│   │   ├── indexes.py
+│   │   ├── keychain.py             # macOS Keychain wrapper
 │   │   ├── kuzu.py
 │   │   ├── qdrant.py
-│   │   ├── duckdb.py
-│   │   ├── sqlite.py
-│   │   ├── audit.py                # hash-chained writer + verifier
-│   │   ├── keychain.py             # macOS Keychain wrapper
-│   │   ├── indexes.py
-│   │   └── consistency.py          # cross-DB reconciler
+│   │   └── sqlite.py
 │   ├── logsys/
 │   │   ├── __init__.py
-│   │   ├── logger.py
+│   │   ├── dead_letter.py
 │   │   ├── debug_log.py            # structured DebugEvent JSONL
 │   │   ├── error_classifier.py     # canonical error_code mapper
-│   │   ├── replay.py               # replay events from audit
-│   │   └── dead_letter.py
+│   │   ├── logger.py
+│   │   └── replay.py               # replay events from audit
 │   ├── engines/
 │   │   ├── __init__.py
 │   │   ├── arbitration.py
-│   │   ├── pricing.py
-│   │   ├── sizing.py
 │   │   ├── calibration.py
-│   │   ├── memory.py
-│   │   ├── queue.py
-│   │   ├── lessons.py
-│   │   ├── opportunity_cost.py
-│   │   ├── fundamental_routing.py
-│   │   ├── portfolio_risk_gate.py
-│   │   ├── reconciliation.py
-│   │   ├── stop_loss_monitor.py    # logic; daemon is in cortex/
-│   │   ├── state_machine.py        # Holding state transitions (see §8.2)
+│   │   ├── cash_ledger.py         # Cash position ledger
 │   │   ├── causal_attribution.py
-│   │   ├── override_learning.py
-│   │   ├── crucible_calibration.py
-│   │   ├── flywheel_health.py
-│   │   ├── failure_diagnostic.py   # FDE w/ 18-taxonomy classifier (Agents.md §15)
 │   │   ├── conviction.py           # conviction scoring (Source.md §7.2)
+│   │   ├── crucible_calibration.py
+│   │   ├── crucible_loop.py       # Crucible debate loop engine
+│   │   ├── failure_diagnostic.py   # FDE w/ 18-taxonomy classifier (Agents.md §15)
+│   │   ├── flywheel_health.py
+│   │   ├── forward_valuation.py   # Forward valuation engine
+│   │   ├── fundamental_routing.py
+│   │   ├── lessons.py
+│   │   ├── memory.py
+│   │   ├── mode_manager.py        # System mode management
 │   │   ├── mutation.py             # MutationEngine logic; daemon in mutation/
-│   │   └── scaling.py              # [STUB] until v2
+│   │   ├── opportunity_cost.py
+│   │   ├── override_learning.py
+│   │   ├── portfolio_risk_gate.py
+│   │   ├── pricing.py
+│   │   ├── queue.py
+│   │   ├── reconciliation.py
+│   │   ├── reverse_dcf.py         # Reverse DCF engine
+│   │   ├── scaling.py              # [STUB] until v2
+│   │   ├── scenario_price.py      # Scenario price engine
+│   │   ├── sizing.py
+│   │   ├── state_machine.py        # Holding state transitions (see §8.2)
+│   │   ├── stop_loss_monitor.py    # logic; daemon is in cortex/
+│   │   ├── thesis_reeval.py       # Thesis re-evaluation engine
+│   │   ├── ticker_metrics.py      # Ticker metrics engine
+│   │   └── trailing_stop.py       # Trailing stop engine
 │   ├── sim/
 │   │   ├── __init__.py
-│   │   ├── ledger.py               # paper portfolio ledger
-│   │   └── alpaca_paper_adapter.py
+│   │   ├── alpaca_paper_adapter.py
+│   │   └── ledger.py               # paper portfolio ledger
 │   ├── agents/                     # specified in Agents.md
 │   │   ├── __init__.py
 │   │   ├── base.py                 # PersonaRunner
-│   │   ├── gatekeeper.py           # deterministic, not LLM
-│   │   ├── macro_regime.py
+│   │   ├── bear_advocate.py       # Wave-2 bear case advocate
+│   │   ├── bull_advocate.py       # Wave-2 bull case advocate
 │   │   ├── catalyst_summarizer.py
-│   │   ├── moat_analyst.py
+│   │   ├── cross_persona_auditor.py # Wave-2 citation/consistency auditor
+│   │   ├── crucible.py
+│   │   ├── episodic_context.py     # episodic context injection (Agents.md §18)
+│   │   ├── forensics.py
+│   │   ├── gatekeeper.py           # deterministic, not LLM
 │   │   ├── growth_hunter.py
 │   │   ├── insider_activity.py
-│   │   ├── short_interest.py
-│   │   ├── forensics.py
-│   │   ├── crucible.py
+│   │   ├── macro_regime.py
 │   │   ├── memo_writer.py
-│   │   ├── episodic_context.py     # episodic context injection (Agents.md §18)
+│   │   ├── moat_analyst.py
+│   │   ├── short_interest.py
+│   │   ├── simulation.py          # Simulation agent for what-if analysis
+│   │   ├── valuation_agent.py     # Post-arbitration forward-valuation assumptions
 │   │   ├── prompts/                # versioned, immutable in production
-│   │   │   ├── macro_regime.md
+│   │   │   ├── __init__.py
+│   │   │   ├── bear_advocate.md
+│   │   │   ├── bull_advocate.md
 │   │   │   ├── catalyst_summarizer.md
-│   │   │   ├── moat_analyst.md
+│   │   │   ├── cross_persona_auditor.md
+│   │   │   ├── crucible.md
+│   │   │   ├── forensics.md
 │   │   │   ├── growth_hunter.md
 │   │   │   ├── insider_activity.md
+│   │   │   ├── macro_regime.md
+│   │   │   ├── memo_writer.md
+│   │   │   ├── moat_analyst.md
 │   │   │   ├── short_interest.md
-│   │   │   ├── forensics.md
-│   │   │   ├── crucible.md
-│   │   │   └── memo_writer.md
+│   │   │   └── valuation_agent.md
 │   │   ├── grammars/               # GBNF files for llama-server
-│   │   │   └── *.gbnf
+│   │   │   ├── __init__.py
+│   │   │   ├── bear_advocate.gbnf
+│   │   │   ├── bull_advocate.gbnf
+│   │   │   ├── catalyst_summarizer.gbnf
+│   │   │   ├── cross_persona_auditor.gbnf
+│   │   │   ├── crucible.gbnf
+│   │   │   ├── forensics.gbnf
+│   │   │   ├── growth_hunter.gbnf
+│   │   │   ├── insider_activity.gbnf
+│   │   │   ├── macro_regime.gbnf
+│   │   │   ├── memo_writer.gbnf
+│   │   │   ├── moat_analyst.gbnf
+│   │   │   ├── short_interest.gbnf
+│   │   │   ├── test_grammar.gbnf
+│   │   │   └── valuation_agent.gbnf
 │   │   ├── schemas_json/           # JSON Schema files for Ollama
-│   │   │   └── *.json
+│   │   │   ├── __init__.py
+│   │   │   ├── bear_advocate.json
+│   │   │   ├── bull_advocate.json
+│   │   │   ├── catalyst_summarizer.json
+│   │   │   ├── cross_persona_auditor.json
+│   │   │   ├── crucible.json
+│   │   │   ├── forensics.json
+│   │   │   ├── growth_hunter.json
+│   │   │   ├── insider_activity.json
+│   │   │   ├── macro_regime.json
+│   │   │   ├── memo_writer.json
+│   │   │   ├── moat_analyst.json
+│   │   │   ├── short_interest.json
+│   │   │   └── valuation_agent.json
 │   │   └── sanity/                 # per-persona sanity validators
+│   │       ├── __init__.py
+│   │       ├── base.py
+│   │       ├── bear_advocate.py
+│   │       ├── bull_advocate.py
+│   │       ├── catalyst_summarizer.py
+│   │       ├── cross_persona_auditor.py
+│   │       ├── crucible.py
+│   │       ├── forensics.py
+│   │       ├── growth_hunter.py
+│   │       ├── insider_activity.py
 │   │       ├── macro_regime.py
-│   │       └── ...
+│   │       ├── memo_scorer.py
+│   │       ├── memo_writer.py
+│   │       ├── moat_analyst.py
+│   │       ├── short_interest.py
+│   │       └── valuation_agent.py
 │   ├── nervous/
 │   │   ├── __init__.py
-│   │   ├── orchestrator.py
 │   │   ├── api.py                  # FastAPI app for write actions + SSE
-│   │   ├── sse_publisher.py
+│   │   ├── auth.py                 # session token verification
 │   │   ├── checkpoint.py           # cycle resume from idempotency log
-│   │   └── auth.py                 # session token verification
+│   │   ├── mutation.py            # Mutation promotion orchestration
+│   │   ├── orchestrator.py
+│   │   ├── rate_limit.py          # API rate limiting
+│   │   ├── sse_publisher.py
+│   │   └── stop_poller.py         # Stop-loss event polling
 │   ├── cortex/
 │   │   ├── __init__.py
-│   │   ├── daemon.py               # main loop
-│   │   ├── drift.py                # cross-cycle drift monitoring
-│   │   ├── health.py               # process heartbeat checks
-│   │   ├── kill_switch.py
-│   │   ├── sleep_watch.py          # macOS sleep/wake detection
-│   │   ├── flywheel_monitor.py
-│   │   ├── disk_monitor.py
+│   │   ├── boot_detector.py       # detects gap-since-last-cycle, triggers cycle
 │   │   ├── clock_monitor.py        # NTP drift detection
 │   │   ├── crash_loop_detector.py
+│   │   ├── daemon.py               # main loop
+│   │   ├── disk_monitor.py
+│   │   ├── drift.py                # cross-cycle drift monitoring
+│   │   ├── flywheel_monitor.py
+│   │   ├── health.py               # process heartbeat checks
+│   │   ├── kill_switch.py
 │   │   ├── model_integrity.py     # GGUF SHA256 verification
-│   │   ├── boot_detector.py       # detects gap-since-last-cycle, triggers cycle
 │   │   ├── self_check.py          # meta-monitor: pings cortex itself
+│   │   ├── sleep_watch.py          # macOS sleep/wake detection
 │   │   └── stop_loss_daemon.py    # the pmacs-stoploss process body
 │   ├── mutation/                   # pmacs-mutation process
 │   │   ├── __init__.py
-│   │   ├── daemon.py               # main loop (§10.4)
-│   │   ├── candidate_generator.py  # rules in Agents.md §17
 │   │   ├── ab_runner.py            # SHADOW-only A/B execution
-│   │   ├── stat_test.py            # Welch's t-test, Cohen's d
+│   │   ├── candidate_generator.py  # rules in Agents.md §17
+│   │   ├── daemon.py               # main loop (§10.4)
 │   │   ├── promotion.py
-│   │   └── rollback.py
+│   │   ├── rollback.py
+│   │   └── stat_test.py            # Welch's t-test, Cohen's d
 │   ├── execution/
 │   │   ├── __init__.py
-│   │   ├── service.py              # the pmacs-execution process body
-│   │   ├── alpaca_adapter.py
-│   │   ├── ibkr_adapter.py         # [STUB] until LIVE_EARLY
+│   │   ├── adapter.py            # Broker adapter base class
+│   │   ├── alpaca_paper.py       # Alpaca paper API adapter
 │   │   ├── catastrophe_net.py      # broker-side wide stop placement
+│   │   ├── ibkr_adapter.py         # [STUB] until LIVE_EARLY
+│   │   ├── service.py              # the pmacs-execution process body
 │   │   └── signing.py              # Ed25519
-│   ├── web/                        # pmacs-dashboard process
+│   ├── web/                        # pmacs-web (combined dashboard + nervous)
 │   │   ├── __init__.py
 │   │   ├── app.py                  # dashboard FastAPI app
-│   │   ├── sse_client.py           # subscribes to nervous /events
+│   │   ├── config.py             # Web app configuration
+│   │   ├── cycle_snapshot.py     # Cycle state snapshots for UI
+│   │   ├── data.py               # Data layer for web routes
+│   │   ├── sse_client.py         # SSE event subscription
+│   │   ├── templating.py         # Jinja2 template helpers
 │   │   ├── routes/
-│   │   │   ├── dashboard.py
+│   │   │   ├── __init__.py
 │   │   │   ├── agents.py
-│   │   │   ├── pipeline.py
-│   │   │   ├── universe.py
 │   │   │   ├── cortex.py
+│   │   │   ├── dashboard.py
 │   │   │   ├── debug.py
-│   │   │   └── settings.py
+│   │   │   ├── memo.py            # Memo display route
+│   │   │   ├── pipeline.py
+│   │   │   ├── settings.py
+│   │   │   ├── ticker_data.py     # Ticker data API route
+│   │   │   ├── universe.py
+│   │   │   └── wizard.py          # Install wizard route
 │   │   ├── templates/              # Jinja2 + HTMX
-│   │   ├── components/             # reusable HTMX partials
-│   │   │   ├── card.html
-│   │   │   ├── statblock.html
-│   │   │   ├── persona_card.html
-│   │   │   ├── ticker_chip.html
-│   │   │   └── ...
+│   │   │   ├── agents.html
+│   │   │   ├── base.html
+│   │   │   ├── components/
+│   │   │   │   ├── empty_state.html
+│   │   │   │   ├── error_state.html
+│   │   │   │   ├── loading_state.html
+│   │   │   │   └── state_region.html
+│   │   │   ├── cortex.html
+│   │   │   ├── cost_widget.html
+│   │   │   ├── dashboard/
+│   │   │   │   ├── _decisions.html
+│   │   │   │   ├── _health.html
+│   │   │   │   ├── _mutation.html
+│   │   │   │   └── _positions.html
+│   │   │   ├── dashboard.html
+│   │   │   ├── debug.html
+│   │   │   ├── memo.html
+│   │   │   ├── pipeline.html
+│   │   │   ├── settings.html
+│   │   │   ├── ticker_detail.html
+│   │   │   ├── universe.html
+│   │   │   └── wizard/
+│   │   │       ├── _error.html
+│   │   │       ├── _head.html
+│   │   │       ├── _progress.html      # 10-dot progress strip
+│   │   │       ├── layout.html
+│   │   │       ├── step01_welcome.html
+│   │   │       ├── step02_inference.html
+│   │   │       ├── step03_model.html   # local: GGUF download + SHA256 verify
+│   │   │       ├── step04_keychain.html# credentials + embedding model download
+│   │   │       ├── step05_embedding.html # (legacy, currently unused — embedded into step04)
+│   │   │       ├── step06_dbinit.html
+│   │   │       ├── step07_dataping.html
+│   │   │       ├── step08_universe.html
+│   │   │       ├── step09_cycleprefs.html
+│   │   │       ├── step10_llm_provider.html   # cloud path: anthropic/openai/openrouter
+│   │   │       ├── step10_smoke_test.html
+│   │   │       └── step11_complete.html
 │   │   └── static/                 # Tailwind CSS, minimal JS, D3 for sankey
+│   │       ├── app.js
+│   │       ├── dist/
+│   │       │   └── tailwind.css
+│   │       ├── pmacs-anim.js
+│   │       ├── sankey.js
+│   │       ├── src/
+│   │       │   └── input.css
+│   │       ├── style.css
+│   │       ├── tailwind.css
+│   │       └── vendor/
+│   │           ├── d3.min.js
+│   │           ├── fonts/
+│   │           │   ├── font-00.woff2
+│   │           │   ├── font-01.woff2
+│   │           │   ├── font-02.woff2
+│   │           │   ├── font-03.woff2
+│   │           │   ├── font-04.woff2
+│   │           │   ├── font-05.woff2
+│   │           │   ├── font-06.woff2
+│   │           │   ├── font-07.woff2
+│   │           │   ├── font-08.woff2
+│   │           │   ├── font-09.woff2
+│   │           │   ├── font-10.woff2
+│   │           │   ├── font-11.woff2
+│   │           │   ├── font-12.woff2
+│   │           │   └── fonts.css
+│   │           └── htmx.min.js
 │   └── installer/
 │       ├── __init__.py
 │       ├── wizard.py               # the 10-step run wizard (Source.md §12)
 │       └── steps/
-│           ├── step_01_welcome.py
-│           ├── step_02_backend.py
-│           ├── step_03_model.py
-│           ├── step_04_keychain.py
-│           ├── step_05_databases.py
-│           ├── step_06_connectivity.py
-│           ├── step_07_universe.py
-│           ├── step_08_preferences.py
-│           ├── step_09_smoketest.py
-│           └── step_10_promote.py
-├── gbnf/                           # GBNF grammar files (mirrored in pmacs/agents/grammars/)
-├── prompts/                        # canonical persona prompts (mirrored)
+│           ├── __init__.py
+│           ├── check_system.py
+│           ├── configure_broker.py
+│           ├── configure_data.py
+│           ├── configure_llm.py
+│           ├── create_dirs.py
+│           ├── generate_keys.py
+│           ├── smoke_test.py
+│           ├── verify_data.py
+│           └── verify_llm.py
 ├── tests/
-│   ├── unit/
-│   ├── integration/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── accessibility/
+│   ├── e2e/
 │   ├── fixtures/                   # synthetic data for smoke-test cycle
+│   ├── integration/
 │   ├── mutation_eval/              # mutation A/B test harness
+│   ├── performance/
 │   ├── property/                   # hypothesis-based property tests
-│   └── e2e/                        # end-to-end cycle replays
+│   └── unit/
 ├── ops/
-│   ├── migrate.py                  # DB schema migrations
-│   ├── backup_verify.py
 │   ├── audit_chain_verify.py
-│   ├── install_pf_rules.sh         # pf rules to block llama-server egress
+│   ├── audit_chain_verify.sh
+│   ├── backup_verify.py
+│   ├── compute_model_hash.sh
+│   ├── download_embedding_model.py
 │   ├── install_launchd.sh          # writes per-process plists
+│   ├── install_pf_rules.sh         # pf rules to block llama-server egress
+│   ├── install_system_users.sh
+│   ├── migrate.py                  # DB schema migrations
+│   ├── profile_cycle.py
+│   ├── profile_memory.py
+│   ├── profile_system.py
 │   ├── spec_consistency.py         # CI: Source.md ↔ Architecture.md ↔ Agents.md ↔ Phases.md cross-ref check
+│   ├── start_inference.sh
+│   ├── token_usage.py
 │   └── verify_isolation.py         # runtime process isolation audit
 ├── config/
+│   ├── crucible.toml               # CPS budgets
+│   ├── model_hashes.toml           # SHA256 of GGUF + mmproj files
+│   ├── model_registry.json         # OpenRouter / local backend selection
+│   ├── mutation.toml               # recommendation thresholds, A/B sample sizes
 │   ├── resources.toml              # hardware budgets
 │   ├── risk.toml                   # risk thresholds
-│   ├── crucible.toml               # CPS budgets
-│   ├── mutation.toml               # recommendation thresholds, A/B sample sizes
-│   ├── model_registry.json         # llama-server / Ollama backend selection
-│   ├── model_hashes.toml           # SHA256 of GGUF + mmproj files
-│   ├── notification.toml           # operator notification levels (Source.md §13.5)
 │   └── source_criticality.toml     # CRITICAL / IMPORTANT / NICE_TO_HAVE per data source
 ├── docs/
+│   ├── OPTIMIZATION-AUDIT.md
+│   ├── adr/                        # Architecture Decision Records (see §21)
 │   ├── operator_runbook.md         # this is for the operator, not Claude Code
-│   └── adr/                        # Architecture Decision Records (see §21)
+│   └── web-architecture-review.md
 └── launchd/                        # plists for each pmacs-* process
+    ├── com.pmacs.cortex-self-check.plist
     ├── com.pmacs.cortex.plist
-    ├── com.pmacs.nervous.plist
     ├── com.pmacs.execution.plist
-    ├── com.pmacs.dashboard.plist
-    ├── com.pmacs.stoploss.plist
-    ├── com.pmacs.mutation.plist
     ├── com.pmacs.inference.plist
-    └── com.pmacs.cortex_self_check.plist
+    ├── com.pmacs.mutation.plist
+    ├── com.pmacs.nervous.plist
+    └── com.pmacs.stoploss.plist
 ```
-
----
 
 ## 4. Process topology and IPC
 
-PMACS runs as **eight launchd processes** in dependency order. Each has a single responsibility and minimal privileges.
+PMACS runs as **seven launchd processes** in dependency order. The web dashboard and nervous API are merged into a single process (`pmacs-nervous` runs `pmacs.web.app:app` on :8000). Each has a single responsibility and minimal privileges.
 
 ### 4.1 Process inventory
 
@@ -526,10 +696,9 @@ PMACS runs as **eight launchd processes** in dependency order. Each has a single
 | `pmacs-cortex` | daemon | none | NONE | r/w meta tables | 2 |
 | `pmacs-cortex-self-check` | daemon | none | NONE | none | 2.5 |
 | `pmacs-execution` | UDS `/var/db/pmacs/exec.sock` | YES | broker only | w fills only | 3 |
-| `pmacs-nervous` | :8000 localhost | none | data API allowlist | r/w app tables | 4 |
+| `pmacs-nervous` | :8000 localhost | none | data API allowlist | r/w app tables (nervous), r/o all DBs (web routes) | 4 |
 | `pmacs-stoploss` | daemon (RTH only) | none | quote API only | r/w stop_events | 5 |
 | `pmacs-mutation` | daemon | none | NONE | r/w `mutation_*` tables | 6 |
-| `pmacs-dashboard` | :8000 localhost (loopback), served in-process by `pmacs-nervous` | none | NONE | r/o all DBs | 7 |
 
 ### 4.2 launchd configuration
 
@@ -547,7 +716,7 @@ Heartbeats: each process writes `/var/db/pmacs/heartbeat/<proc>.ts` (Unix epoch 
 
 | From → To | Protocol | Auth | Purpose |
 |---|---|---|---|
-| Web → Nervous (write) | HTTP/JSON on :8000 | operator confirmation per write request (high-impact); session token (low-impact) | Operator actions |
+| Web → Nervous (write) | In-process function call | operator confirmation per write request (high-impact); session token (low-impact) | Operator actions |
 | Web ← Nervous (live events) | SSE on :8000/events | Session token; bound to operator session | Real-time UI updates |
 | Nervous → Inference | HTTP/JSON on :8080 | Local API key (Keychain) | LLM calls |
 | Nervous → Execution | UDS `/var/db/pmacs/exec.sock` | Ed25519 signature on TradePlan | Trade submission |
@@ -864,23 +1033,40 @@ Implements `Source.md §19`. Live SSE stream of debug events. Filters by level/p
 
 ### 6.1 Sources
 
+Source criticality + freshness budgets live in `config/source_criticality.toml`
+at runtime and are mirrored as a Python map in `pmacs/data/staleness.py`. The
+table below is the spec-authoritative view (Phase 7c / Phase 9 additions in
+italics):
+
 | Source | Role | Cost | Rate limit | Criticality |
 |---|---|---|---|---|
-| SEC EDGAR | 10-K/10-Q/8-K filings | Free | 10 req/sec | CRITICAL |
+| SEC EDGAR | 10-K/10-Q/8-K filings, EDGAR XBRL KPIs | Free | 10 req/sec | CRITICAL |
 | SEC Form 4 | Insider transactions | Free | 10 req/sec (shared) | IMPORTANT |
-| FINRA | Short interest | Free | 60 req/min | NICE_TO_HAVE |
-| Finnhub | Earnings calendar | Free tier | 60 req/min | IMPORTANT |
+| FINRA | Short interest (also proxied via yfinance `.info`) | Free | 60 req/min | IMPORTANT |
+| Finnhub | Earnings calendar, profile2 (sector/subsector) | Free tier | 60 req/min | CRITICAL |
 | Polygon.io | EOD OHLCV, corp actions | Starter $29/mo | 5 req/sec | CRITICAL |
 | openFDA | FDA decisions | Free | 240 req/min | IMPORTANT |
 | Alpaca data | Quote sanity, intraday quotes for stop-loss | Free | 200 req/min | CRITICAL |
-| Stock Analysis API / SimFin | Fundamentals | Free tier | 60 req/min | CRITICAL |
-| Company IR pages | Guidance via HTML delta | Free | 1 req/30s/symbol | NICE_TO_HAVE |
+| **Yahoo Finance (`yfinance`)** | Primary fundamentals — full annual cash-flow, FCF, SBC, margins, EPS, valuation multiples, plus short interest proxy via `.info.shortPercentOfFloat`. No API key. | Free | ~30 req/min (rate-limited library) | CRITICAL |
+| Stock Analysis API / SimFin | Fundamentals fallback (Finnhub gap-fill on metrics yfinance misses) | Free tier | 60 req/min | IMPORTANT |
+| Company IR pages | Guidance via HTML delta | Free | 1 req/30s/symbol | IMPORTANT |
 | Tier 1-3 press | NYT, WSJ, Reuters | Free tier | varies | NICE_TO_HAVE |
 | FOMC calendar/minutes | Macro regime | Free | 10 req/min | NICE_TO_HAVE |
-| FRED | Treasury yield curve | Free | 120 req/min | IMPORTANT |
-| ECB | EUR/USD daily reference rate | Free | 60 req/day | IMPORTANT |
+| FRED | Treasury yield curve | Free | 120 req/min | NICE_TO_HAVE |
+| ECB | EUR/USD daily reference rate | Free | 60 req/day | NICE_TO_HAVE |
 
 **No Tier 4** (Reddit/X/social) — noise + injection surface (`Source.md §4`).
+
+**Primary-fundamentals swap (Phase 7c, Jun 2026):** yfinance replaced the paid
+Stock Analysis API / SimFin feed as the primary fundamentals source for the
+ticker page and the ValuationAgent. Finnhub is retained as a fallback for
+metrics yfinance does not return. Rationale: yfinance's free-tier data is
+richer (full 4-year FCF/SBC series, `forward_valuation` packet for guidance
+proxy) and Finnhub's free tier has incomplete fields whose percentage quirks
+have corrupted memo numbers in the past (`Source.md §16.8` operator directive).
+When yfinance is unavailable, `Source.md §16.8` fallback rule applies: prefer
+N/A over an unreliable number — Finnhub's value is never an override of a
+yfinance value, only a gap-fill.
 
 ### 6.2 Universe (operator-curated, see `Source.md §8`)
 
@@ -910,7 +1096,9 @@ from datetime import datetime, timedelta
 from pmacs.schemas.freshness import FreshnessResult
 
 STALENESS_BUDGET = {
-    "polygon.ohlcv.eod":    timedelta(hours=20),
+    # Polygon EOD is the canonical price source for cycle decisions.
+    # Tightened from 20h to 5min to match Alpaca intraday freshness.
+    "polygon.ohlcv.eod":    timedelta(minutes=5),
     "alpaca.bar.intraday":  timedelta(minutes=5),
     "alpaca.quote":         timedelta(minutes=15),
     "edgar.filing":         timedelta(days=1),
@@ -920,7 +1108,11 @@ STALENESS_BUDGET = {
     "fomc.calendar":        timedelta(days=14),
     "form4.insider":        timedelta(days=2),
     "finra.short_interest": timedelta(days=16),
-    "fundamentals.api":     timedelta(days=7),
+    # Yahoo Finance — yfinance — is the primary fundamentals source post Phase 7c.
+    # Stale-by >7d metrics (typically post-quarter filing lags) trigger INSUFFICIENT_DATA
+    # in the ValuationAgent so the operator sees the staleness in the memo.
+    "yahoo.fundamentals":   timedelta(days=7),
+    "fundamentals.api":     timedelta(days=7),  # legacy SimFin/Stock Analysis key retained
     "fred.yield_curve":     timedelta(days=2),
     "ecb.fx_rate":          timedelta(days=2),
     "press.tier1":          timedelta(hours=24),
@@ -928,24 +1120,39 @@ STALENESS_BUDGET = {
     "press.tier3":          timedelta(days=7),
 }
 
-# Loaded from config/source_criticality.toml at startup
+# Loaded from config/source_criticality.toml at startup. Mirrors the live
+# table (config/source_criticality.toml has the operator-editable copy;
+# this dict is the spec-authoritative map).
 SOURCE_CRITICALITY = {
     "polygon.ohlcv.eod":    "CRITICAL",
     "alpaca.bar.intraday":  "CRITICAL",
-    "alpaca.quote":         "IMPORTANT",
+    "alpaca.quote":         "CRITICAL",  # bumped from IMPORTANT (Phase 9 stop-loss depends on it)
+    "alpaca.data":          "CRITICAL",
+    "edgar":                "CRITICAL",
     "edgar.filing":         "CRITICAL",
-    "fundamentals.api":     "CRITICAL",
+    "yahoo.fundamentals":   "CRITICAL",  # added Phase 7c — powers ticker-page fundamentals
+    "fundamentals.api":     "IMPORTANT",  # fallback only (Finnhub gap-fill)
+    "fundamentals":         "IMPORTANT",
+    "finnhub":              "CRITICAL",  # bumped from IMPORTANT (Phase 7c — earnings cal + fallback fundamentals)
     "finnhub.earnings_cal": "IMPORTANT",
+    "openfda":              "IMPORTANT",
     "openfda.decisions":    "IMPORTANT",
+    "ir_pages":             "IMPORTANT",
     "ir_page.delta":        "NICE_TO_HAVE",
-    "fomc.calendar":        "NICE_TO_HAVE",
-    "form4.insider":        "IMPORTANT",
-    "finra.short_interest": "NICE_TO_HAVE",
-    "fred.yield_curve":     "IMPORTANT",
-    "ecb.fx_rate":          "IMPORTANT",
-    "press.tier1":          "NICE_TO_HAVE",
+    "press":                "IMPORTANT",
+    "press.tier1":          "IMPORTANT",
     "press.tier2":          "NICE_TO_HAVE",
     "press.tier3":          "NICE_TO_HAVE",
+    "fomc":                 "NICE_TO_HAVE",
+    "fomc.calendar":        "NICE_TO_HAVE",
+    "form4":                "IMPORTANT",
+    "form4.insider":        "IMPORTANT",
+    "finra":                "IMPORTANT",
+    "finra.short_interest": "IMPORTANT",  # bumped from NICE_TO_HAVE
+    "fred":                 "NICE_TO_HAVE",
+    "fred.yield_curve":     "NICE_TO_HAVE",
+    "ecb":                  "NICE_TO_HAVE",
+    "ecb.fx_rate":          "NICE_TO_HAVE",
 }
 
 class StaleDataError(Exception):
@@ -1563,6 +1770,140 @@ CREATE TABLE operator_overrides (
 );
 ```
 
+### 8.5a Per-cycle decision + memo + holding tables (added in Phases 9-15)
+
+The original §8.5 listed the cycle/mode/queue/mutation/cross-DB tables. The
+implementation (`pmacs/storage/sqlite.py::SCHEMA_SQL`) grew the following
+tables during Phase 9-15 cycles. They are documented here so the
+operator-facing read-paths in `pmacs/web/data.py` and
+`pmacs/web/routes/agents.py` reference a stable surface.
+
+```sql
+-- Holdings (key fields; full data in KuzuDB; price_usd snapshot at decision time)
+CREATE TABLE holdings (
+    id TEXT PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    state TEXT NOT NULL,            -- mirrors HoldingState enum
+    cycle_id_opened TEXT NOT NULL,
+    cycle_id_closed TEXT,
+    entry_date TEXT,
+    exit_date TEXT,
+    entry_price_usd REAL,
+    exit_price_usd REAL,
+    position_size_usd REAL,
+    sector TEXT,
+    verdict TEXT,
+    conviction_score REAL,
+    thesis_summary TEXT,
+    current_price_usd REAL,
+    price_target_usd REAL,
+    last_reeval_at TEXT,            -- added migration
+    abort_reason TEXT,              -- added migration
+    stop_price_usd REAL,            -- added migration
+    thesis_review_due_date TEXT     -- added migration (90-day cycle)
+);
+CREATE INDEX idx_holdings_ticker ON holdings(ticker);
+CREATE INDEX idx_holdings_state ON holdings(state);
+
+-- Decisions: per-ticker per-cycle verdict + conviction + thesis summary
+CREATE TABLE decisions (
+    id INTEGER PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL NOT NULL DEFAULT 0.0,
+    thesis_summary TEXT,
+    decided_at TEXT NOT NULL,
+    priority_band INTEGER
+);
+
+-- Memos: per-ticker structured memo JSON (MemoWriterOutput)
+CREATE TABLE memos (
+    id INTEGER PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL NOT NULL DEFAULT 0.0,
+    memo_json TEXT NOT NULL,         -- full MemoWriterOutput serialized
+    raw_text TEXT,                  -- legacy text-rendered memo
+    memo_score REAL,                -- MemoScorer output (Phase 13)
+    memo_grade TEXT,                -- A/B/C/D/F (Phase 13)
+    decided_at TEXT NOT NULL
+);
+
+-- Lessons (Phase 9 step 23) — operator-facing knowledge extracted from resolutions
+CREATE TABLE lessons (
+    id INTEGER PRIMARY KEY,
+    ticker TEXT,
+    lesson_type TEXT,
+    text TEXT,
+    evidence_ids TEXT,
+    cycle_id TEXT,
+    created_at TEXT
+);
+
+-- Failure classifications (Phase 9 step 25; FDE persistence mirror of KuzuDB)
+CREATE TABLE failure_classifications (
+    id INTEGER PRIMARY KEY,
+    holding_id TEXT,
+    taxonomy TEXT,
+    severity REAL,
+    summary TEXT,
+    cycle_id TEXT,
+    classified_at TEXT
+);
+
+-- Scan records (Phase 9 step 13n) — per-cycle per-ticker snapshot of verdict/conviction/price
+CREATE TABLE scan_records (
+    id INTEGER PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    cycle_id TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    conviction_score REAL,
+    direction TEXT,                 -- 'UP' / 'DOWN' / 'FLAT'
+    created_at TEXT NOT NULL,
+    price_usd REAL                  -- IMP-6: price at decision time (added migration)
+);
+
+-- Pricing table (Phase 16) — OpenRouter `/api/v1/models` cache
+CREATE TABLE pricing_table (
+    model_id TEXT PRIMARY KEY,
+    input_price_per_token REAL NOT NULL,
+    output_price_per_token REAL NOT NULL,
+    cached_input_price_per_token REAL,
+    per_request_fee REAL NOT NULL DEFAULT 0.0,
+    fetched_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'openrouter'
+);
+
+-- Budget state (Phase 16) — current period totals + caps (SQLite, always present after migration)
+CREATE TABLE budget_state (
+    period TEXT PRIMARY KEY,        -- 'today' | 'this_month'
+    period_start TEXT NOT NULL,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    cap_usd REAL NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Budget history (Phase 16) — archived period totals
+CREATE TABLE budget_history (
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    period_type TEXT NOT NULL,      -- 'today' | 'this_month'
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    cap_usd REAL NOT NULL,
+    breached INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (period_type, period_start)
+);
+
+-- Wizard state — checkpoint + first-run completion flag
+CREATE TABLE wizard_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+```
+
 ### 8.6 DuckDB analytics tables (rolling windows = episodic memory)
 
 ```sql
@@ -1693,6 +2034,36 @@ Read via `pmacs/storage/keychain.py`. Never logged. Never serialized. CI grep-fa
 ---
 
 ## 9. Deterministic engines
+
+### 9.0 Mode manager
+
+`pmacs/engines/mode_manager.py` owns the SHADOW + PAPER → ... → LIVE_EXPANDED
+ladder. `pmacs/schemas/system.py::Mode` is the canonical enum and
+`VALID_MODE_TRANSITIONS` is the only legal transition graph. The ladder adds
+a pre-PAPER **`INSTALLING`** mode (`pmacs/schemas/system.py::Mode.INSTALLING`)
+that represents the wizard's pre-completion state; the wizard's final step
+calls `engines.mode_manager.transition_mode(INSTALLING → PAPER)`.
+
+| From | To | Operator confirmation |
+|---|---|---|
+| INSTALLING | SHADOW, PAPER | No (wizard handles) |
+| SHADOW | PAPER | No |
+| PAPER | PAPER_VALIDATED, SHADOW | **Yes** for PAPER_VALIDATED |
+| PAPER_VALIDATED | LIVE_EARLY, PAPER | **Yes** for LIVE_EARLY |
+| LIVE_EARLY | LIVE_STANDARD, PAPER_VALIDATED | **Yes** |
+| LIVE_STANDARD | LIVE_EXPANDED, LIVE_EARLY | **Yes** |
+| LIVE_EXPANDED | LIVE_STANDARD | (demotion) |
+
+`CONFIRMATION_REQUIRED_MODES = {PAPER_VALIDATED, LIVE_EARLY, LIVE_STANDARD, LIVE_EXPANDED}`
+is the authoritative set. `transition_mode(...)` raises `ValueError` if a
+promotion into that set is attempted without `operator_confirmed=True`. The
+`mode_history` SQLite table records every transition (id, from_mode, to_mode,
+reason, operator_confirmed, triggered_by, changed_at) and is the single
+audit-chain source for "what mode was the system in at cycle N?".
+
+The `INSTALLING` tier is rank 0 (`pmacs/engines/mode_manager.py::MODE_RANK`),
+below SHADOW (1), so auto-demotion paths (`triggered_by='AUTO_DEMOTION'`)
+correctly skip it.
 
 ### 9.1 ArbitrationEngine
 
@@ -1872,6 +2243,8 @@ Three pure-Python valuation engines — peers of `ticker_metrics.py` (`Source.md
 **ForwardValuationEngine** (`pmacs/engines/forward_valuation.py`): a deterministic EV/EBITDA forward-price engine on a 6-12 month horizon. Consumes the `ValuationAgent`'s structured bull/base/bear scenario assumptions (revenue growth path to the horizon, EBITDA margin at horizon, exit EV/EBITDA multiple, acquisition revenue contribution) and computes a per-scenario forward fair-value price: `forward_revenue = ttm_revenue * (1 + g)^years + acquisition_contribution`, `forward_ebitda = forward_revenue * margin`, `forward_ev = forward_ebitda * exit_multiple`, `equity_value = max(0, forward_ev - net_debt)` (limited liability — a shareholder's downside is floored at zero; when `forward_ev < net_debt` the scenario is flagged `equity underwater (EV < net debt), floored at $0` in the scenario-point notes rather than emitting a negative price), `price_per_share = equity_value / shares`. Output `ForwardValuationResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd` (scenario-probability-weighted using the agent's per-scenario `probability_of_occurrence`, NOT the Arbitrated vector), `scenario_points` (echo of inputs for audit), `is_available`. Inputs come from stored `EvidencePacket` primitives (annual revenue/total debt/cash, shares outstanding from `*_profile`, current price) via `_extract_forward_valuation_inputs`. When `is_available`, the orchestrator prefers `ForwardValuationResult` bull/base/bear prices for `ScenarioPriceEngine` over the reverse-DCF sensitivity grid; when not available, it falls back to the reverse-DCF grid unchanged. Never fabricates — missing primitives degrade to `is_available=False` + `notes`.
 
 **ValuationAgent** (`pmacs/agents/valuation_agent.py`): a post-arbitration LLM persona (`Agents.md §13b`) that emits the bull/base/bear *assumptions* consumed by the ForwardValuationEngine. It is NOT wave-1, does NOT enter Arbitration, does NOT emit `p_up/p_flat/p_down`, and does NOT amend conviction. The LLM never emits the price number (§1.6) — only the structured assumptions (growth path, margin trajectory, EBITDA margin, exit multiple, acquisition impact) with rationale and a per-scenario `probability_of_occurrence`. Guidance-growth is proxied from the yfinance `forward_valuation` packet (structured management guidance is not fetched); acquisition impact is inferred narratively from filings/press with a `LOW`/`MODERATE` confidence flag and a `data_gaps` note — never a fabricated deal number. An `INSUFFICIENT_DATA` fallback emits near-uniform probabilities and lists the N/A inputs rather than fabricating.
+
+**Current-valuation anchor** (`pmacs/nervous/orchestrator.py:_build_current_valuation_anchor`): a deterministic helper called immediately before the ValuationAgent runs. It assembles the observable market multiples (current EV/Sales, current EV/EBITDA, current P/S, analyst price-target consensus) from the same evidence packets the agent will see, and injects them into the agent's prompt as a "current valuation anchor". This grounds the agent's exit-multiple assumption in reality — without the anchor, the agent is free to assume an EV/Sales multiple that disagrees with what the market is paying today, and the memo can't surface the disagreement. With the anchor, the operator sees the gap between (a) the multiple the market is paying, (b) the multiple the agent assumes at the horizon, and (c) the analyst consensus — a non-obvious reconciliation most memos omit. The anchor is the single biggest accuracy lever for the forward-valuation block. The orchestrator also populates `ForwardValuationResult.current_ev_sales` and `analyst_target_mean_usd` so the memo can render the gap inline.
 
 **ScenarioPriceEngine** (`pmacs/engines/scenario_price.py`): consumes the `Arbitrated` probability vector plus bull/base/bear fair-value prices (from `ForwardValuationEngine` when available, else the reverse-DCF sensitivity grid) and produces a probability-weighted expected price: `E[price] = p_up * bull_price + p_flat * base_price + p_down * bear_price`. Output `ScenarioPriceResult`: `bull_price`, `base_price`, `bear_price`, `expected_price_usd`. Feeds `MemoWriterOutput` only — it does **not** replace `compute_ev`'s `ev_multiple` (which is a trade-expectancy ratio, `§9.4 PricingEngine`, not a valuation multiple). The two are kept distinct and both surface in the memo.
 
@@ -2104,7 +2477,7 @@ This ensures a stable baseline before mutation experiments begin (`Source.md §1
 
 Candidate arms run in SHADOW only, never PAPER or LIVE. The same evidence and gatekeeper output feeds both arms; the candidate arm uses the candidate config; the control arm uses production config. Outcomes (Brier, would-have-PnL) are computed against actual price evolution post-cycle.
 
-**Compute budget:** 5 tickers/cycle (rotated) × 7 analysis personas × ~90s per slot path × 2 arms = ~2,700s (~45min) added to cycle. Tight on a 1.8h base cycle but fits within the 18,000s daily budget (`config/resources.toml`).
+**Compute budget:** 5 tickers/cycle (rotated) × 7 analysis personas × ~90s per slot path × 2 arms = ~2,700s (~45min) added to cycle. Tight on a 1.8h base cycle but fits within the 21,600s daily budget (`config/resources.toml`).
 
 ### 10.11 Visibility
 
@@ -2382,16 +2755,27 @@ The persona dispatch is parallel within slots and concurrent across slots. Wave-
 
 ### 13.1 Triggers (Cortex engages on ANY of)
 
-1. Audit chain integrity failure (immediate)
-2. Rolling 5-day loss exceeds 10% of equity
-3. Single-day MtM loss exceeds 5% of equity (24h pause first; if persists, kill)
-4. Reconciliation mismatch in LIVE_* mode > $100 absolute or 5% of position
-5. Broker authentication failure (suggests credential compromise)
-6. Disk free < 2GB
-7. NTP clock drift > 60s
-8. Cortex meta-monitor unresponsive > 120s
-9. Process crash loop detected (>5 restarts in 60s)
-10. Model file integrity check failed on startup
+The canonical trigger list (`pmacs/cortex/kill_switch.py::TRIGGER_IDS`) has grown
+beyond the original 10 to absorb Phase-16 budget gates and operationally-observed
+failure modes. Current list (14 total):
+
+1. **AUDIT_CHAIN_INTEGRITY** — hash chain break or verification failure (immediate).
+2. **ROLLING_5D_LOSS** — rolling 5-day loss exceeds 10 % of equity.
+3. **SINGLE_DAY_MTM_LOSS** — single-day MtM loss exceeds 5 % of equity (24 h pause first; if persists, kill).
+4. **RECONCILIATION_MISMATCH** — reconciliation mismatch in LIVE_* mode > $100 absolute or 5 % of position.
+5. **BROKER_AUTH_FAILURE** — broker authentication failure (credential compromise).
+6. **DISK_SPACE_LOW** — disk free < 2 GB.
+7. **NTP_DRIFT** — clock drift > 60 s.
+8. **META_MONITOR_UNRESPONSIVE** — cortex meta-monitor > 120 s unresponsive.
+9. **CRASH_LOOP** — process crash loop (>5 restarts in 60 s).
+10. **MODEL_INTEGRITY** — GGUF SHA256 mismatch on startup.
+11. **CYCLE_BLOCKED_BUDGET_DAILY** — daily LLM-spend cap (`config/risk.toml [billing].daily_cap_usd`) tripped before a cycle could start. Phase 16.
+12. **CYCLE_BLOCKED_BUDGET_MONTHLY** — monthly cap tripped. Phase 16.
+13. **MANUAL** — operator-initiated via the Cortex page engage button.
+14. **CATASTROPHE_CANCEL_FAILED** — broker-side catastrophe-net cancel returned an error during an exit; potential duplicate-fill risk → fail-loud rather than submit the new exit order.
+
+`KillSwitchTrigger` (in `pmacs/schemas/system.py`) is the matching enum, used by
+`mode_history` + audit events so trigger labels stay canonical.
 
 ### 13.2 Disengagement
 
@@ -2673,14 +3057,20 @@ cpu_cores = 10
 gpu = "apple_m1_max"
 
 [runtime]
-backend = "llama_server"
+backend = "openrouter"
+gguf_path = ""
+threads = 8
 parallel_slots = 3
 ctx_size = 32768
 quantization = "UD-Q4_K_XL"
 
 [budgets]
 phase1_seconds_per_symbol = 270
-daily_llm_seconds_total = 18000
+# Wave-2 debate wall-clock budget per symbol (Agents.md §11b-§11d): bull/bear
+# advocates + cross-persona auditor run in parallel (max_workers=3) after wave-1.
+debate_wave_seconds_per_symbol = 180
+# Bumped from 18000 to absorb the +3 wave-2 LLM calls/symbol (debate wave).
+daily_llm_seconds_total = 21600
 
 [stop_loss]
 intraday_check_interval_seconds = 1800
@@ -2713,46 +3103,66 @@ minimum_ev_pct = 0.01
 [sizing]
 half_kelly = true
 correlation_floor = 0.30
+max_position_usd = 1000.0
+
+[capital]
+starting_usd = 5000.0
+
+[pricing]
+default_target_gain_pct = 0.10
+default_stop_loss_pct = 0.15
+
+[billing]
+# Operator-configured budget caps. Read by pmacs/billing/budget_enforcer.py
+# to gate LLM calls in enforce_budgets(). Settings → Budget panel writes here.
+# Defaults sized for a 10-ticker orchestrator cycle (~80–120 LLM calls at
+# deepseek-flash rates). Operator tunes in Settings once the token estimator
+# vs. actual cost gap is measured end-to-end.
+daily_cap_usd = 20.0
+monthly_cap_usd = 200.0
+cycle_soft_cap_usd = 8.0
 ```
 
 ### 17.3 `config/crucible.toml`
 
 ```toml
-[budget]
+[time_budget]
 seconds_per_attack = 90
-max_rewrite_cycles = 2
-default_on_budget_exhaust = "NO_TRADE"
+max_cycles = 2
+
+[defaults]
+temperature = 0.1
+default_verdict = "NO_TRADE"
 
 [severity]
-flip_threshold = 0.60     # severity above which Crucible's verdict overrides
+no_trade_threshold = 0.6
 ```
 
 ### 17.4 `config/mutation.toml`
 
 ```toml
 [activation]
-activation_after_paper_cycles = 50
-
-[ab]
-sample_size_min = 20
-shadow_tickers_per_cycle = 5
+min_paper_cycles = 50
 
 [recommendation]
 # All mutations require operator confirmation. No auto-promote.
-stat_sig_p_threshold = 0.05
-stat_sig_cohens_d_min = 0.20
-stat_sig_sample_min = 20
+p_value_threshold = 0.05
+cohens_d_threshold = 0.20
+min_sample_size = 20
 
 [probation]
 cycles = 30
-auto_rollback_window = 50
 
-[dimensions]
-prompts = "operator_only"
-source_weights = "auto_eligible"
-thresholds = "operator_only"
-persona_affinity = "auto_eligible"
-universe_flags = "flag_only"
+[auto_rollback]
+window_cycles = 50
+
+[concurrent]
+max_ab_tests = 3
+
+[temperature]
+analysis = 0.2
+crucible = 0.1
+memo_writer = 0.3
 ```
 
 ### 17.5 `config/model_registry.json`
@@ -2761,25 +3171,23 @@ universe_flags = "flag_only"
 {
   "backends": {
     "llama_server": { "url": "http://127.0.0.1:8080", "default_model": "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL", "structured_output": "gbnf", "api_key_ref": "", "base_url": "" },
-    "ollama":       { "url": "http://127.0.0.1:11434", "default_model": "qwen3.6:35b-a3b-coding-mxfp8", "structured_output": "json_schema", "api_key_ref": "", "base_url": "" },
+    "ollama":       { "url": "http://127.0.0.1:11434", "default_model": "qwen3.6:35b-a3b-coding-mxfp8", "structured_output": "json_schema", "api_key_ref": "", "base_url": "", "extra_params": {"max_tokens_multiplier": 2} },
     "anthropic":    { "default_model": "claude-sonnet-4-20250514", "structured_output": "tool_use", "api_key_ref": "pmacs.credentials.anthropic_api_key", "base_url": "https://api.anthropic.com" },
     "openai":       { "default_model": "gpt-4o", "structured_output": "json_schema", "api_key_ref": "pmacs.credentials.openai_api_key", "base_url": "https://api.openai.com/v1" },
     "openrouter":   { "default_model": "deepseek/deepseek-v4-flash", "structured_output": "json_schema", "api_key_ref": "pmacs.credentials.openrouter_api_key", "base_url": "https://openrouter.ai/api/v1" }
   },
-  "active": "llama_server",
+  "active": "openrouter",
   "personas": {
     "gatekeeper": null,
     "macro_regime": "default", "catalyst_summarizer": "default", "moat_analyst": "default",
     "growth_hunter": "default", "insider_activity": "default", "short_interest": "default",
-    "forensics": "default", "crucible": "default",
-    "bull_advocate": "default", "bear_advocate": "default", "cross_persona_auditor": "default",
-    "valuation_agent": "default"
+    "forensics": "default", "crucible": "default"
   },
   "candidates": {}
 }
 ```
 
-**Backend mode purity (operator directive, `Source.md §5` #4).** The `active` backend sets the inference mode for the entire cycle — there is no per-persona or per-call backend routing. Every persona (wave-1, wave-2 debate, `ValuationAgent`) uses the active backend. A `personas` value of `"default"` means "use the active backend's `default_model`"; no per-persona *backend* override is supported.
+**Backend mode purity (operator directive, `Source.md §5` #4).** The `active` backend sets the inference mode for the entire cycle — there is no per-persona or per-call backend routing. Every persona (wave-1 analysis personas, Crucible, MemoWriter) uses the active backend. Wave-2 debate personas (BullAdvocate, BearAdvocate, CrossPersonaAuditor) and ValuationAgent are implemented in the codebase but not yet registered in the default config; they use the active backend when enabled. A `personas` value of `"default"` means "use the active backend's `default_model`"; no per-persona *backend* override is supported.
 
 - **Local mode** — `active` is `llama_server` or `ollama`. Every persona's inference runs on that local backend. No cloud LLM calls anywhere in the cycle. The inference process is `pf`-blocked from internet egress. `structured_output` is `gbnf` (llama-server) or `json_schema` (Ollama).
 - **API mode** — `active` is `openai`, `openrouter`, `anthropic`, or another OpenAI-compatible provider. Every persona's inference calls the configured cloud provider. Egress is required, so the `pf`-block on inference is lifted in API mode. `structured_output` is `json_schema` (OpenAI-compatible: `response_format: {"type": "json_object"}` + prompt-injected field names + balanced-JSON extraction, `pmacs/agents/base.py::_call_llm_openai`) or `tool_use` (Anthropic).
@@ -2802,11 +3210,50 @@ The `candidates` field is populated by the Mutation Engine for in-flight A/B tes
 
 Mismatch on startup → kill switch (precondition §1, trigger #10).
 
-### 17.7 `config/notification.toml`
+### 17.7 Token-cost accounting (`pmacs/billing/`)
+
+Phase 16 subsystem that adds first-class cost observability to PMACS. The
+dashboard's cost widget (§ Source.md §14.7a) and Settings → Budget panel
+(§ Source.md §20.4a) are the operator surfaces. Module map:
+
+| Module | Role |
+|---|---|
+| `pmacs/billing/cost_calculator.py` | `compute_cost(prompt_t, completion_t, in_price, out_price) → USD`. Pure math. |
+| `pmacs/billing/token_estimator.py` | Pre-call cost estimate; uses `PERSONA_EXPECTED_OUTPUT_TOKENS` map in `schemas/billing.py` plus prompt-token estimation. |
+| `pmacs/billing/usage_logger.py` | Persists `api_usage` rows to DuckDB (per-call prompt/completion tokens + cost) and updates `budget_state` in SQLite. Fires `cost.call_completed` SSE event. |
+| `pmacs/billing/budget_enforcer.py` | Three-tier cap check (per-cycle soft / daily hard / monthly hard) plus runaway detection (1.5× rolling average). On breach, refuses the cycle and emits `CYCLE_BLOCKED_BUDGET_DAILY` / `CYCLE_BLOCKED_BUDGET_MONTHLY` debug events (kill-switch triggers 11 & 12). |
+| `pmacs/billing/period_roller.py` | Rolls daily/monthly `budget_state` periods on day/month boundary; archives prior totals to `budget_history`. Lazy-rolled from `_run_migrations` to avoid losing accrued spend on restart. |
+| `pmacs/billing/pricing.py` | Fetches OpenRouter `/api/v1/models`, caches `pricing_table` rows in SQLite (24 h TTL). Powers the Settings Pricing-table view. |
+| `pmacs/billing/reconciler.py` | Spawns background thread that hits OpenRouter `/generation` for each call's authoritative `actual_cost_usd`. Drift thresholds: <$0.001 silent, <$0.10 debug, <$1.00 warn. |
+| `pmacs/billing/drift_monitor.py` | Every 100 calls per persona, compares observed p90 output tokens against the configured `PERSONA_EXPECTED_OUTPUT_TOKENS`. Warns if drift > 20 % (otherwise the cost estimator silently underestimates). |
+
+**Storage** (Phase 16 SQLite + DuckDB additions, mirrored in
+`pmacs/storage/sqlite.py::SCHEMA_SQL` and `pmacs/storage/duckdb.py::initialize`):
+
+- `pricing_table(model_id PK, input_price_per_token, output_price_per_token, cached_input_price_per_token, per_request_fee, fetched_at, source)` — SQLite.
+- `budget_state(period PK 'today'|'this_month', period_start, total_cost_usd, cap_usd, updated_at)` — SQLite (always present after migration).
+- `budget_history(period_type, period_start PK, period_end, total_cost_usd, cap_usd, breached)` — SQLite, archived periods.
+- `api_usage(call_id PK, cycle_id, persona, model_id, generation_id, called_at, prompt_tokens, completion_tokens, cached_tokens, estimated_cost_usd, body_cost_usd, actual_cost_usd, latency_ms, succeeded, retry_count, error_code)` — DuckDB.
+
+**Caps** are written to `config/risk.toml [billing]`:
+
+```toml
+[billing]
+daily_cap_usd = 20.0       # default; operator-overridable via Settings → Budget
+monthly_cap_usd = 200.0
+cycle_soft_cap_usd = 8.0
+```
+
+`pmacs/billing/budget_enforcer.py::_load_billing_caps_from_risk_toml` reads
+this at runtime. The dashboard cost widget reads the same fields via
+`pmacs/web/routes/dashboard.py::_get_cost_state_for_dashboard` →
+`pmacs/web/data.py::get_cost_state`.
+
+### 17.8 `config/notification.toml` (NOT YET IMPLEMENTED)
 
 Maps the events in `Source.md §13.5` to surface/sound levels. Editable via Settings → General.
 
-### 17.8 `config/source_criticality.toml`
+### 17.9 `config/source_criticality.toml`
 
 ```toml
 "polygon.ohlcv.eod"    = "CRITICAL"
@@ -2827,7 +3274,7 @@ Enforced via macOS `pf` (Packet Filter):
 # /etc/pf.anchors/com.pmacs
 block out quick from any to any group _pmacs_inference
 block out quick from any to any group _pmacs_cortex
-block out quick from any to any group _pmacs_dashboard
+
 block out quick from any to any group _pmacs_mutation
 
 # Nervous: data API allowlist
@@ -2864,7 +3311,18 @@ All secrets in macOS Keychain with `pmacs.<category>.<key>` naming (§8.8). Read
 
 ### 18.4 Operator action authorization
 
-This is a single-operator, loopback-only system; there is no second-factor authentication gate. Sensitive writes still require an explicit operator action through the dashboard (a confirmation step, and a typed reason where noted) and every such action is hash-chain audited. The actions requiring explicit operator confirmation (exhaustive list matching Source.md §6 decision rights matrix):
+This is a single-operator, loopback-only system. There is no second-factor
+authentication gate; the original Phase-4 TOTP gate was removed at PR #2
+(`adb7c98` — *remove TOTP, consolidate dashboard to :8000*) on the rationale
+that loopback-only single-operator deployment does not benefit from a second
+factor that the same operator carries on the same machine. Sensitive writes
+still require an explicit operator action through the dashboard (a
+confirmation step, and a typed reason where noted) and every such action is
+hash-chain audited. CSRF tokens (`pmacs_csrf` HttpOnly cookie + `x-csrf-token`
+header on writes) gate every state-changing endpoint — replacing the TOTP
+gate's role as the request-authentication layer. The actions requiring
+explicit operator confirmation (exhaustive list matching Source.md §6
+decision rights matrix):
 - Mode promotion (PAPER → PAPER_VALIDATED → LIVE_*)
 - Kill switch disengage
 - Universe ticker add
@@ -2943,7 +3401,7 @@ Synthetic ticker (`SMKT`) with deterministic OHLCV, fake earnings, fake insider 
 | MacroRegime + supporting | ~120s | |
 | Resolution / calibration / engines | ~60s | |
 | Mutation A/B (5 ticker rotation) | ~2,700s (45min) | when active |
-| **Total typical** | ~9,200s (~2.5h) | well within 18,000s daily budget |
+| **Total typical** | ~9,200s (~2.5h) | well within 21,600s daily budget |
 
 ### 20.2 Memory budget
 
@@ -2980,11 +3438,11 @@ Disk-low kill-switch threshold: 2GB free. Operator should monitor.
 
 ADRs capture decisions with their context and rationale. Stored in `docs/adr/`.
 
-### ADR-001: Dashboard process is separate from Nervous
+### ADR-001: Dashboard and Nervous are merged into a single process
 
 **Context:** Both run FastAPI on localhost. Merging would simplify deployment.
-**Decision:** Keep separate.
-**Rationale:** Attack surface isolation. Dashboard handles browser traffic constantly; Nervous holds orchestration logic and write access. A vulnerability in dashboard cannot escalate to write. Cost: one extra plist.
+**Decision:** Merge into a single process running pmacs.web.app:app on :8000.
+**Rationale:** The original design separated dashboard from nervous for attack surface isolation. In practice, the single-operator loopback-only deployment model made the extra process overhead unjustified. The combined server simplifies deployment, reduces memory footprint, and eliminates an extra launchd plist. Dashboard routes still open SQLite with `mode=ro`; write endpoints are authenticated POST handlers in the same process.
 **Status:** Accepted.
 
 ### ADR-002: llama-server primary, Ollama secondary

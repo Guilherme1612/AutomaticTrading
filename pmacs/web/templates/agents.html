@@ -66,16 +66,25 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
         </div>
-        <input id="solo-ticker-input" type="text" placeholder="Research a ticker... (e.g. AAPL, NVDA)"
-               class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm font-mono bg-transparent border-none text-text-primary placeholder:text-text-muted/80 focus:outline-none"
-               maxlength="10" autocomplete="off" spellcheck="false"
-               onkeydown="if(event.key==='Enter')runSoloAnalysis()">
+        {# Picker chip — opens the autocomplete overlay (Universe-style).
+           Renders an empty placeholder until _onSoloTickerPicked() selects a row. #}
+        <button type="button" id="solo-picker-btn" onclick="_openSoloTickerPicker()"
+                aria-haspopup="dialog"
+                aria-label="Choose a ticker to research"
+                class="flex-1 min-w-0 px-2 sm:px-3 py-2 text-xs sm:text-sm bg-transparent border border-dashed border-border-subtle rounded-xl text-left text-text-muted hover:border-crucible/40 hover:text-text-primary transition-colors flex items-center justify-between gap-2">
+            <span id="solo-picker-label" class="font-mono truncate">Choose a ticker to research</span>
+            <svg class="w-3.5 h-3.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </button>
         <button type="button" id="solo-run-btn"
                 onclick="runSoloAnalysis()"
                 class="px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-semibold bg-crucible-soft text-crucible rounded-xl hover:bg-crucible/20 transition-colors whitespace-nowrap">
             Analyze
         </button>
     </div>
+    {# Inline helper — shown only when Analyze is pressed with no selection. Persists until a ticker is picked. #}
+    <p id="solo-needs-selection" class="hidden mt-2 text-xs text-warning">
+        Pick a ticker above to start research.
+    </p>
     <div id="solo-status" class="hidden mt-2 pt-2 border-t border-border/30">
         <p class="text-xs text-text-muted" id="solo-status-text">Preparing...</p>
     </div>
@@ -262,7 +271,7 @@
                 <div class="persona-progress mb-1.5">
                     <div class="persona-progress-fill" style="width: 0%" data-progress-bar></div>
                 </div>
-                <p class="text-[11px] text-text-muted" data-status-text>{{ agent_idle_text.get(persona.id, 'Idle — waiting for cycle') }}</p>
+                <p class="text-[11px] text-text-muted" data-status-text>{% if agent_idle_text is defined and agent_idle_text %}{{ agent_idle_text.get(persona.id, 'Idle — waiting for cycle') }}{% else %}Idle — waiting for cycle{% endif %}</p>
             {% endif %}
             </div>
 
@@ -288,7 +297,11 @@
                     {% endif %}
                     {% if persona.analysis|length > 150 or (persona.evidence_cited and persona.evidence_cited|length > 3) %}
                     <button type="button"
-                        onclick='openAgentModal({{ persona.name | tojson | safe }}, {{ persona.analysis | tojson | safe }}, {{ (persona.evidence_cited or []) | tojson | safe }}, {{ persona.confidence | default(0) | tojson | safe }})'
+                        data-persona-name="{{ persona.name | e }}"
+                        data-analysis="{{ persona.analysis | e }}"
+                        data-evidence="{{ (persona.evidence_cited or []) | tojson }}"
+                        data-confidence="{{ persona.confidence | default(0) }}"
+                        onclick="openAgentModal(this.dataset.personaName, this.dataset.analysis, JSON.parse(this.dataset.evidence), Number(this.dataset.confidence))"
                         class="mt-1 text-[10px] text-accent hover:underline font-medium">
                         View full analysis →
                     </button>
@@ -514,7 +527,7 @@
     {% if decision_summary %}
     <div class="space-y-2">
         {% for d in decision_summary %}
-        <a href="/ticker/{{ d.ticker }}#personas"
+        <a href="/memo/{{ d.ticker }}"
            class="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-2.5 sm:p-3 bg-surface-sunken/50 rounded-xl hover:bg-border-subtle/30 transition-colors group"
            data-stagger>
             <span class="font-mono font-semibold text-sm text-text-primary">{{ d.ticker }}</span>
@@ -1277,19 +1290,179 @@ function _applyAgentResultToCard(card, data) {
 
 // ─── Solo Research Runner ──────────────────────────────────────────────────
 var _soloResearchTicker = null;  // Track active solo research ticker
+var _selectedSoloTicker = null;  // {ticker, name} selected from the picker overlay, or null
+var _soloAcTimer = null;
+var _soloAcActiveIdx = -1;
+
+// Open the Universe-style picker overlay. Re-uses /api/universe/search and the
+// .ticker-autocomplete-* CSS classes already loaded globally from style.css.
+function _openSoloTickerPicker() {
+    var existing = document.getElementById("solo-ticker-ac-overlay");
+    if (existing) { existing.classList.remove("hidden"); }
+    else {
+        var overlay = document.createElement("div");
+        overlay.id = "solo-ticker-ac-overlay";
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-label", "Choose a ticker to research");
+        overlay.className = "fixed inset-0 z-40 flex items-start justify-center pt-24";
+        overlay.style.background = "rgba(0,0,0,0.35)";
+        overlay.innerHTML =
+            '<div class="ticker-autocomplete-wrap">' +
+            '  <input id="solo-ticker-ac-input" class="ticker-autocomplete-input" type="text" placeholder="Type ticker (e.g. NBIS, AAPL)..." autocomplete="off" spellcheck="false" aria-label="Search ticker">' +
+            '  <div id="solo-ticker-ac-dropdown" class="ticker-autocomplete-dropdown hidden card card-glass rounded-xl"></div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener("click", function(e) {
+            if (e.target === overlay) _closeSoloTickerPicker();
+        });
+
+        var input = document.getElementById("solo-ticker-ac-input");
+        input.addEventListener("input", function() {
+            _soloAcActiveIdx = -1;
+            _soloAcDebounce(input.value);
+        });
+        input.addEventListener("keydown", function(e) {
+            var dd = document.getElementById("solo-ticker-ac-dropdown");
+            var items = dd ? dd.querySelectorAll(".ticker-autocomplete-item") : [];
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                _soloAcActiveIdx = Math.min(_soloAcActiveIdx + 1, items.length - 1);
+                _soloAcHighlight(items);
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                _soloAcActiveIdx = Math.max(_soloAcActiveIdx - 1, -1);
+                _soloAcHighlight(items);
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (_soloAcActiveIdx >= 0 && items[_soloAcActiveIdx]) {
+                    var idx = _soloAcActiveIdx;
+                    items[idx].click();
+                } else if (input.value.trim()) {
+                    // Free-typed value: select it as {ticker, name: ""}
+                    _onSoloTickerPicked(input.value.trim().toUpperCase(), "");
+                }
+            } else if (e.key === "Escape") {
+                _closeSoloTickerPicker();
+            }
+        });
+    }
+    // Pre-fill with current selection (so the user can see what's picked)
+    var pre = _selectedSoloTicker ? _selectedSoloTicker.ticker : "";
+    var input = document.getElementById("solo-ticker-ac-input");
+    if (input) { input.value = pre; }
+    // Refresh dropdown now if we pre-filled
+    if (pre) { _soloAcDebounce(pre); }
+    setTimeout(function() { if (input) input.focus(); if (input) input.select(); }, 50);
+}
+
+function _closeSoloTickerPicker() {
+    var overlay = document.getElementById("solo-ticker-ac-overlay");
+    if (overlay) overlay.classList.add("hidden");
+    // Dropdown stays mounted (reused on next open); just hide it
+    var dd = document.getElementById("solo-ticker-ac-dropdown");
+    if (dd) dd.classList.add("hidden");
+}
+
+function _soloAcDebounce(val) {
+    clearTimeout(_soloAcTimer);
+    if (!val || val.trim().length < 1) {
+        _soloAcShowDropdown([]);
+        return;
+    }
+    _soloAcTimer = setTimeout(function() { _soloAcSearch(val.trim()); }, 200);
+}
+
+function _soloAcSearch(q) {
+    fetch("/api/universe/search?q=" + encodeURIComponent(q))
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _soloAcShowDropdown(data.results || []); })
+        .catch(function() { _soloAcShowDropdown([]); });
+}
+
+function _soloAcShowDropdown(results) {
+    _soloAcActiveIdx = -1;
+    var dd = document.getElementById("solo-ticker-ac-dropdown");
+    if (!dd) return;
+    if (results.length === 0) {
+        dd.innerHTML = '<div class="ticker-autocomplete-empty">No matches found</div>';
+        dd.classList.remove("hidden");
+        return;
+    }
+    var html = "";
+    for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        var src = r.source === "finnhub" ? '<span class="ticker-source">API</span>' : "";
+        html += '<div class="ticker-autocomplete-item" data-ticker="' + escapeHtml(r.ticker) + '" data-name="' + escapeHtml(r.name || "") + '">' +
+            '<span class="ticker-symbol">' + escapeHtml(r.ticker) + src + '</span>' +
+            '<span class="ticker-name">' + escapeHtml(r.name || "") + '</span>' +
+            '</div>';
+    }
+    dd.innerHTML = html;
+    dd.classList.remove("hidden");
+
+    dd.querySelectorAll(".ticker-autocomplete-item").forEach(function(item) {
+        item.addEventListener("click", function() {
+            _onSoloTickerPicked(item.dataset.ticker, item.dataset.name || "");
+        });
+    });
+}
+
+function _soloAcHighlight(items) {
+    items.forEach(function(item, i) {
+        if (i === _soloAcActiveIdx) item.classList.add("active");
+        else item.classList.remove("active");
+    });
+}
+
+function _onSoloTickerPicked(ticker, name) {
+    _selectedSoloTicker = { ticker: ticker.toUpperCase(), name: name || "" };
+    _closeSoloTickerPicker();
+    var helper = document.getElementById("solo-needs-selection");
+    if (helper) helper.classList.add("hidden");
+    var btn = document.getElementById("solo-picker-btn");
+    var label = document.getElementById("solo-picker-label");
+    if (btn) {
+        btn.classList.remove("border-dashed", "border-border-subtle", "text-text-muted");
+        btn.classList.add("border-crucible/30", "bg-crucible-soft/40", "text-text-primary");
+        btn.setAttribute("aria-label", "Selected " + _selectedSoloTicker.ticker + " — click to change");
+    }
+    if (label) {
+        var displayName = _selectedSoloTicker.name || "";
+        label.innerHTML =
+            '<span class="font-mono font-bold">' + escapeHtml(_selectedSoloTicker.ticker) + '</span>' +
+            (displayName ? '<span class="text-text-muted"> · ' + escapeHtml(displayName) + '</span>' : '') +
+            '<span class="ml-2 text-text-muted hover:text-negative" onclick="event.stopPropagation();_clearSoloSelection();" title="Clear selection" aria-label="Clear selection">✕</span>';
+    }
+}
+
+function _clearSoloSelection() {
+    _selectedSoloTicker = null;
+    var helper = document.getElementById("solo-needs-selection");
+    if (helper) helper.classList.add("hidden");
+    var btn = document.getElementById("solo-picker-btn");
+    var label = document.getElementById("solo-picker-label");
+    if (btn) {
+        btn.classList.add("border-dashed", "border-border-subtle", "text-text-muted");
+        btn.classList.remove("border-crucible/30", "bg-crucible-soft/40", "text-text-primary");
+        btn.setAttribute("aria-label", "Choose a ticker to research");
+    }
+    if (label) label.textContent = "Choose a ticker to research";
+}
 
 function runSoloAnalysis() {
-    var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
     var statusDiv = document.getElementById("solo-status");
     var statusText = document.getElementById("solo-status-text");
-    if (!input) return;
 
-    var ticker = (input.value || "").trim().toUpperCase();
-    if (!ticker || !/^[A-Z]{1,10}$/.test(ticker)) {
-        if (typeof showToast === "function") showToast("Enter a valid ticker (1-10 letters)", "warning");
+    // Gate: nothing picked → inline helper, no fetch, no toast.
+    if (!_selectedSoloTicker || !_selectedSoloTicker.ticker) {
+        var helper = document.getElementById("solo-needs-selection");
+        if (helper) helper.classList.remove("hidden");
         return;
     }
+    var ticker = _selectedSoloTicker.ticker;
 
     _soloResearchTicker = ticker;
 
@@ -1297,7 +1470,6 @@ function runSoloAnalysis() {
     if (btn) { btn.disabled = true; btn.classList.add("opacity-60", "cursor-not-allowed"); btn.textContent = "Running..."; }
     if (statusDiv) statusDiv.classList.remove("hidden");
     if (statusText) statusText.textContent = "Analyzing " + ticker + "...";
-    input.disabled = true;
 
     _activeHistoryTicker = null;
     _renderTickerHistoryPills();
@@ -1339,10 +1511,8 @@ function runSoloAnalysis() {
 }
 
 function _resetSoloUI() {
-    var input = document.getElementById("solo-ticker-input");
     var btn = document.getElementById("solo-run-btn");
     var statusDiv = document.getElementById("solo-status");
-    if (input) { input.disabled = false; input.value = ""; }
     if (btn) { btn.disabled = false; btn.classList.remove("opacity-60", "cursor-not-allowed"); btn.textContent = "Analyze"; }
     if (statusDiv) statusDiv.classList.add("hidden");
     _soloResearchTicker = null;
@@ -1444,13 +1614,9 @@ function _initAgentsPageUI() {
         };
     }
 
-    // Solo runner Enter key
-    var soloInput = document.getElementById("solo-ticker-input");
-    if (soloInput) {
-        soloInput.onkeydown = function(e) {
-            if (e.key === "Enter") { e.preventDefault(); runSoloAnalysis(); }
-        };
-    }
+    // Solo ticker picker: the picker overlay has its own keydown handler
+    // (Enter picks the highlighted row), and Analyze calls runSoloAnalysis().
+    // No input-level Enter binding needed since the free-text input was replaced.
 
     // Fetch sankey-data to populate Signals + Conviction (runs on load AND HTMX nav)
     fetch("/agents/sankey-data")

@@ -17,7 +17,7 @@
 ```
 0.   Cross-reference index
 1.   How to read this file
-2.   Build phases (Phase 1 through Phase 15)
+2.   Build phases (Phase 1 through Phase 16; intermediate phases 7b, 7c added in Jun 2026)
 3.   Mode promotion and demotion gates (numerical)
 4.   File-by-file dependency graph
 5.   Phase-to-mode mapping
@@ -190,7 +190,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 
 ### Phase 4: Core processes — Cortex, Nervous, Execution, kill switch
 
-**Goal:** The process topology exists. All 8 launchd processes can start, heartbeat, and be monitored. The kill switch works end-to-end. The nervous system can orchestrate a stub cycle.
+**Goal:** The process topology exists. All 7 launchd processes can start, heartbeat, and be monitored. The kill switch works end-to-end. The nervous system can orchestrate a stub cycle.
 
 **What gets built:**
 - `pmacs/cortex/daemon.py` — main loop
@@ -208,18 +208,18 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/nervous/auth.py` — session token verification
 - `pmacs/execution/service.py` — stub (accepts TradePlan via UDS, logs, returns mock fill)
 - `pmacs/execution/signing.py` — Ed25519 keypair generation and signing
-- `launchd/*.plist` — all 8 plists
+- `launchd/*.plist` — all 7 plists
 - `ops/install_launchd.sh`
 - `ops/install_pf_rules.sh` — network egress rules
-- `tests/integration/test_kill_switch.py`
+- `tests/integration/test_kill_switch_integration.py`
 - `tests/integration/test_heartbeats.py`
 - `tests/integration/test_cycle_stub.py`
 
 **Dependencies:** Phase 1 (schemas, audit, SQLite), Phase 2 (data gateway for boot detector's refresh).
 
 **Exit test:**
-1. All 8 processes start via launchd, heartbeat within 10s, Cortex monitors all
-2. `pytest tests/integration/test_kill_switch.py` — engage → verify no new cycles start → disengage with operator confirmation → cycles resume
+1. All 7 processes start via launchd, heartbeat within 10s, Cortex monitors all
+2. `pytest tests/integration/test_kill_switch_integration.py` — engage → verify no new cycles start → disengage with operator confirmation → cycles resume
 3. `pytest tests/integration/test_cycle_stub.py` — Nervous opens a cycle, writes audit open + close, SSE emits cycle.open + cycle.close
 4. Ed25519 signing: sign a test TradePlan → verify signature → tamper one byte → verification fails
 5. Crash loop: restart a process 5 times in 60s → Cortex marks BROKEN_CRASH_LOOP → kill switch engages
@@ -325,7 +325,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/nervous/orchestrator.py` — wave-2 dispatch (step 13d5) between persona dispatch and Arbitration; auditor flags → `ArbitrationSignal.weight_multiplier` caps; `_rebuild_evidence_brief` injects `auditor_flag_summary`; flags → `FailedAssumption` (KuzuDB + SQLite `failure_classifications`); reverse-DCF + scenario-price called post-Arbitration, fed to MemoWriter
 - `pmacs/agents/memo_writer.py` + prompt + grammar + sanity + `schemas_json/memo_writer.json` + `pmacs/web/templates/memo.html` — `bull_bear_debate`, `what_would_change_my_mind`, `reverse_dcf`, `scenario_price` sections (`Source.md §16.9`)
 - `config/resources.toml` — `debate_wave_seconds_per_symbol`, `daily_llm_seconds_total` bump; `pmacs/config.py` typed fields
-- `tests/unit/test_reverse_dcf.py`, `tests/unit/test_scenario_price.py`, `tests/unit/test_auditor_flags.py`, `tests/unit/test_advocate_sanity.py`
+- `tests/unit/test_reverse_dcf.py`, `tests/unit/test_scenario_price.py`, `tests/unit/test_advocate_sanity.py`
 - `tests/integration/test_debate_pipeline.py` — full cycle with 9 personas + auditor
 
 **Dependencies:** Phase 7 (Crucible, conviction, MemoWriter, orchestrator step 13). Extends GSD Phase 3 (PMACS Phases 5-6 personas) + Phase 4 (Phase 7 pipeline).
@@ -333,7 +333,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **Exit test:**
 1. `pytest tests/unit/test_reverse_dcf.py` — implied growth solves correctly from a known price; round-trip; `valuation_lean` correct for implied<assumed (BULLISH) and implied>assumed (BEARISH); missing primitives → NEUTRAL with notes (no fabrication)
 2. `pytest tests/unit/test_scenario_price.py` — `E[price] = p_up*bull + p_flat*base + p_down*bear` exactly; probs sum to 1
-3. `pytest tests/unit/test_auditor_flags.py` — `weight_multiplier = (1 - severity)` cap applied per flag; flags map to `FailedAssumption` with the auditor-allowed taxonomy set; auditor output has no probability fields
+3. `pytest tests/unit/test_debate_orchestrator.py` — `weight_multiplier = (1 - severity)` cap applied per flag; flags map to `FailedAssumption` with the auditor-allowed taxonomy set; auditor output has no probability fields
 4. `pytest tests/unit/test_advocate_sanity.py` — advocate probs sum to 1.0; `target_persona` is a real wave-1 persona; non-degenerate unless reasoning concedes
 5. **Regression (critical):** `pytest tests/unit/test_conviction.py` unchanged — `compute_conviction` signature and outputs identical for existing fixtures (proves conviction was not amended). Arbitration results identical to baseline when no auditor flags present.
 6. `pytest tests/integration/test_debate_pipeline.py` — one ticker through the full pipeline: 7 personas → wave-2 (advocates + auditor) → Arbitration (9 DPs + weight caps) → Crucible (auditor flags in brief) → Conviction → Memo. Audit trail shows wave-2 step, weight caps, flag injection, and the new memo sections.
@@ -358,6 +358,7 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - `pmacs/agents/valuation_agent.py` + `prompts/valuation_agent.md` + `grammars/valuation_agent.gbnf` + `sanity/valuation_agent.py` + `schemas_json/valuation_agent.json` — four-file contract
 - `pmacs/data/evidence_router.py` — `PERSONA_EVIDENCE_MAP["ValuationAgent"] = [FUNDAMENTALS, YAHOO, EDGAR, PRESS, IR_PAGES]`
 - `pmacs/nervous/orchestrator.py` — `_run_forward_valuation` post-arbitration; `_extract_forward_valuation_inputs`; `_compute_valuation` prefers `ForwardValuationResult` prices for `ScenarioPriceEngine` when `is_available` AND all three > 0, else falls back to the reverse-DCF sensitivity grid unchanged; `VALUATION_SOURCE_CHOSEN` audit event
+- `pmacs/nervous/orchestrator.py` — `_build_current_valuation_anchor` grounds the `ValuationAgent`'s exit-multiple assumption in the market's currently observable EV/Sales + EV/EBITDA + P/S + analyst price-target consensus (model-vs-market and model-vs-Wall-Street reconciliation). Populates `ForwardValuationResult.current_ev_sales` and `analyst_target_mean_usd` so the memo surfaces the gap between (a) the multiple the market is paying today, (b) the multiple the agent assumes at the horizon, and (c) the analyst consensus — the non-obvious reconciliation most memos omit (the single biggest accuracy lever for the forward-valuation block).
 - `pmacs/agents/memo_writer.py` — `set_analytical_context(forward_valuation=...)`; render "Forward Valuation ({horizon}mo)" block (`Source.md §16.9`)
 - `tests/unit/test_forward_valuation.py`, `tests/unit/test_valuation_agent_sanity.py`, `tests/integration/test_forward_valuation_pipeline.py`
 
@@ -384,25 +385,29 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 **What gets built:**
 - `pmacs/sim/ledger.py` — paper portfolio ledger ($5K start)
 - `pmacs/sim/alpaca_paper_adapter.py` — Alpaca paper order submission + fill polling
-- `pmacs/execution/alpaca_adapter.py` — real adapter (not stub)
+- `pmacs/execution/alpaca_paper.py` — real adapter (not stub)
 - `pmacs/execution/catastrophe_net.py` — broker-side wide stop placement at entry
-- `pmacs/installer/wizard.py` + `steps/*.py` — the 10-step wizard (`Source.md §12`)
-- Mode management: `INSTALLING → SHADOW + PAPER` transition
-- `pmacs/schemas/system.py` — Mode enum, mode transition logic
-- SQLite `mode_history`, `paper_account` tables
+- `pmacs/installer/wizard.py` + `steps/*.py` — the 11-step wizard (`Source.md §12`)
+- `pmacs/web/templates/wizard/step01_welcome.html` through `step11_complete.html` — HTMX-driven wizard UI
+- `pmacs/web/templates/wizard/step10_llm_provider.html` — cloud path provider selection (Anthropic / OpenAI / OpenRouter)
+- Mode management: `INSTALLING → SHADOW + PAPER` transition (`pmacs/engines/mode_manager.py`)
+- `pmacs/schemas/system.py` — Mode enum (INSTALLING / SHADOW / PAPER / PAPER_VALIDATED / LIVE_EARLY / LIVE_STANDARD / LIVE_EXPANDED), `VALID_MODE_TRANSITIONS`, `SHADOW_PAPER_MODES`, `KillSwitchState`, `KillSwitchTrigger` (14 enum members)
+- SQLite `mode_history`, `paper_account`, `wizard_state` tables
 - Nervous orchestrator updated: step 13 concludes with TradePlan.sign_and_send() + catastrophe-net stop for PAPER mode
 - `tests/integration/test_paper_trade.py` — submit order → receive fill → update ledger → update holding → audit
-- `tests/integration/test_wizard.py` — run all 10 steps with mocked APIs
+- `tests/integration/test_wizard.py` — run all 11 steps with mocked APIs (local path: 10 dots; cloud path: model-download step substituted by LLM-provider form)
 - `tests/e2e/test_smoke_cycle.py` — the smoke-test cycle from wizard step 10
 
 **Dependencies:** Phase 7 (full decision pipeline to produce TradePlans).
 
 **Exit test:**
-1. Wizard completes all 10 steps on a fresh machine (prerequisite: `ops/install_system_users.sh` has been run with sudo to create _pmacs_* system users) (with mocked API keys in test mode)
+1. Wizard completes all 11 steps on a fresh machine (prerequisite: `ops/install_system_users.sh` has been run with sudo to create _pmacs_* system users) (with mocked API keys in test mode)
 2. `pytest tests/integration/test_paper_trade.py` — a STRONG_BUY ticker → TradePlan signed → submitted to Alpaca paper → fill received → ledger updated → holding transitions to ACTIVE → catastrophe-net stop placed → audit trail complete
 3. `pytest tests/e2e/test_smoke_cycle.py` — full cycle on synthetic fixtures; audit chain verifies; all engines fire
 4. SHADOW mode concurrently captures audit-only signals (no fake-trades in SHADOW)
 5. The paper ledger balance starts at $5,000 and reflects the fill correctly
+6. Wizard cloud path: pick Anthropic → enter key → model_registry.json `active` flips to anthropic + keychain stores `pmacs.credentials.anthropic_api_key`; local path: llama-server health check passes → GGUF SHA256 verifies → model loads → inference test passes
+7. Wizard `wizard_state.wizard_completed` flips to 1 after Step 10; subsequent requests to `/wizard/` auto-redirect to `/`
 
 **Duration estimate:** 7-10 days.
 
@@ -621,12 +626,18 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 - All empty states, loading states, error states per `Source.md §13.4`
 - Notification policy implementation (`Source.md §13.5`)
 - "Copy for Claude Code" button on every debug event
+- **TOTP gate removal** (Phase 15 wrap-up): the Phase-4 server-side TOTP that
+  gated every state-changing write was removed at PR #2 (`adb7c98`).
+  Replaced with HMAC-signed session cookie + CSRF token check on every
+  write endpoint. Rationale: single-operator loopback-only deployment does
+  not benefit from a second factor the operator carries on the same machine.
+  See Architecture.md §18.4.
 
 **Dependencies:** All previous phases.
 
 **Exit test:**
 1. All 8 operator workflows from `Source.md §21` complete in ≤ 3 clicks (excluding operator confirmation)
-2. Full cycle on 16-ticker universe completes within 3 hours on M1 Max 64GB
+2. Full cycle on the 10-ticker default universe completes within 3 hours on M1 Max 64GB (the original 16-ticker aspirational count was consolidated to 10 names — see Source.md §8.1)
 3. RAM usage under 50GB during cycle peak
 4. Audit chain verifies after 100+ cycles of accumulated data
 5. `ops/spec_consistency.py` passes (every Source.md operator-promise has an Architecture.md implementation pointer)
@@ -635,6 +646,43 @@ Claude Code: before starting work on any phase, verify the previous phase's exit
 8. All toast notifications, modal dialogs, and keyboard shortcuts function per spec
 
 **Duration estimate:** 7-10 days.
+
+---
+
+### Phase 16: Token-Cost Accounting + Budget Enforcement
+
+**Goal:** First-class observability of LLM spend + operator-configurable caps that gate cycle execution. Adds the dashboard cost widget (§ Source.md §14.7a) and Settings → Budget panel (§ Source.md §20.4a). The billing package (`pmacs/billing/`) is the implementation surface; storage extensions live in `pmacs/storage/sqlite.py` (3 new tables) and `pmacs/storage/duckdb.py` (1 new table). Two new kill-switch triggers (CYCLE_BLOCKED_BUDGET_DAILY, CYCLE_BLOCKED_BUDGET_MONTHLY) extend Architecture.md §13.1 to 14 triggers.
+
+**What gets built:**
+- `pmacs/billing/cost_calculator.py` — `compute_cost(prompt_t, completion_t, in_price, out_price) → USD`
+- `pmacs/billing/token_estimator.py` — pre-call cost estimate from `PERSONA_EXPECTED_OUTPUT_TOKENS` map (in `schemas/billing.py`)
+- `pmacs/billing/usage_logger.py` — DuckDB `api_usage` row + SQLite `budget_state` update + `cost.call_completed` SSE event
+- `pmacs/billing/budget_enforcer.py` — 3-tier cap check (cycle soft / daily hard / monthly hard) + runaway detection (1.5× rolling average)
+- `pmacs/billing/period_roller.py` — lazy daily/monthly period rollover; archives prior totals to `budget_history`
+- `pmacs/billing/pricing.py` — OpenRouter `/api/v1/models` cache (24h TTL) into `pricing_table`
+- `pmacs/billing/reconciler.py` — background OpenRouter `/generation` reconciliation; drift thresholds ($0.001 silent / $0.10 debug / $1.00 warn)
+- `pmacs/billing/drift_monitor.py` — p90 output-token drift per persona (warn >20%)
+- `pmacs/storage/sqlite.py` — `pricing_table`, `budget_state`, `budget_history` tables + `_run_migrations` ensures `budget_state` rows seeded
+- `pmacs/storage/duckdb.py` — `api_usage` table
+- `pmacs/web/routes/settings.py` — `/api/settings/cost` GET + `/api/settings/cost/caps` POST + `/api/settings/cost/personas` GET + `/api/settings/cost/refresh-pricing` POST
+- `pmacs/web/templates/cost_widget.html` — dashboard top-bar widget (Today / Month progress bars)
+- `pmacs/web/templates/settings.html` — Budget section (Today / Month / Caps + per-persona breakdown + Pricing table collapsibles)
+- `pmacs/cortex/kill_switch.py::TRIGGER_IDS` extended with `CYCLE_BLOCKED_BUDGET_DAILY`, `CYCLE_BLOCKED_BUDGET_MONTHLY`
+- `config/risk.toml [billing]` block — defaults $20/day, $200/month, $8/cycle
+- `tests/unit/test_billing.py`, `tests/unit/test_cost_calculator.py`, `tests/integration/test_budget_enforcement.py`
+
+**Dependencies:** Phase 3 (inference backend — `PersonaRunner._call_llm` exposes `prompt_tokens`/`completion_tokens` via the `_last_call_usage` side-channel) and Phase 7 (agents dispatch — `Orchestrator._log_call_billing` per-cycle).
+
+**Exit test:**
+1. `pytest tests/unit/test_cost_calculator.py` — `compute_cost(1000, 500, $1/M in, $2/M out) = $0.002` exact; round-trip; empty token counts → 0
+2. `pytest tests/unit/test_billing.py` — `usage_logger.log_usage` writes `api_usage` to DuckDB and updates `budget_state` totals; `period_roller.check_and_roll` archives prior totals to `budget_history` (no silent reset on app restart)
+3. `pytest tests/integration/test_budget_enforcement.py` — `check_per_cycle_soft_cap` blocks a 12 USD cycle against an 8 USD cap; `check_daily_hard_cap` blocks a 25 USD day against a 20 USD cap; runaway detection (1.5× rolling avg) engages the kill switch with `RUNAWAY_MULTIPLIER`
+4. `pytest tests/integration/test_caps_via_risk_toml.py` — `_load_billing_caps_from_risk_toml` reads operator-overridden caps; defaults apply when block is missing
+5. `pytest tests/integration/test_sse_cost_events.py` — every LLM call fires `cost.call_completed` SSE event with `body_cost_usd`; dashboard's cost widget updates via `cost` stream
+6. **Operator UX smoke** (manual): the dashboard cost widget updates during a live cycle; Settings → Budget → Save caps writes to `config/risk.toml [billing]` atomically; per-persona breakdown table populates after ≥1 call per persona; Pricing table fetches OpenRouter `/api/v1/models` and surfaces per-1M prices + cached-input price
+7. **Regression (critical):** Phase 16 must not change persona output or Arbitration results. The `_log_call_billing` hook is observability-only — it does not modify the persona's `DirectionalProbability`. Hard caps gate cycle start, not individual calls mid-cycle (per-cycle soft cap can refuse a cycle; daily/monthly hard caps engage the kill switch on `KILL_SWITCH_ENGAGED`, see Architecture.md §13.1 trigger #11/12).
+
+**Duration estimate:** 5-8 days.
 
 ---
 
@@ -839,7 +887,7 @@ pmacs/agents/memo_writer.py      → agents/base.py, all persona outputs
 pmacs/nervous/orchestrator.py    → ALL engines, ALL agents, ALL storage, execution/signing
 pmacs/nervous/api.py             → orchestrator.py, auth.py
 pmacs/cortex/daemon.py           → storage/sqlite.py, cortex/*.py
-pmacs/execution/service.py       → execution/signing.py, execution/alpaca_adapter.py
+pmacs/execution/service.py       → execution/signing.py, execution/alpaca_paper.py
 pmacs/cortex/stop_loss_daemon.py → engines/stop_loss_monitor.py, storage/sqlite.py
 ```
 
@@ -881,9 +929,12 @@ pmacs/installer/wizard.py        → ALL (sets up everything)
 | Phase 11-12 | Calibration + FDE | Prerequisites for PAPER_VALIDATED promotion gates |
 | Phase 13 | Episodic context | Improved persona quality (no new mode) |
 | **Phase 14** | **Mutation Engine** | **PAPER_VALIDATED** (requires Mutation Engine for full flywheel) |
-| Phase 15 | Polish | Ready for LIVE_EARLY evaluation |
+| Phase 15 | Polish (incl. TOTP gate removal) | Ready for LIVE_EARLY evaluation |
+| Phase 7b | Adversarial debate + cross-persona audit + reverse-DCF | Improved conviction math (unchanged); memo shows bull/bear debate + pre-registered falsification conditions + valuation anchor. No new mode. |
+| Phase 7c | Forward-valuation agent + engine (scenario valuation, 6-12 month) | Memo shows bull/base/bear forward fair-value + scenario-weighted expected price. No new mode. |
+| Phase 16 | Token-Cost Accounting + Budget Enforcement | Dashboard cost widget + Settings → Budget panel. New kill-switch triggers #11/12 (CYCLE_BLOCKED_BUDGET_DAILY/MONTHLY). No new mode — observability + cap-gating only. |
 
-**The operator can start using the system at Phase 8.** Phases 9-15 improve quality, add monitoring, and add the flywheel — but the core decision pipeline works at Phase 8.
+**The operator can start using the system at Phase 8.** Phases 9-16 improve quality, add monitoring, add the flywheel, sharpen the debate/valuation layer, and add cost observability — but the core decision pipeline works at Phase 8.
 
 **PAPER_VALIDATED requires Phase 14** because the Mutation Engine is part of the flywheel health check. FlywheelHealth checks that the Mutation Engine is active and producing candidates before allowing PAPER_VALIDATED promotion.
 

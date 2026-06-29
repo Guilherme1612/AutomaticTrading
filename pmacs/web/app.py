@@ -245,7 +245,19 @@ class WizardRedirectMiddleware(BaseHTTPMiddleware):
             state = _read_wizard_state()
             if not state.get("completed", False):
                 return RedirectResponse(url="/wizard/", status_code=302)
-        except Exception:
+        except Exception as exc:
+            # S-014: log the underlying error so operators see the real cause
+            # (e.g. data_dir not writable, malformed wizard.json) instead of a
+            # misleading "you haven't completed the wizard" redirect. The
+            # redirect still happens — the operator is still gated — but the
+            # debug stream shows what actually broke.
+            log_debug(
+                "WIZARD_STATE_READ_FAILED",
+                payload={"path": path, "error": repr(exc)},
+                level="WARN",
+                cycle_id="-",
+                msg=f"wizard state read failed for {path}; redirecting to /wizard/",
+            )
             return RedirectResponse(url="/wizard/", status_code=302)
 
         return await call_next(request)
@@ -302,33 +314,6 @@ app.include_router(settings.router)
 app.include_router(wizard.router)
 app.include_router(memo.router)
 app.include_router(ticker_data.router)
-
-
-# ---------------------------------------------------------------------------
-# SSE broadcast helper — called by _emit_event in pipeline routes to push
-# events to all connected browser clients via the nervous publisher.
-# ---------------------------------------------------------------------------
-
-def _broadcast_event(frame: str) -> None:
-    """Push a pre-serialised event JSON string to all SSE clients.
-
-    Parses the flat event produced by _emit_event and forwards it through
-    the in-process SSEPublisher so the /events endpoint fans it out to
-    every connected browser.
-    """
-    import json as _json
-
-    from pmacs.nervous.api import _publisher
-
-    try:
-        evt = _json.loads(frame)
-        stream = evt.get("stream", "system")
-        event_type = evt.get("event_type", "unknown")
-        # Include event/event_type in data so JS handlers can read them
-        data = {k: v for k, v in evt.items() if k not in ("stream", "id", "timestamp")}
-        _publisher.publish(stream, event_type, data)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------

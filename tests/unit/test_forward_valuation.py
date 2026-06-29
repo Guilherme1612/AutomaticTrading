@@ -13,7 +13,8 @@ from pmacs.schemas.forward_valuation import ForwardValuationResult
 
 
 def _assumptions(
-    *, g: float, margin: float, exit_mult: float,
+    *, g: float, margin: float, exit_mult: float | None = None,
+    exit_sales: float | None = None,
     acq: float = 0.0, acq_conf: str = "NONE", prob: float = 0.33,
     ev_id: str = "e1",
 ) -> dict:
@@ -25,6 +26,7 @@ def _assumptions(
         "acquisition_revenue_contribution_pct": acq,
         "acquisition_confidence": acq_conf,
         "exit_multiple": exit_mult,
+        "exit_sales_multiple": exit_sales,
         "rationale": f"scenario growth {g} evidence={ev_id}",
         "probability_of_occurrence": prob,
         "evidence_ids": [ev_id],
@@ -259,13 +261,23 @@ class TestForwardValuationSchema:
         with pytest.raises(Exception):
             r.base_price = 999.0  # type: ignore[misc]
 
-    def test_is_available_requires_positive_base_price(self):
+    def test_is_available_distinguishes_missing_from_floored(self):
+        """V-002 contract: is_available is True iff base_price is not None.
+        A floored-at-$0 base price is a real (distress) result — distinct from
+        'no result at all' (base_price is None). Consumers that want to react
+        to underwater distress should check `base_price_underwater` instead.
+        """
         r = ForwardValuationResult(ticker="X", cycle_id="c1", base_price=None)
         assert not r.is_available
-        r2 = ForwardValuationResult(ticker="X", cycle_id="c1", base_price=0.0)
-        assert not r2.is_available
+        # Floored-at-0 IS available (it's the distress signal):
+        r2 = ForwardValuationResult(ticker="X", cycle_id="c1", base_price=0.0,
+                                     base_price_underwater=True)
+        assert r2.is_available
+        assert r2.base_price_underwater is True
+        # Normal positive price:
         r3 = ForwardValuationResult(ticker="X", cycle_id="c1", base_price=31.0)
         assert r3.is_available
+        assert r3.base_price_underwater is False
 
 
 class TestForwardValuationEquityFloor:
@@ -313,8 +325,11 @@ class TestForwardValuationEquityFloor:
         )
         for price in (r.bull_price, r.base_price, r.bear_price):
             assert price is None or price >= 0.0
-        # Base floored at 0 -> is_available False (base_price not > 0).
-        assert not r.is_available
+        # Base floored at 0 → is_available True (V-002 contract; the floored
+        # value IS the valuation, surfaced in-band via base_price_underwater).
+        # base_price_underwater reflects the distress signal:
+        assert r.is_available
+        assert r.base_price_underwater is True
 
     def test_positive_equity_not_floored(self):
         # Sanity: the normal case (equity > 0) is unchanged — no flooring, no
@@ -333,3 +348,115 @@ class TestForwardValuationEquityFloor:
         bear_pt = r.scenario_points["bear"]
         assert "underwater" not in (bear_pt.notes or "").lower()
         assert bear_pt.equity_value_usd == pytest.approx(1_432_000_000.0)
+
+
+class TestForwardValuationCycleIdGuard:
+    """V-001 — cycle_id is REQUIRED (Architecture.md §5.2)."""
+
+    def test_empty_cycle_id_raises_value_error(self):
+        """The orchestrator always passes a real cycle_id; an empty string
+        would have crashed log_debug downstream (cycle_id=None on a
+        cycle-scoped event raises per §5.2). The guard catches it early.
+        """
+        with pytest.raises(ValueError, match="cycle_id is REQUIRED"):
+            compute_forward_valuation(
+                ticker="X", cycle_id="",  # ← empty string
+                bull_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+                base_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.40),
+                bear_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+                scenario_probabilities={"bull": 0.30, "base": 0.40, "bear": 0.30},
+                current_revenue_ttm_usd=1_000_000_000.0,
+                shares_outstanding=100_000_000.0,
+                net_debt_usd=200_000_000.0,
+            )
+
+    def test_non_empty_cycle_id_does_not_raise(self):
+        """Sanity check: a real cycle_id does not trip the guard."""
+        r = compute_forward_valuation(
+            ticker="X", cycle_id="cyc-abc-123",
+            bull_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+            base_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.40),
+            bear_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+            scenario_probabilities={"bull": 0.30, "base": 0.40, "bear": 0.30},
+            current_revenue_ttm_usd=1_000_000_000.0,
+            shares_outstanding=100_000_000.0,
+            net_debt_usd=200_000_000.0,
+        )
+        assert r.cycle_id == "cyc-abc-123"
+
+
+class TestForwardValuationUnderwaterFlag:
+    """V-002 — distinguish 'computed and floored at $0' from 'missing primitive'."""
+
+    def test_floored_base_price_is_available_with_underwater_flag(self):
+        """Forward EV < net debt floors the equity at $0. The result IS the
+        valuation (a real distress signal); the underwater flag carries that
+        signal in-band instead of silently flipping is_available to False.
+        """
+        # forward_revenue = 1_000_000_000 * 1.10 = 1.1B (1y at 10% growth)
+        # forward_ebitda   = 1.1B * 0.20 = 220M
+        # forward_ev       = 220M * 15.0 = 3.3B
+        # equity_value     = max(0, 3.3B - 5.0B) = 0  (floored)
+        # base_price       = 0 / 100M = 0.0
+        r = compute_forward_valuation(
+            ticker="ONDS", cycle_id="cyc-onds-1", horizon_months=12,
+            bull_assumptions=_assumptions(g=0.30, margin=0.20, exit_mult=18.0, prob=0.30),
+            base_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.40),
+            bear_assumptions=_assumptions(g=0.02, margin=0.16, exit_mult=10.0, prob=0.30),
+            scenario_probabilities={"bull": 0.30, "base": 0.40, "bear": 0.30},
+            current_revenue_ttm_usd=1_000_000_000.0,
+            shares_outstanding=100_000_000.0,
+            net_debt_usd=5_000_000_000.0,  # 5B net debt dwarfs 3.3B forward EV
+        )
+        assert r.base_price == 0.0
+        assert r.base_price_underwater is True
+        assert r.is_available is True  # floored-at-0 IS available (V-002 fix)
+        # Notes should carry the underwater signal at the scenario-point level
+        base_pt = r.scenario_points["base"]
+        assert "underwater" in base_pt.notes.lower()
+
+    def test_normal_base_price_has_underwater_flag_false(self):
+        """Regression guard: a positive base price (equity > 0) must NOT
+        trigger the underwater flag.
+        """
+        r = compute_forward_valuation(
+            ticker="X", cycle_id="c1", horizon_months=12,
+            bull_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+            base_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.40),
+            bear_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30),
+            scenario_probabilities={"bull": 0.30, "base": 0.40, "bear": 0.30},
+            current_revenue_ttm_usd=1_000_000_000.0,
+            shares_outstanding=100_000_000.0,
+            net_debt_usd=200_000_000.0,  # 200M net debt vs 3.3B forward EV = healthy
+        )
+        assert r.base_price > 0
+        assert r.base_price_underwater is False
+        assert r.is_available is True
+
+
+class TestForwardValuationEVPathSelection:
+    """V-009 — when both exit multiples are provided, audit which was selected."""
+
+    def test_both_multiples_provided_logs_ev_ebitda_selection(self):
+        """If a profitable scenario has BOTH exit_multiple and exit_sales_multiple,
+        the EV/EBITDA path wins (per can_ev_ebitda branch order). The selection
+        is audit-logged in the notes_bits so the memo can show it.
+        """
+        r = compute_forward_valuation(
+            ticker="X", cycle_id="c1", horizon_months=12,
+            bull_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30,
+                                           exit_sales=10.0),  # BOTH provided
+            base_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.40,
+                                           exit_sales=10.0),
+            bear_assumptions=_assumptions(g=0.10, margin=0.20, exit_mult=15.0, prob=0.30,
+                                           exit_sales=10.0),
+            scenario_probabilities={"bull": 0.30, "base": 0.40, "bear": 0.30},
+            current_revenue_ttm_usd=1_000_000_000.0,
+            shares_outstanding=100_000_000.0,
+            net_debt_usd=200_000_000.0,
+        )
+        # EV/EBITDA selected → base_pt.notes carries the audit line
+        base_pt = r.scenario_points["base"]
+        assert base_pt.valuation_path == "ev_ebitda"
+        assert "EV/EBITDA path selected" in base_pt.notes
+        assert "exit_sales_multiple (10.0)" in base_pt.notes

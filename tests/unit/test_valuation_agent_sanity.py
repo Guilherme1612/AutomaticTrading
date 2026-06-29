@@ -21,7 +21,7 @@ def _evidence(*ids: str) -> list:
 
 def _scenario(
     *, g=0.12, traj="STABLE", delta=0.0, margin=0.22, acq=0.0, acq_conf="NONE",
-    exit_mult=15.0, prob=0.40, rationale="base case evidence=e1", ev_id="e1",
+    exit_mult=15.0, exit_sales=None, prob=0.40, rationale="base case evidence=e1", ev_id="e1",
 ) -> dict:
     return {
         "revenue_growth_path_pct": g,
@@ -31,6 +31,7 @@ def _scenario(
         "acquisition_revenue_contribution_pct": acq,
         "acquisition_confidence": acq_conf,
         "exit_multiple": exit_mult,
+        "exit_sales_multiple": exit_sales,
         "rationale": rationale,
         "probability_of_occurrence": prob,
         "evidence_ids": [ev_id],
@@ -133,7 +134,7 @@ class TestValuationAgentSanityBounds:
 
     def test_ebitda_margin_above_ceiling_fails(self):
         out = _output()
-        out["bull"]["ebitda_margin_at_horizon_pct"] = 0.90
+        out["bull"]["ebitda_margin_at_horizon_pct"] = 0.95
         r = self.validator.validate(out, self.evidence)
         assert not r.passed
         assert "ebitda_margin" in (r.reason or "")
@@ -258,3 +259,97 @@ class TestValuationAgentSanityGrowthOrdering:
         r = self.validator.validate(out, self.evidence)
         assert not r.passed
         assert "ordered" in (r.reason or "").lower()
+
+
+class TestValuationAgentSanityPreProfit:
+    """V-004 — pre-profit scenarios (margin <= 0) require exit_sales_multiple.
+
+    Most current universe tickers (NBIS, ONDS) are pre-profit per
+    `crucible_as_primary_filter.md` — this path is the default, not the edge
+    case. The pre-profit fixture (margin=-0.30) exercises the EV/Sales branch
+    in `_persona_checks` and the engine's pre-profit path. The pre-existing
+    _scenario() helper uses margin=0.22 (profitable), so the pre-profit code
+    paths were never executed by the suite.
+    """
+
+    def setup_method(self):
+        self.validator = ValuationAgentSanity()
+        self.evidence = _evidence("e1")
+
+    def _pre_profit_output(self, **overrides):
+        """Build an output where bull/base/bear are all pre-profit (margin=-0.30)."""
+        base = {
+            "ticker": "NBIS",
+            "horizon_months": 12,
+            "bull": _scenario(g=0.45, traj="EXPANDING", delta=0.05, margin=-0.20,
+                              exit_mult=None, exit_sales=18.0,
+                              prob=0.30, rationale="bull e1 hypergrowth on revenue", ev_id="e1"),
+            "base": _scenario(g=0.25, margin=-0.30,
+                              exit_mult=None, exit_sales=12.0,
+                              prob=0.40, rationale="base e1 consensus pre-profit ramp", ev_id="e1"),
+            "bear": _scenario(g=0.05, traj="COMPRESSING", delta=-0.02, margin=-0.40,
+                              exit_mult=None, exit_sales=6.0,
+                              prob=0.30, rationale="bear e1 growth decelerating", ev_id="e1"),
+            "data_gaps": ["management guidance: N/A, using analyst consensus proxy"],
+            "evidence_ids": ["e1"],
+        }
+        base.update(overrides)
+        return base
+
+    def test_pre_profit_with_exit_sales_passes(self):
+        r = self.validator.validate(self._pre_profit_output(), self.evidence)
+        assert r.passed, r.reason
+
+    def test_pre_profit_missing_exit_sales_fails(self):
+        """When margin <= 0, exit_sales_multiple is REQUIRED for the EV/Sales path."""
+        out = self._pre_profit_output()
+        out["base"]["exit_sales_multiple"] = None  # missing
+        r = self.validator.validate(out, self.evidence)
+        assert not r.passed
+        assert "exit_sales_multiple" in (r.reason or "")
+        assert "pre-profit" in (r.reason or "").lower()
+
+    def test_pre_profit_exit_sales_above_ceiling_fails(self):
+        """exit_sales_multiple must be in [0, 100] per spec §13b."""
+        out = self._pre_profit_output()
+        out["base"]["exit_sales_multiple"] = 150.0
+        r = self.validator.validate(out, self.evidence)
+        assert not r.passed
+        assert "exit_sales_multiple" in (r.reason or "")
+        assert "100" in (r.reason or "")
+
+    def test_pre_profit_negative_exit_sales_fails(self):
+        out = self._pre_profit_output()
+        out["base"]["exit_sales_multiple"] = -2.0
+        r = self.validator.validate(out, self.evidence)
+        assert not r.passed
+        assert "exit_sales_multiple" in (r.reason or "")
+
+
+class TestValuationAgentSchemaOrdering:
+    """V-003 — schema-level mirror of the sanity-layer bull>=base>=bear check.
+
+    The schema validator in `pmacs/schemas/personas.py:_check_invariants` now
+    enforces the same ordering invariant as the sanity layer, so a producer
+    that bypasses sanity still cannot pass a wrong-ordered output.
+    """
+
+    def test_bull_below_base_fails_at_schema(self):
+        """Pydantic model_validator on ValuationAgentOutput must reject
+        bull < base ordering, mirroring the sanity check.
+        """
+        from pydantic import ValidationError
+        from pmacs.schemas.personas import ValuationAgentOutput
+
+        base = {
+            "ticker": "X",
+            "horizon_months": 12,
+            "bull": _scenario(g=0.05, margin=0.22, prob=0.30, rationale="bull e1",
+                              ev_id="e1"),
+            "base": _scenario(g=0.12, prob=0.40, rationale="base e1", ev_id="e1"),
+            "bear": _scenario(g=0.04, margin=0.18, prob=0.30, rationale="bear e1",
+                              ev_id="e1"),
+            "evidence_ids": ["e1"],
+        }
+        with pytest.raises(ValidationError, match="ordered bull>=base>=bear"):
+            ValuationAgentOutput(**base)

@@ -30,6 +30,10 @@ class ForwardScenarioPoint(BaseModel):
     revenue_growth_path_pct: float | None = None
     ebitda_margin_at_horizon_pct: float | None = None
     exit_multiple: float | None = None
+    # EV/Sales multiple used for the pre-profit path (when EBITDA <= 0).
+    exit_sales_multiple: float | None = None
+    # Which valuation path priced this scenario ("ev_ebitda" | "ev_sales").
+    valuation_path: str | None = None
     acquisition_revenue_contribution_pct: float | None = None
     # Computed chain (USD). None when the scenario could not be valued.
     forward_revenue_usd: float | None = None
@@ -66,11 +70,29 @@ class ForwardValuationResult(BaseModel):
     shares_outstanding: float | None = None
     net_debt_usd: float | None = None
     current_revenue_ttm_usd: float | None = None
+    # Observable valuation anchor + Wall-Street reference, populated by the
+    # orchestrator from the same evidence the ValuationAgent saw. The memo surfaces
+    # these so the operator can see the gap between (a) the multiple the market is
+    # paying today, (b) the multiple the agent assumed at the horizon, and (c) the
+    # analyst price-target consensus — the non-obvious reconciliation most memos
+    # omit. None when the primitive was unavailable (never fabricated).
+    current_ev_sales: float | None = None
+    analyst_target_mean_usd: float | None = None
+    # True when the equity floor kicked in (forward EV < net debt → equity = $0).
+    # Carries the distress signal in-band instead of silently degrading
+    # `is_available` to False and dropping the result into the reverse-DCF fallback.
+    base_price_underwater: bool = False
     # Why a field is None (missing primitive, non-positive margin, etc.). Never
     # fabricated — the engine prefers None + a note over a wrong number.
     notes: str = ""
 
     @property
     def is_available(self) -> bool:
-        """True when at least the base-case price was computed (not a fallback)."""
-        return self.base_price is not None and self.base_price > 0
+        """True when at least the base-case price was computed.
+
+        A floored-at-$0 base price counts as available (the distress signal is
+        real, the math ran, the equity was floored) — distinguish from a
+        scenario that never produced a price. Consumers that want to react to
+        underwater distress should check ``base_price_underwater`` instead.
+        """
+        return self.base_price is not None

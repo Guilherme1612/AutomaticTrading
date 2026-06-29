@@ -27,6 +27,9 @@
 9.   Persona: InsiderActivity
 10.  Persona: ShortInterest
 11.  Persona: Forensics
+11b. Persona: BullAdvocate (second-wave bull-side advocate)
+11c. Persona: BearAdvocate (second-wave bear-side advocate)
+11d. Persona: CrossPersonaAuditor (second-wave synthesis auditor)
 12.  Persona: Crucible
 13.  Persona: MemoWriter
 13b. Persona: ValuationAgent (post-arbitration forward-valuation assumptions)
@@ -84,7 +87,7 @@ Each persona receives evidence, produces a structured output, and exits. It has 
 
 ### 1.2 Same model, different minds
 
-All 9 LLM personas (7 analysis personas + Crucible + MemoWriter) share one base model. Differentiation comes from:
+All 14 LLM personas (10 analysis personas + 2 wave-2 debate advocates + 1 wave-2 synthesis auditor + Crucible + MemoWriter + ValuationAgent) share one base model (and one active backend — see Architecture.md §17.5). The deterministic Simulation persona (`pmacs/agents/simulation.py`) is the LLM-unavailable fallback. Differentiation comes from:
 
 1. **System prompt** — each persona has a distinct role, perspective, and analytical lens
 2. **Evidence selection** — each persona receives a different evidence subset relevant to its analytical role
@@ -92,7 +95,7 @@ All 9 LLM personas (7 analysis personas + Crucible + MemoWriter) share one base 
 4. **Temperature** — analysis personas at 0.2, Crucible at 0.1 (more deterministic for adversarial reasoning)
 5. **Episodic context** — each persona receives its own track-record brief (`persona_ticker_affinity`)
 
-This is deliberate. Running 9 different base models would multiply RAM and cycle time beyond the M1 Max budget (`Architecture.md §20`). Same base + different prompts produces meaningfully different outputs at acceptable cost. The Mutation Engine's persona-affinity dimension compensates for any base-model uniformity bias by learning which personas perform better on which ticker types.
+This is deliberate. Running 13 different base models would multiply RAM and cycle time beyond the M1 Max budget (`Architecture.md §20`). Same base + different prompts produces meaningfully different outputs at acceptable cost. The Mutation Engine's persona-affinity dimension compensates for any base-model uniformity bias by learning which personas perform better on which ticker types.
 
 ### 1.3 What "independent" means
 
@@ -124,6 +127,7 @@ This independence prevents correlated hallucination. If MoatAnalyst hallucinates
 | — | **Crucible** | Yes | Adversarial attacker. Reads the Arbitrated combined output + all evidence + auditor flags. Tries to destroy the thesis. | Runs after Arbitration (Phase 2) |
 | — | **MemoWriter** | Yes | Reads all persona outputs + Arbitrated + Crucible. Produces the operator-facing memo. | Runs after Crucible |
 | — | **ValuationAgent** | Yes | Post-arbitration. Emits bull/base/bear forward-valuation ASSUMPTIONS (revenue growth path, margin trajectory, EBITDA margin at horizon, acquisition impact, exit EV/EBITDA multiple) with rationale + per-scenario `probability_of_occurrence`. Consumed by the deterministic `ForwardValuationEngine` (Architecture.md §9.4b). Does **not** enter Arbitration, does **not** amend conviction, does **not** emit a price. | Runs after Arbitration, before/within valuation triangulation (step 13e5) |
+| — | **Simulation** | No (deterministic Python) | Fallback persona that produces conservative, low-conviction outputs when the LLM backend is unreachable (connection error, 401 invalid key, budget breach, or all retries exhausted in live mode). Produces a near-uniform `(0.34, 0.33, 0.33)` distribution with reasoning strings carrying a `SIMULATION ` prefix so downstream consumers can detect fallback vs. genuine LLM output. Live-mode fallback writes a HOLD-on-abort to `memos` + `decisions` so the cycle never silently loses the operator's view of the symbol. Triggered after 3 failed retries with temperature bumped +0.05 per retry (`pmacs/agents/base.py::_call_llm` retry policy). | Runs when LLM backend is unreachable
 
 The Gatekeeper is not a persona in the LLM sense. It is deterministic Python that runs in Phase 0. It is included in the roster for completeness.
 
@@ -163,7 +167,7 @@ Per-persona Python in `pmacs/agents/sanity/<persona>.py`. This catches what stru
 - Insider transaction dates fall within the data window
 - Financial ratios are within physically plausible bounds
 
-**On any layer failure:** log `GBNF_PARSE_FAILURE`, `JSON_SCHEMA_PARSE_FAILURE`, `SCHEMA_VALIDATION`, or `OUT_OF_RANGE_PROBABILITY` debug event. Retry up to 2 times with temperature +0.05 bump per retry. After 3 total attempts: abort persona output for this symbol, log `ABORTED_LLM`, contribute zero weight to arbitration.
+**On any layer failure:** log `GBNF_PARSE_FAILURE`, `JSON_SCHEMA_PARSE_FAILURE`, `SCHEMA_VALIDATION`, or `OUT_OF_RANGE_PROBABILITY` debug event. Retry up to 2 times with temperature +0.05 bump per retry. After 3 total attempts: fall through to the **safe-default** simulation path — see `_pre_validate` helpers in `pmacs/agents/base.py` (`_truncate_string_fields`, `_normalize_literal_enums`, `_rename_keys`, `_ensure_min_evidence_ids`, `_clamp_numeric_fields`). The helpers defensively rewrite the parsed JSON to recover from known LLM output quirks (deepseek-v4-flash enum-case drift, OpenRouter schema-drift, oversized strings, hallucinated evidence_ids) before re-validation. If even the safe-default fallback fails, abort the persona for this symbol, log `ABORTED_LLM`, and contribute zero weight to arbitration. In live mode the orchestrator writes a conservative HOLD-on-abort decision so the operator still sees the symbol cycle through.
 
 ---
 
@@ -1147,11 +1151,34 @@ Produce the operator-facing memo. The MemoWriter reads all persona outputs, the 
 
 ### 13.2 Evidence consumed
 
-- All persona outputs (as structured JSON)
+- All wave-1 persona outputs (as structured JSON)
+- Wave-2 BullAdvocate + BearAdvocate outputs (debate arguments)
+- Wave-2 CrossPersonaAuditor flags (CITATION_GAP / etc.)
+- Reverse-DCF + ForwardValuationEngine outputs (`Source.md §16.9`)
 - Arbitrated output
 - Crucible output
 - Conviction score
 - Verdict tier
+- **Data-quality warnings** (Phase-13 post-cycle audit): a list of metrics the
+  source itself flagged as anomalous (e.g. `netProfitMarginTTM=251.9%`).
+  The memo MUST NOT cite flagged metrics as facts (`pmacs/agents/sanity/memo_scorer.py`
+  re-injects the warnings into the prompt for retry). The data-quality
+  warnings are the memo-side counterpart to `format_evidence_for_prompt`,
+  which already warns the analyst personas; the analyst layer never reaches
+  the operator, but the memo does.
+
+### 13.2a Memo accuracy scoring (Phase 13)
+
+`pmacs/agents/sanity/memo_scorer.py` cross-validates every emitted memo
+against its evidence and awards a 0-100 reliability score across six
+dimensions: numerical grounding (0-25), verdict consistency (0-15),
+evidence coverage (0-15), risk coverage (0-15), completeness (0-15),
+cross-source coherence (0-15). The score + letter grade (A/B/C/D/F) are
+persisted in `memos.memo_score` / `memos.memo_grade`. Memos scoring < 50 are
+retried with score feedback injected into the retry prompt. The score is
+not surfaced in the operator-facing memo — it's a system-internal
+self-check. `memos` columns were added in `_run_migrations` after the
+initial schema landed.
 
 ### 13.3 System prompt skeleton
 
@@ -1317,6 +1344,8 @@ Note: this persona does NOT emit `p_up/p_flat/p_down`. The per-scenario `probabi
 ### 13b.6 Integration (post-arbitration)
 
 Run by the orchestrator after Arbitration, alongside the reverse-DCF engine. The `ForwardValuationEngine` consumes the agent's `.model_dump()` scenario blocks and computes per-scenario forward prices. When `ForwardValuationResult.is_available` AND all three prices > 0, `ScenarioPriceEngine` uses the forward prices; otherwise it falls back to the reverse-DCF sensitivity grid unchanged (`VALUATION_SOURCE_CHOSEN` audit event records the source). The result surfaces in `MemoWriterOutput` only (`Source.md §16.9` "Forward valuation (6-12 month)" block) — never on the /ticker page, never as a dashboard tile, and never as a conviction amendment.
+
+**Current-valuation anchor injection.** Immediately before the ValuationAgent runs, the orchestrator builds `_build_current_valuation_anchor` (`Architecture.md §9.4b`) from the same evidence packets the agent will see. The anchor includes: current EV/Sales, current EV/EBITDA, current P/S, analyst price-target consensus mean. These are injected into the agent's `agent_context` so the agent sees, in its own prompt: "the market is currently paying X multiple; the analyst consensus implies Y; here is the multiple you are assuming at the horizon". This is the model-vs-market and model-vs-Wall-Street reconciliation. The anchor is the single biggest accuracy lever for the forward-valuation block — without it, the agent is free to assume a multiple that diverges from reality and the memo cannot surface the divergence. The orchestrator also populates `ForwardValuationResult.current_ev_sales` and `analyst_target_mean_usd` so the memo can render the gap inline.
 
 ---
 
@@ -1727,7 +1756,7 @@ The operator can also propose candidates from Settings → Agent Personas → "P
 
 ### 17.7 Maximum concurrent mutations
 
-At most **3 A/B tests** can run simultaneously (across all dimensions). This caps the compute overhead at `3 × 5 tickers × 9 personas × 30s = ~4,050s` per cycle. Beyond 3, new proposals queue in `PROPOSED` status until a slot opens.
+At most **3 A/B tests** can run simultaneously (across all dimensions). This caps the compute overhead at `3 × 5 tickers × 13 personas × 30s = ~5,850s` per cycle. Beyond 3, new proposals queue in `PROPOSED` status until a slot opens.
 
 ---
 

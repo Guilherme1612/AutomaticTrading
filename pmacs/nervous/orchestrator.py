@@ -1895,6 +1895,20 @@ class CycleOrchestrator:
 
         filtered = filter_evidence_for_persona(evidence_packets, "ValuationAgent")
 
+        # Anchor the agent's exit multiple in the market's current EV/Sales /
+        # EV/EBITDA / analyst consensus — the single biggest accuracy lever for
+        # forward valuation (full rationale in _build_current_valuation_anchor).
+        revenue_ttm, shares, net_debt = self._extract_forward_valuation_inputs(evidence_packets)
+        anchor, current_ev_sales, analyst_target_mean = self._build_current_valuation_anchor(
+            ticker=ticker,
+            current_price_usd=current_price_usd,
+            revenue_ttm=revenue_ttm,
+            shares=shares,
+            net_debt=net_debt,
+            evidence_packets=evidence_packets,
+        )
+        agent_context = ((brief or "") + ("\n\n" if brief else "") + anchor).strip() or None
+
         valuation_output = None
         try:
             runner = ValuationAgentRunner(
@@ -1902,7 +1916,7 @@ class CycleOrchestrator:
                 audit_writer=getattr(self, "_audit", None),
                 simulation_mode=bool(getattr(self, "simulation_mode", False)),
             )
-            po = runner.run(filtered, episodic_context=brief)
+            po = runner.run(filtered, episodic_context=agent_context)
             if po is not None and getattr(po, "raw_output", ""):
                 valuation_output = po
         except Exception as exc:
@@ -1937,8 +1951,6 @@ class CycleOrchestrator:
             )
             return None
 
-        revenue_ttm, shares, net_debt = self._extract_forward_valuation_inputs(evidence_packets)
-
         scenario_probs = {
             "bull": float(model.bull.probability_of_occurrence),
             "base": float(model.base.probability_of_occurrence),
@@ -1956,6 +1968,8 @@ class CycleOrchestrator:
             shares_outstanding=shares,
             net_debt_usd=net_debt,
             current_price_usd=current_price_usd,
+            current_ev_sales=current_ev_sales,
+            analyst_target_mean_usd=analyst_target_mean,
         )
 
     def _extract_valuation_inputs(
@@ -2066,19 +2080,24 @@ class CycleOrchestrator:
             if not ev_id.endswith("_metrics"):
                 continue
 
-            # TTM revenue: prefer the annual series' most recent value, then revenueTTM.
+            # TTM revenue: PREFER revenueTTM (actual trailing-twelve-months) —
+            # the semantically correct base for a forward valuation grown from
+            # "today". Fall back to the most recent annual value only when
+            # revenueTTM is absent. Using last-FY revenue understates the base
+            # for hypergrowth names mid-year (e.g. NBIS FY2025 $529.8M vs TTM
+            # $877.9M), which materially undershoots the forward fair value.
             if revenue_ttm is None:
-                rev_series = data.get("annual_revenue") or []
-                if isinstance(rev_series, list) and rev_series:
-                    first = rev_series[0]
-                    if isinstance(first, dict):
-                        v = first.get("v")
-                        if isinstance(v, (int, float)):
-                            revenue_ttm = float(v)
+                ttm = data.get("revenueTTM")
+                if isinstance(ttm, (int, float)) and ttm > 0:
+                    revenue_ttm = float(ttm)
                 if revenue_ttm is None:
-                    ttm = data.get("revenueTTM")
-                    if isinstance(ttm, (int, float)):
-                        revenue_ttm = float(ttm)
+                    rev_series = data.get("annual_revenue") or []
+                    if isinstance(rev_series, list) and rev_series:
+                        first = rev_series[0]
+                        if isinstance(first, dict):
+                            v = first.get("v")
+                            if isinstance(v, (int, float)):
+                                revenue_ttm = float(v)
 
             # Net debt components from the annual series.
             if total_debt is None:
@@ -2118,6 +2137,112 @@ class CycleOrchestrator:
             net_debt = float(net_debt_finnhub)
 
         return revenue_ttm, shares, net_debt
+
+    def _build_current_valuation_anchor(
+        self,
+        *,
+        ticker: str,
+        current_price_usd: float | None,
+        revenue_ttm: float | None,
+        shares: float | None,
+        net_debt: float | None,
+        evidence_packets: list[Any],
+    ) -> tuple[str, float | None, float | None]:
+        """Build a 'current valuation multiples' context block for the ValuationAgent.
+
+        The agent's exit multiples (exit_multiple, exit_sales_multiple) must be
+        GROUNDED in the market's current multiples — otherwise it picks them in a
+        vacuum and the forward fair value reflects the agent's multiple, not a
+        reasoned deviation from the market's view. This computes the observable
+        current EV/Sales, EV/EBITDA, P/S, and the analyst price-target upside from
+        the evidence + market primitives, and returns a short context string the
+        agent is told to anchor against. Returns ("", None, None) when no multiple
+        can be computed (the agent then falls back to peer medians, as before).
+
+        Returns ``(anchor_str, current_ev_sales, analyst_target_mean_usd)`` — the
+        two numeric anchors are also returned so the ForwardValuationEngine can
+        carry them onto the result for the memo to surface the model-vs-market and
+        model-vs-analyst-PT gaps (the non-obvious reconciliation most memos omit).
+        """
+        parts: list[str] = []
+        current_ev_sales: float | None = None
+        analyst_target_mean: float | None = None
+        try:
+            # EBITDA TTM + analyst PT + TTM revenue growth from evidence.
+            ebitda_ttm: float | None = None
+            target_mean: float | None = None
+            upside: float | None = None
+            rev_growth_ttm_yoy: float | None = None
+            for packet in evidence_packets:
+                for ev in getattr(packet, "evidence", []) or []:
+                    eid = getattr(ev, "id", "") or ""
+                    data = getattr(ev, "data", {}) or {}
+                    if not isinstance(data, dict):
+                        continue
+                    if eid.endswith("_metrics") and ebitda_ttm is None:
+                        es = data.get("annual_ebitda") or []
+                        if isinstance(es, list) and es and isinstance(es[0], dict):
+                            v = es[0].get("v")
+                            if isinstance(v, (int, float)):
+                                ebitda_ttm = float(v)
+                        if ebitda_ttm is None:
+                            em = data.get("ebitdaMarginTTM")
+                            if isinstance(em, (int, float)) and revenue_ttm:
+                                ebitda_ttm = revenue_ttm * float(em) / 100.0
+                        # TTM revenue growth (revenueGrowthTTMYoy) — the AUTHORITATIVE
+                        # "growth from today" signal for a forward valuation. Other
+                        # growth fields (yahoo_*_financials.revenue_growth_yoy, quarterly
+                        # YoY) can be stale or a single-quarter figure and conflict
+                        # badly for hypergrowth names (e.g. ONDS shows 1079% TTM but
+                        # 10.8% in a quarterly field — the agent must not average these).
+                        if rev_growth_ttm_yoy is None:
+                            gt = data.get("revenueGrowthTTMYoy")
+                            if isinstance(gt, (int, float)):
+                                rev_growth_ttm_yoy = float(gt)
+                    if "_price_target" in eid:
+                        tm = data.get("target_mean")
+                        if isinstance(tm, (int, float)) and tm > 0:
+                            target_mean = float(tm)
+                        um = data.get("upside_to_mean_pct")
+                        if isinstance(um, (int, float)):
+                            upside = float(um)
+
+            price = float(current_price_usd) if isinstance(current_price_usd, (int, float)) and current_price_usd > 0 else None
+            market_cap = (price * shares) if (price and shares) else None
+            ev_est = (market_cap + net_debt) if (market_cap is not None and net_debt is not None) else market_cap
+
+            if ev_est and revenue_ttm and revenue_ttm > 0:
+                current_ev_sales = round(ev_est / revenue_ttm, 2)
+                parts.append(f"current EV/Sales ≈ {current_ev_sales:.1f}x")
+            if rev_growth_ttm_yoy is not None:
+                parts.append(
+                    f"TTM revenue growth {rev_growth_ttm_yoy:+.1f}% YoY (AUTHORITATIVE — "
+                    f"base your revenue_growth_path_pct on this; ignore conflicting "
+                    f"quarterly/stale YoY figures)"
+                )
+            if market_cap and revenue_ttm and revenue_ttm > 0:
+                parts.append(f"current P/S ≈ {market_cap/revenue_ttm:.1f}x")
+            if ev_est and ebitda_ttm and ebitda_ttm > 0:
+                parts.append(f"current EV/EBITDA ≈ {ev_est/ebitda_ttm:.1f}x")
+            elif ebitda_ttm is not None and ebitda_ttm <= 0:
+                parts.append("current EBITDA <= 0 (pre-profit → use EV/Sales, not EV/EBITDA)")
+            if target_mean:
+                analyst_target_mean = float(target_mean)
+                tag = f", +{upside:.0f}% upside to mean" if upside is not None else ""
+                parts.append(f"analyst PT mean ${target_mean:,.2f}{tag}")
+        except Exception:
+            return "", None, None
+
+        if not parts:
+            return "", None, None
+        anchor = (
+            "## Current Valuation Anchor (OBSERVABLE — ground your exit multiples here)\n"
+            + "; ".join(parts)
+            + "\nAnchor exit_multiple / exit_sales_multiple to these current multiples "
+            "and justify any deviation in each rationale (e.g. '8x EV/Sales vs current "
+            "65x reflects growth deceleration + dilution'). Do NOT ignore them."
+        )
+        return anchor, current_ev_sales, analyst_target_mean
 
     def _write_auditor_flags_to_fde(
         self, holding_id: str, cycle_id: str, ticker: str, flags: list[Any]
@@ -5176,7 +5301,7 @@ def initiate_cycle(
 
     cycle_id = cycle_id or str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    mode = _current_mode(db_path)
+    mode = CycleOrchestrator._current_mode(db_path)
 
     conn = _sql_connect(db_path)
     try:
@@ -5357,11 +5482,3 @@ def _rebuild_evidence_brief(
         })
 
     return out
-
-
-def _current_mode(db_path: Path) -> str:
-    """Read current mode from mode_history or default to INSTALLING.
-
-    Delegates to CycleOrchestrator._current_mode to avoid duplication.
-    """
-    return CycleOrchestrator._current_mode(db_path)

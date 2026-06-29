@@ -64,6 +64,7 @@ def _scenario_price(
     g = _coerce_frac(assumptions.get("revenue_growth_path_pct"))
     margin = _coerce_frac(assumptions.get("ebitda_margin_at_horizon_pct"))
     exit_mult = _coerce_frac(assumptions.get("exit_multiple"))
+    exit_sales = _coerce_frac(assumptions.get("exit_sales_multiple"))
     acq_pct = _coerce_frac(assumptions.get("acquisition_revenue_contribution_pct")) or 0.0
 
     forward_revenue: float | None = None
@@ -71,6 +72,7 @@ def _scenario_price(
     forward_ev: float | None = None
     equity_value: float | None = None
     price_usd: float | None = None
+    valuation_path: str | None = None
 
     if g is None:
         notes_bits.append("revenue_growth_path_pct unavailable")
@@ -87,21 +89,57 @@ def _scenario_price(
                     f"acquisition contribution {acq_pct*100:.1f}% of revenue (low-confidence, LLM-inferred)"
                 )
 
-    if forward_revenue is not None and margin is not None:
-        if margin <= 0.0:
-            notes_bits.append("ebitda_margin <= 0; EBITDA undefined")
-        else:
-            forward_ebitda = round(forward_revenue * margin, 2)
-    elif margin is None:
-        notes_bits.append("ebitda_margin_at_horizon_pct unavailable")
+    # --- Valuation path selection ---
+    # EV/EBITDA is the primary path, but it is meaningless when EBITDA <= 0
+    # (a positive multiple applied to negative EBITDA yields a nonsensical
+    # negative EV). For pre-profit names (hypergrowth AI-infra, pre-revenue
+    # biotech), fall back to EV/Sales: forward_ev = forward_revenue * exit_sales.
+    # This is the standard sell-side approach for pre-profit names and lets the
+    # engine value the exact universe (NBIS/ONDS) that the EV/EBITDA-only path
+    # silently dropped. When EBITDA <= 0 and no exit_sales_multiple is provided,
+    # the scenario degrades to no price (prefer N/A over a wrong EV/EBITDA).
+    #
+    # Path priority:
+    #   1. EV/EBITDA  when margin > 0 AND exit_multiple provided
+    #   2. EV/Sales   when exit_sales_multiple provided (pre-profit, or profitable
+    #                 but the LLM only gave EV/Sales)
+    #   3. degrade    (no price + a note)
+    can_ev_ebitda = margin is not None and margin > 0.0 and exit_mult is not None and exit_mult > 0.0
+    can_ev_sales = forward_revenue is not None and exit_sales is not None and exit_sales > 0.0
 
-    if forward_ebitda is not None and exit_mult is not None:
-        if exit_mult <= 0.0:
-            notes_bits.append("exit_multiple <= 0; EV undefined")
+    if can_ev_ebitda:
+        forward_ebitda = round(forward_revenue * margin, 2)  # type: ignore[operator]
+        forward_ev = round(forward_ebitda * exit_mult, 2)
+        valuation_path = "ev_ebitda"
+        # V-009: when both exit multiples were provided, audit which one was
+        # selected (EV/EBITDA wins by the can_ev_ebitda branch order) so the
+        # memo can surface the agent's exit_sales_multiple even when ignored.
+        if exit_sales is not None and exit_sales > 0.0:
+            notes_bits.append(
+                f"both exit_multiple ({exit_mult}) and exit_sales_multiple "
+                f"({exit_sales}) provided — EV/EBITDA path selected"
+            )
+    elif can_ev_sales:
+        if margin is not None and margin <= 0.0:
+            notes_bits.append(
+                f"ebitda_margin {margin*100:.1f}% <= 0 → EV/Sales path (pre-profit)"
+            )
         else:
-            forward_ev = round(forward_ebitda * exit_mult, 2)
-    elif exit_mult is None:
-        notes_bits.append("exit_multiple unavailable")
+            notes_bits.append("EV/Sales path (exit_multiple not provided)")
+        forward_ev = round(forward_revenue * exit_sales, 2)  # type: ignore[operator]
+        valuation_path = "ev_sales"
+    else:
+        # Degrade with a precise reason.
+        if margin is None:
+            notes_bits.append("ebitda_margin_at_horizon_pct unavailable")
+        elif margin <= 0.0:
+            notes_bits.append(
+                f"ebitda_margin {margin*100:.1f}% <= 0 and no exit_sales_multiple"
+            )
+        elif exit_mult is None:
+            notes_bits.append("exit_multiple unavailable and no exit_sales_multiple fallback")
+        else:
+            notes_bits.append("no usable exit multiple (ev_ebitda/ev_sales both unavailable)")
 
     if forward_ev is not None:
         raw_equity = round(forward_ev - net_debt_usd, 2)
@@ -124,6 +162,8 @@ def _scenario_price(
         revenue_growth_path_pct=g,
         ebitda_margin_at_horizon_pct=margin,
         exit_multiple=exit_mult,
+        exit_sales_multiple=exit_sales,
+        valuation_path=valuation_path,
         acquisition_revenue_contribution_pct=acq_pct,
         forward_revenue_usd=forward_revenue,
         forward_ebitda_usd=forward_ebitda,
@@ -147,6 +187,8 @@ def compute_forward_valuation(
     shares_outstanding: float | None = None,
     net_debt_usd: float | None = None,
     current_price_usd: float | None = None,
+    current_ev_sales: float | None = None,
+    analyst_target_mean_usd: float | None = None,
 ) -> ForwardValuationResult:
     """Compute per-scenario forward fair-value prices. Keyword-only.
 
@@ -155,7 +197,17 @@ def compute_forward_valuation(
     is ``{"bull": p, "base": p, "bear": p}`` from the agent's
     ``probability_of_occurrence`` fields (NOT the Arbitrated vector). Never raises
     on bad data — degrades to ``is_available=False`` + notes.
+
+    ``cycle_id`` is REQUIRED (Architecture.md §5.2) — pass a non-empty string.
+    The orchestrator always passes one; this guard prevents a latent crash if
+    a future caller forgets.
     """
+    if not cycle_id:
+        raise ValueError(
+            "compute_forward_valuation: cycle_id is REQUIRED "
+            "(Architecture.md §5.2) — pass a non-empty string"
+        )
+
     notes_bits: list[str] = []
 
     # Clamp horizon into [6, 12].
@@ -191,6 +243,8 @@ def compute_forward_valuation(
             shares_outstanding=shares_outstanding,
             net_debt_usd=net_debt_usd,
             current_revenue_ttm_usd=current_revenue_ttm_usd,
+            current_ev_sales=current_ev_sales,
+            analyst_target_mean_usd=analyst_target_mean_usd,
             notes="; ".join(notes_bits),
         )
         _log(ticker, cycle_id, result, reason="degraded")
@@ -240,6 +294,12 @@ def compute_forward_valuation(
     if base_price is None and base_pt.notes:
         notes_bits.append(f"base: {base_pt.notes}")
 
+    # Surface underwater distress in-band (V-002): a floored-at-$0 base price
+    # is a real valuation result, not a missing primitive — flag it explicitly
+    # so the memo and ScenarioPriceEngine can distinguish "no result" from
+    # "result: equity floored at zero".
+    base_price_underwater = base_price == 0.0 and base_pt.equity_value_usd == 0.0
+
     result = ForwardValuationResult(
         ticker=ticker,
         cycle_id=cycle_id,
@@ -253,6 +313,9 @@ def compute_forward_valuation(
         shares_outstanding=shares,
         net_debt_usd=net_debt,
         current_revenue_ttm_usd=rev,
+        current_ev_sales=current_ev_sales,
+        analyst_target_mean_usd=analyst_target_mean_usd,
+        base_price_underwater=base_price_underwater,
         notes="; ".join(notes_bits) if notes_bits else "",
     )
     _log(ticker, cycle_id, result, reason="computed")
@@ -271,9 +334,10 @@ def _log(ticker: str, cycle_id: str, result: ForwardValuationResult, reason: str
             "bear_price": result.bear_price,
             "expected_price_usd": result.expected_price_usd,
             "is_available": result.is_available,
+            "base_price_underwater": result.base_price_underwater,
             "notes": result.notes,
         },
         level="INFO",
-        cycle_id=cycle_id or None,
+        cycle_id=cycle_id,
         msg=f"forward valuation {ticker}: base={result.base_price} ({reason})",
     )

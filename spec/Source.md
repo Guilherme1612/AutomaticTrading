@@ -83,11 +83,12 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | **Holding style** | Thesis-bound. Hold while thesis is valid and risk-adjusted. No time-based forced exits. |
 | **Cadence** | Boot-driven. One cycle per 24h+ gap detected at startup. Manual single-ticker re-runs from UI. |
 | **Host** | Apple M1 Max, 64GB unified memory, macOS |
-| **Inference primary** | `llama-server` (llama.cpp) + unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL |
-| **Inference secondary** | Ollama (operator-selectable via Settings) |
+| **Inference primary** | OpenRouter (deepseek/deepseek-v4-flash) via API |
+| **Inference cloud alternatives** | Anthropic (claude-sonnet-4-20250514), OpenAI (gpt-4o), OpenRouter (any of 200+ routed models) — all selectable via Settings or the wizard's LLM provider step. `model_registry.json` `backends.*` carries the canonical slot for each. |
+| **Inference local** | `llama-server` (llama.cpp) + unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL, and Ollama (qwen3.6:35b-a3b-coding-mxfp8) — both selectable via Settings. In local mode the inference process is `pf`-blocked from egress. |
 | **Brokers** | Alpaca paper (v1, day 1). IBKR earmarked for future live (Lisbon residency precludes Alpaca live). |
 | **Currency** | USD primary display and trading. EUR secondary toggle. Source: ECB daily reference rate. |
-| **Universe** | Operator-curated growth-tech across Nasdaq + NYSE. Optional Nasdaq-100 overlay. ~16 ticker seed. |
+| **Universe** | Operator-curated growth-tech across Nasdaq + NYSE. Optional Nasdaq-100 overlay. 10-ticker default seed (see §8.1). |
 | **Capital (paper)** | $5,000 simulated. 20% max single position ($1,000). |
 | **Modes** | SHADOW + PAPER (concurrent) → PAPER_VALIDATED → LIVE_EARLY → LIVE_STANDARD → LIVE_EXPANDED |
 | **Realistic timeline** | ~6 weeks to first PAPER cycles; 3-6 months to PAPER_VALIDATED depending on boot frequency |
@@ -294,26 +295,28 @@ The cadence is asymmetric on purpose. Stop-losses fire fast; thesis re-evaluatio
 
 Index inclusion is a heuristic, not a thesis. PMACS's universe is the set of tickers the operator believes can produce non-trivial alpha — typically smaller, growing companies with widening moats (Peter Lynch-style 10-baggers) and select Nasdaq-100 names with structural compute, platform, or distribution advantages.
 
-The default seed (16 tickers — operator-extensible via Settings):
+The default seed (10 tickers — operator-extensible via Settings; chosen for
+broad-coverage liquid large-cap data availability across all 13 personas):
 
 | Ticker | Company | Exchange | Note |
 |---|---|---|---|
+| MSFT | Microsoft Corp | Nasdaq | Cloud / Enterprise |
+| AMZN | Amazon.com Inc | Nasdaq | E-Commerce / Cloud |
+| NBIS | Nebius Group | Nasdaq | AI Infrastructure |
+| PLTR | Palantir Technologies | Nasdaq | Enterprise AI / Analytics |
+| NET | Cloudflare Inc | NYSE | Cloud / CDN |
+| MELI | MercadoLibre Inc | Nasdaq | LATAM commerce / fintech |
+| CELH | Celsius Holdings | Nasdaq | Beverages / Energy |
+| INMD | InMode Ltd | Nasdaq | Medical Devices |
 | ONDS | Ondas Holdings | Nasdaq | Drone networking |
-| NU | Nu Holdings | NYSE | LATAM neobank |
-| TEM | Tempus AI | Nasdaq | AI-driven precision medicine |
 | ZETA | Zeta Global | Nasdaq | AI marketing platform |
-| HIMS | Hims & Hers Health | NYSE | Telehealth + chronic care |
-| NBIS | Nebius Group | Nasdaq | AI-cloud infrastructure |
-| MELI | MercadoLibre | Nasdaq | LATAM commerce + fintech |
-| RKLB | Rocket Lab | Nasdaq | Small-launch + space systems |
-| ASTS | AST SpaceMobile | Nasdaq | Satellite-direct-to-cellular |
-| FIG | Figma | NYSE | Design-tool platform |
-| KDK | Kodiak AI | Nasdaq | Autonomous trucking. SPAC merger Sept 2025. |
-| AUR | Aurora Innovation | Nasdaq | Autonomous trucking |
-| GRAB | Grab Holdings | Nasdaq | SE Asia super-app |
-| RBRK | Rubrik | NYSE | Data security / cyber |
-| AAOI | Applied Optoelectronics | Nasdaq | Optical networking |
-| SWMR | Swarmer Inc | Nasdaq | Drone autonomy. March 2026 IPO — very limited history. |
+
+The wizard step renders these as 10 selectable checkboxes (Source.md §12 Step 7
+— the earlier 16-ticker aspirational count was consolidated to 10 names with
+broader data coverage across all personas). Names like TEM, HIMS, RKLB,
+ASTS, FIG, KOD, AUR, GRAB, RBRK, AAOI, SWMR remain valid additions via
+Universe → Add ticker; the dynamic Add-row below the seed accepts any
+comma-separated list and validates OHLCV availability before admission.
 
 ### 8.2 Limited-history flagging
 
@@ -478,49 +481,47 @@ The wizard runs once on initial install. It is the only setup flow. After comple
 
 ### 12.1 Step sequence
 
-The wizard is 10 steps. Each step blocks until passed. The operator can quit and resume; state is checkpointed at every step.
+The wizard is **11 numbered steps** (10 dots rendered for the **local** path; the **cloud** path skips the model-download step so renders 10 dots — see §12.4). Each step blocks until passed. The operator can quit and resume; state is checkpointed to `wizard_state` SQLite table after every step.
 
 **Step 1 — Welcome and system identity check.**
-Detects hardware. Confirms M1 family with at least 32GB RAM. Warns if less than 64GB (system will run but cycle times will be longer). Displays detected configuration for operator confirmation.
+Detects platform + Python version. Displays detected configuration for operator confirmation. (The earlier M1-Max/64GB gate was relaxed: PMACS now runs on any Apple Silicon or Linux/macOS host with Python 3.11+; cycle time scales with hardware but is no longer blocking.)
 
-**Step 2 — Inference backend detection.**
-Detects llama-server (default backend). If absent, shows install instructions (`brew install llama.cpp` or build from source) and blocks until verified. Optionally detects Ollama as alternate backend; surfaces but does not require.
+**Step 2 — Inference backend choice.**
+Operator picks *Local* (llama-server / Ollama) or *Cloud* (Anthropic / OpenAI / OpenRouter). For local, the wizard probes for llama-server on :8080 and Ollama on :11434; missing llama-server blocks, missing Ollama only surfaces a soft warning. For cloud, advances to Step 3 with `backend_type=cloud`.
 
-**Step 3 — Model download and verification.**
-Default model: `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL` (~21GB).
-Checks if already on disk. Shows progress bar if downloading. Verifies SHA256 against `config/model_hashes.toml`. Tests inference: sends a short prompt, confirms structured output works.
+**Step 3 — Local: Model download + SHA256 verification.  Cloud: LLM provider selection.**
+*Local:* Default model `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL` (~21 GB). Checks if already on disk, shows progress bar if downloading, verifies SHA256 against `config/model_hashes.toml`, and runs a short inference to confirm structured output works. Operator can `skip_model` to defer GGUF download and configure later.
+*Cloud:* Renders `step10_llm_provider.html` — provider radio cards (Anthropic / OpenAI / OpenRouter), model-name field (e.g. `claude-sonnet-4-20250514` / `gpt-4o` / `openai/gpt-4o`), API-key field, optional `base_url` for proxy-compatible APIs. On submit, writes `model_registry.json` `active` and provider-specific `default_model` / `base_url`, then stores the API key in macOS Keychain under the canonical slot `pmacs.credentials.<provider>_api_key`. No short-name fallback.
 
-**Step 4 — macOS Keychain setup.**
-Operator enters credentials for each of:
-- Alpaca paper API key + secret
-- Polygon.io API key
-- Finnhub API key
-- FRED API key
-- SEC EDGAR User-Agent string (legal requirement for SEC API access)
-- Optional: openFDA, FINRA, IR-page-monitoring credentials.
-
-Each stored under service name `pmacs.<category>.<key>` in macOS Keychain. Never as environment variables. Never in config files. Never in the repository. The wizard tests each credential against a small read query before accepting.
-
-**Step 4.5 — Embedding model setup.**
-Download `BAAI/bge-base-en-v1.5` via `sentence-transformers`. Verify model loads and produces a 768-dim vector on test input. ~420MB download, ~1.2GB RAM during inference. Runs on CPU.
+**Step 4 — macOS Keychain setup + embedding model (Step 4.5 in earlier spec).**
+Operator enters data-source credentials (Polygon, Finnhub, FRED, EDGAR User-Agent) plus any cloud LLM credentials not already stored. Each goes to `pmacs.<category>.<key>` slot. Embedding model `BAAI/bge-base-en-v1.5` (~420 MB) is then loaded via `sentence-transformers`; if `sentence-transformers` is missing the wizard shows an `install_hint` (`pip install sentence-transformers`) and lets the operator advance to retry later. Embedding model is now bundled into Step 4 rather than its own numbered step.
 
 **Step 5 — Database initialization.**
-Initializes KuzuDB, Qdrant, DuckDB, SQLite, and the audit log. Writes the genesis audit entry with `prev_sha256 = "0" * 64`. Runs schema migrations via `ops/migrate.py`.
+Initializes SQLite, KuzuDB (graph), Qdrant (vectors), DuckDB (analytics), and the audit log. Writes the genesis audit entry (`prev_sha256 = "0" * 64`). Runs schema migrations via `_run_migrations`.
 
 **Step 6 — Data source connectivity ping.**
-One ping per source. Displays a green/red matrix. CRITICAL sources must pass to proceed. IMPORTANT and NICE_TO_HAVE sources can fail without blocking; the wizard shows a warning and offers retry.
+One ping per source. Displays a green/red matrix. CRITICAL sources must pass to proceed; IMPORTANT and NICE_TO_HAVE failures are warnings the operator can defer.
 
 **Step 7 — Universe seed.**
-Displays the default 16-ticker seed. Operator can deselect any, add more, or accept as-is. Each ticker validated for OHLCV availability before admission. Limited-history flags applied automatically.
+Displays the default 10-ticker seed (§8.1). Operator can deselect any, add more, or accept as-is. Each ticker validated for OHLCV availability before admission. Limited-history flags applied automatically.
 
 **Step 8 — Cycle preferences.**
-Confirms display currency (USD primary). Confirms timezone for "EOD" semantics (default US/Eastern, 16:30 ET). No schedule needed — PMACS is boot-driven.
+Confirms display currency (USD primary, EUR secondary) and timezone for "EOD" semantics (default US/Eastern, 16:30 ET). No schedule needed — PMACS is boot-driven.
 
 **Step 9 — Smoke-test cycle.**
-Runs one full pipeline against synthetic fixture data. Verifies all engines execute, all DBs are writable, the audit chain validates, the kill-switch trigger works. Displays the result. Operator can inspect the synthetic outputs to understand what real cycles will look like.
+Verifies (a) DB writable, (b) inference backend reachable (local llama-server health check, or cloud API key resolves in Keychain), (c) audit log writable, (d) embedding model loads and produces a 768-dim vector. Displays a 4-of-4 pass/fail badge. The operator explicitly clicks *Promote* to advance.
 
 **Step 10 — Promote to SHADOW + PAPER.**
-The audit log records the first mode promotion. Wizard exits. Dashboard opens at `localhost:8000`.
+Calls `engines.mode_manager.transition_mode(INSTALLING → PAPER)` and writes the transition to `mode_history`. Marks wizard as `wizard_completed=1` so the wizard route auto-redirects to `/` on subsequent loads. Dashboard opens at `localhost:8000`.
+
+### 12.4 Wizard dot count
+
+The progress strip renders **10 dots** in either path:
+
+- **Local path** — the model-download step (Step 3 local) counts as one dot; total 10.
+- **Cloud path** — the LLM-provider step (Step 3 cloud) replaces the model-download dot, so total stays at 10.
+
+The dot count is therefore constant across paths; the cloud path does not "skip" a dot — it substitutes Step 3 with the provider form. This matches the operator's mental model ("10 setup stages, one of which is provider-specific") and keeps the strip visually stable.
 
 ### 12.2 Wizard re-entry
 
@@ -735,6 +736,23 @@ Last 20 decisions across all cycles. Per row: timestamp, ticker chip, verdict, r
 - Approved by operator last 30 days: `7`
 - Rolled back last 30 days: `1`
 - Click → Settings → Mutation Engine
+
+### 14.7a Cost widget (Phase 16)
+
+Inside the Portfolio summary card, beneath the portfolio sparkline, a thin
+*Cost* strip summarizes the day's and month's LLM spend against operator caps:
+
+- **Today**: dollar amount, cap, progress bar (>90 % red, 70-90 % amber,
+  <70 % positive green).
+- **Month**: same layout.
+- **Last cycle cost** (text): e.g. `$0.42`.
+
+Live updates via the `cost` SSE stream (System Event Types — Architecture.md §5).
+Backend in `pmacs/billing/` (`cost_calculator`, `usage_logger`, `budget_enforcer`,
+`period_roller`, `reconciler`, `drift_monitor`, `token_estimator`,
+`pricing`) — all reconciled against the OpenRouter `/generation` endpoint so
+`actual_cost_usd` is authoritative. Per-persona 30-day breakdown is on
+Settings → Budget (collapse), not the dashboard.
 
 ### 14.8 Empty states
 
@@ -1056,6 +1074,8 @@ The memo (rendered in the single-ticker drawer §16.6 and on `/memo/{ticker}`) g
 - **Valuation anchor (reverse-DCF).** A compact block: "Market is pricing **18%** growth; GrowthHunter estimates **9%** — **BEARISH gap**" (the `growth_gap_pct` and `valuation_lean` from `ReverseDcfResult`), plus the probability-weighted expected price from `ScenarioPriceResult` against the current price. This is the deterministic bull/bear arbiter — pure math, no LLM (`Architecture.md §9.4b`) — and it gives the operator a sanity check on whether the debate's directional lean matches what the market is actually pricing.
 - **Forward valuation (6-12 month).** A scenario-valuation block from the `ValuationAgent` + `ForwardValuationEngine` (`Agents.md §13b`, `Architecture.md §9.4b`): bull/base/bear forward fair-value prices, the scenario-probability-weighted expected price vs the current price, the `horizon_months`, and the base-case assumptions (revenue growth path, EBITDA margin at horizon, exit EV/EBITDA multiple, acquisition impact with its confidence flag). This is the operator's "predict valuation from scenarios and numbers" lens — the LLM emits the *assumptions* (growth → guidance proxy → margin trajectory → EBITDA margin → acquisition impact) and a deterministic Python engine computes the price (Five Non-Negotiable #2 — LLMs never math, `§1.6`). When `ForwardValuationResult.is_available` is False (missing revenue/shares/net-debt primitives), the block shows "forward valuation unavailable this cycle" rather than a fabricated price.
 
+  Inline under the bull/base/bear prices, the memo renders a compact **current-valuation-anchor block**: the market's observable multiples (current EV/Sales, current EV/EBITDA, current P/S), the analyst price-target consensus, and the agent's exit-multiple assumption — so the operator sees the gap between what the market is paying, what the analyst consensus implies, and what the agent is assuming. The orchestrator builds this anchor deterministically (`_build_current_valuation_anchor`, `Architecture.md §9.4b`) before the ValuationAgent runs, so the anchor and the agent are looking at the same evidence packets. When `ForwardValuationResult.base_price_underwater` is True (forward EV < net debt → equity floored at $0), the memo surfaces the distress signal in-band with the scenario notes instead of falling back silently to the reverse-DCF grid.
+
 When wave-2 timed out or aborted for a cycle, these sections show a "debate unavailable this cycle" note rather than fabricated content.
 
 ---
@@ -1144,7 +1164,7 @@ Six panels in a 2x3 grid (single column on narrow viewports):
 
 ### 18.4 Process status panel
 
-Per process (cortex, cortex-self-check, nervous, execution, dashboard, stoploss, mutation, inference):
+Per process (cortex, cortex-self-check, nervous, execution, stoploss, mutation, inference):
 - Heartbeat age
 - Restart count last 24h
 - BROKEN_CRASH_LOOP flag if applicable
@@ -1239,11 +1259,43 @@ Single scrollable page with section anchors in left sub-nav. Sections (in order)
 
 ### 20.4 Inference
 
-- Backend (llama-server / Ollama)
-- Model selection (from `model_registry.json`)
-- Per-persona model override (advanced, mostly default)
+- **Backend** radio cards split into Local (llama-server / Ollama) and Cloud
+  (Anthropic / OpenAI / OpenRouter). Each card shows the active model name
+  in mono and a live status badge (`Working` / `Invalid key` / `No budget`
+  / `No key` / `Not working` — populated by `Test all` against the actual
+  provider, not just keychain presence).
+- **Model name** field — for cloud providers, free-text field; for local,
+  picker from `model_registry.json`. Save writes to the backend's
+  `default_model` (operator directive: a backend switch never clobbers a
+  previously-configured model).
+- **API key** field (cloud only) — saves to keychain slot
+  `pmacs.credentials.<provider>_api_key`. No short-name fallback.
+- **Base URL** override (cloud only) — for OpenAI-compatible proxies; empty
+  = provider default.
+- **Test** button — probes the active backend. **Test all** — probes every
+  registered provider in parallel.
 - Max concurrent inference slots (default 3 for llama-server, 1 for Ollama)
 - Thinking mode per persona (where supported)
+
+### 20.4a Budget (Phase 16)
+
+A dedicated row between Brokers and Inference in the settings sub-nav.
+Three-card layout:
+
+- **Today** — current daily spend vs daily cap (default $20/day); progress
+  bar.
+- **This Month** — current monthly spend vs monthly cap (default $200/mo);
+  progress bar.
+- **Caps** — daily + monthly cap inputs + Save button (writes to
+  `config/risk.toml [billing]`, operator-confirmed).
+
+Below the caps: a *Per-persona breakdown (30 days)* collapsible table
+(persona / calls / tokens / cost) and a *Pricing table* collapsible (model
+id / input per 1M / output per 1M / cached per 1M, fed from OpenRouter's
+`/api/v1/models` endpoint). *Refresh pricing* button re-fetches the table.
+
+Backend in `pmacs/billing/` — see Architecture.md §17.7 (PR #14 Phase 16
+subsystem).
 
 ### 20.5 Universe
 
@@ -1572,6 +1624,14 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 | **TradePlan** | Ed25519-signed instruction sent from `pmacs-nervous` to `pmacs-execution`. |
 | **Verdict tier** | Operator-facing classification: STRONG_BUY / BUY / HOLD / SKIP. |
 | **Working memory** | Per-cycle scratch state in SQLite. |
+| **ValuationAgent** | Post-arbitration LLM persona that emits bull/base/bear scenario *assumptions* (growth path, margin trajectory, EBITDA margin, exit multiple, acquisition impact). The deterministic `ForwardValuationEngine` consumes those assumptions and computes the forward fair-value prices — the LLM never emits a price number. |
+| **Reverse-DCF** | Deterministic valuation engine that solves for the growth rate the market is *implying* from the current price, then compares it to GrowthHunter's estimate. Output is a `growth_gap_pct` and a `valuation_lean` (BULLISH/BEARISH/NEUTRAL). |
+| **ForwardValuation** | Deterministic EV/EBITDA forward-price engine on a 6–12 month horizon. Consumes ValuationAgent's bull/base/bear assumptions + `EvidencePacket` primitives and emits a scenario-weighted expected price. Never fabricates — degrades to `is_available=False` when primitives are missing. |
+| **BullAdvocate / BearAdvocate** | Wave-2 personas that read the frozen wave-1 outputs and argue the bull/bear case respectively. Enter Arbitration as normal `DirectionalProbability` voters (immature, Brier-dampened until calibrated). |
+| **CrossPersonaAuditor** | Wave-2 synthesis auditor. Emits structured **flags** (CITATION_GAP / CONCLUSION_UNSUPPORTED / CONFLICTING_CONCLUSIONS / NUMBER_MISUSE / HALLUCINATED_EVIDENCE) that cap arbitration weights, enrich the Crucible brief, and feed the FDE. Never emits probabilities. |
+| **Simulation persona** | Deterministic fallback that produces conservative low-conviction outputs when the LLM backend is unreachable. Outputs are marked with a `SIMULATION — ` prefix in the audit trail. |
+| **Daily/Monthly cap** | Operator-configured LLM-spend caps written to `config/risk.toml [billing]`. Default $20/day, $200/month, $8/cycle. Surfaced in the Dashboard cost widget and Settings → Budget panel. |
+| **Wave-1 / Wave-2** | Wave-1 = the 7 analysis personas (§5–§11 of Agents.md). Wave-2 = BullAdvocate + BearAdvocate + CrossPersonaAuditor — runs after wave-1 is FROZEN, before Arbitration. |
 
 ---
 

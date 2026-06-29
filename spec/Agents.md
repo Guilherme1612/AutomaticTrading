@@ -988,6 +988,43 @@ class AuditorOutput(BaseModel):
     # NOTE: no p_up/p_flat/p_down. The auditor never produces probabilities.
 ```
 
+### 11d.4a Persona narrative field map (auditor cascade)
+
+The auditor's prompt asks for each persona's *conclusion text* — but each
+wave-1 persona writes its narrative to a different field on its Pydantic
+schema (the schema name matches the persona's intent, e.g. `regime_reasoning`
+on `MacroRegimeOutput`). The GBNF grammar + Pydantic `model_dump()` strip the
+`analysis` field the prompt also produces, so the auditor's cascade must walk
+the persona-specific field FIRST before falling back to the universal
+`key_signal → analysis → reasoning` chain.
+
+| Wave-1 persona      | Primary narrative field               | Fallback fields                                       |
+|---------------------|---------------------------------------|-------------------------------------------------------|
+| `macro_regime`      | `regime_reasoning`                    | `sector_rotation_summary`, `key_signal`, `analysis`   |
+| `catalyst_summarizer` | `net_catalyst_outlook`              | `catalysts[].description` (aggregated), `key_signal`  |
+| `moat_analyst`      | `competitive_entry_reasoning`         | `moat_components[].reasoning` (aggregated), `key_signal` |
+| `growth_hunter`     | `growth_durability_reasoning`         | `key_risk_to_growth`, `key_signal`, `analysis`        |
+| `insider_activity`  | `signal_reasoning`                    | `key_signal`, `analysis`, `reasoning`                  |
+| `short_interest`    | `anomaly_reasoning`                   | `key_signal`, `analysis`, `reasoning`                  |
+| `forensics`         | `red_flags[].description` (aggregated) | `overall_accounting_quality`, `key_signal`, `analysis` |
+
+The auditor, bull advocate, and bear advocate all consume this cascade via
+`pmacs/agents/_peer_render.py::extract_narrative(name, body)`. Sharing the
+helper means all three wave-2 consumers see the same view of the wave-1
+narratives — no per-persona drift between the auditor's reasoning-integrity
+check and the advocates' case-construction prompt. Nested-list fields
+(`catalysts`, `moat_components`, `red_flags`) are aggregated into a single
+string under synthetic `*_aggregated_*` keys so the cascade reads them
+uniformly with the per-persona narrative field names. Universal fallback
+(`key_signal → analysis → reasoning`) applies for personas NOT in the map
+(e.g. wave-2 personas, edge cases).
+
+This map is the source of truth. Any schema rename (e.g.
+`regime_reasoning → macro_reasoning`) must update this table AND the
+`_PERSONA_NARRATIVE_FIELDS` dict in `pmacs/agents/_peer_render.py` in the
+same commit. CI lint: `tests/unit/test_auditor_flags.py::test_cascade_map_covers_all_seven_wave1_personas`
+fails if the dict keys drift from `PersonaName` enum values.
+
 ### 11d.5 Sanity validator
 
 - Every `flag.target_persona` is a real wave-1 persona (not another wave-2 agent)

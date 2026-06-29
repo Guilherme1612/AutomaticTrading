@@ -1476,6 +1476,53 @@ def transition(holding: Holding, new_state: HoldingState, reason: str,
     return holding
 ```
 
+### 8.2a Memo verdict & agent_signals persistence contract
+
+Every memo row MUST carry `verdict` (column) and `memo_json.verdict` (key) on
+write, including Crucible-abort stubs. The orchestrator's Crucible-abort branch
+sets `abort_memo_dict["verdict"] = "HOLD"` before serializing — this is the
+explicit verification point; the `verdict` column is the public-API surface, the
+`memo_json.verdict` key is the template-readback surface used by
+`pmacs/web/templates/memo.html` and `/agents` Sankey wiring. Defense in depth:
+the route's verdict chain (`holding.verdict → ticker_decisions[0].verdict →
+"N/A"`) keeps the chain authoritative even when memo_json is corrupted, but the
+memo writer MUST include `verdict` directly to remove the race.
+
+Per-persona `agent_signals` MUST be persisted in `memo_json` for every memo
+regardless of cycle outcome. The orchestrator caches signals on
+`self._last_persona_signals` in `_step_13e_arbitration` (BEFORE the Crucible
+loop runs) and writes them into both paths:
+
+  - **Success path** (`_step_13mn_post_decision`): reads from cache, populates
+    `memo_dict["agent_signals"]` only when not already set (preserves any
+    memo-writer-overridden value).
+  - **Crucible-abort path**: reads from cache and writes directly into
+    `abort_memo_dict["agent_signals"]`. Without this, every abort stub
+    (severity ≥ 0.50 from `_step_13fg_crucible`) renders the `/agents`
+    Communication Layer Sankey tab as empty even when 7 wave-1 personas had
+    produced real outputs.
+
+`agent_signals[i]` shape (deterministic; safe to cache as memo_json):
+
+```python
+{
+    "persona": str,           # lowercase PersonaName.value
+    "signal": "bullish"|"bearish"|"neutral",   # derived from p_up/p_down
+    "direction": <same as signal>,
+    "p_up": float,            # rounded to 4 decimals
+    "p_flat": float,
+    "p_down": float,
+    "confidence": float,
+    "analysis": str,          # reasoning[:500]
+    "evidence_cited": list,   # evidence_ids[:5]
+}
+```
+
+CycleLock at orchestrator.py:75-101 (file-based process lock, one cycle per
+process at a time) keeps the `self._last_persona_signals` instance attr safe.
+Phase 8 may move the cache into a SQLite scratch table if multi-process cycle
+support is added.
+
 ### 8.3 Holding schema
 
 ```python

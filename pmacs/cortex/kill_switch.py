@@ -760,21 +760,36 @@ def _check_crash_loop(db_path: str | Path) -> TriggerResult:
 def _check_budget_daily(
     db_path: str | Path | None = None,
 ) -> TriggerResult:
-    """Check if daily budget hard cap has been exceeded."""
+    """Check if daily budget hard cap has been exceeded.
+
+    Reads the operator-configured cap from config/risk.toml [billing] (defaults
+    to DEFAULT_DAILY_HARD_CAP if the file is missing/malformed). The previous
+    version read the hardcoded default constant and never honored Settings UI
+    writes — root cause of the 2026-06-24 false engagement at $2.04/$2.00.
+    """
     db_path = _resolve_db(db_path)
     try:
-        from pmacs.billing.budget_enforcer import DEFAULT_DAILY_HARD_CAP, _get_period_total
+        from pmacs.billing.budget_enforcer import (
+            DEFAULT_DAILY_HARD_CAP,
+            _get_period_total,
+            _load_billing_caps_from_risk_toml,
+        )
+
+        daily_cap, _monthly_cap, _cycle_cap = _load_billing_caps_from_risk_toml()
+        # If TOML missing entirely, _load returns the defaults — same value,
+        # but keep the explicit fallback for clarity and symmetry with monthly.
+        effective_cap = daily_cap if daily_cap > 0 else DEFAULT_DAILY_HARD_CAP
 
         conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "today")
         finally:
             conn.close()
-        triggered = current >= DEFAULT_DAILY_HARD_CAP
+        triggered = current >= effective_cap
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_DAILY",
             triggered=triggered,
-            reason=f"Daily spend ${current:.4f}/{DEFAULT_DAILY_HARD_CAP:.2f}",
+            reason=f"Daily spend ${current:.4f}/{effective_cap:.2f}",
         )
     except Exception as exc:
         log_debug(
@@ -794,21 +809,33 @@ def _check_budget_daily(
 def _check_budget_monthly(
     db_path: str | Path | None = None,
 ) -> TriggerResult:
-    """Check if monthly budget hard cap has been exceeded."""
+    """Check if monthly budget hard cap has been exceeded.
+
+    Reads the operator-configured cap from config/risk.toml [billing] (defaults
+    to DEFAULT_MONTHLY_HARD_CAP if the file is missing/malformed). See
+    _check_budget_daily for the rationale — same bug pattern.
+    """
     db_path = _resolve_db(db_path)
     try:
-        from pmacs.billing.budget_enforcer import DEFAULT_MONTHLY_HARD_CAP, _get_period_total
+        from pmacs.billing.budget_enforcer import (
+            DEFAULT_MONTHLY_HARD_CAP,
+            _get_period_total,
+            _load_billing_caps_from_risk_toml,
+        )
+
+        _daily_cap, monthly_cap, _cycle_cap = _load_billing_caps_from_risk_toml()
+        effective_cap = monthly_cap if monthly_cap > 0 else DEFAULT_MONTHLY_HARD_CAP
 
         conn = _sql_connect(db_path)
         try:
             current = _get_period_total(conn, "this_month")
         finally:
             conn.close()
-        triggered = current >= DEFAULT_MONTHLY_HARD_CAP
+        triggered = current >= effective_cap
         return TriggerResult(
             trigger_id="CYCLE_BLOCKED_BUDGET_MONTHLY",
             triggered=triggered,
-            reason=f"Monthly spend ${current:.4f}/{DEFAULT_MONTHLY_HARD_CAP:.2f}",
+            reason=f"Monthly spend ${current:.4f}/{effective_cap:.2f}",
         )
     except Exception as exc:
         log_debug(

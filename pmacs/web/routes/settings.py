@@ -266,7 +266,18 @@ async def get_inference_config():
 
 @router.post("/api/settings/inference/provider")
 async def set_inference_provider(req: InferenceProviderRequest):
-    """Switch the active LLM provider in model_registry.json."""
+    """Switch the active LLM provider in model_registry.json.
+
+    Operator directive (Jun 29 2026): only the operator may change the active
+    backend. Two safety nets:
+      1. Idempotency — if the requested provider is already active, return ok
+         without re-writing the file (prevents accidental double-fire).
+      2. Explicit-only — this endpoint is wired exclusively to the provider
+         radio buttons on /settings, which fire on a real user click. Any
+         other caller (the mode toggle, page load, dashboard, etc.) must NOT
+         invoke it; we don't add a route-side toggle here because the only
+         known offender was the front-end auto-select, which is now removed.
+    """
     registry = _load_registry()
     backends = registry.get("backends", {})
 
@@ -275,6 +286,11 @@ async def set_inference_provider(req: InferenceProviderRequest):
             {"ok": False, "error": f"Unknown provider: {req.provider}"},
             status_code=400,
         )
+
+    current = registry.get("active", "")
+    if current == req.provider:
+        # Idempotent — already active; don't rewrite the file.
+        return JSONResponse({"ok": True, "active": req.provider, "noop": True})
 
     registry["active"] = req.provider
     _save_registry(registry)

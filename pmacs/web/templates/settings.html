@@ -1026,6 +1026,11 @@ function syncProviderUI(providerId) {
 }
 
 function setInferenceMode(mode) {
+    // Operator directive (Jun 29 2026): the Local/Cloud toggle only shows/hides
+    // the panel. It MUST NOT change the active backend — only an explicit click
+    // on a provider radio (which calls switchProvider()) may write to active.
+    // Auto-selecting "first available" silently flipped openrouter -> anthropic
+    // on every panel toggle, regardless of operator intent.
     currentMode = mode;
     var localPanel = document.getElementById('inference-local-panel');
     var cloudPanel = document.getElementById('inference-cloud-panel');
@@ -1033,19 +1038,9 @@ function setInferenceMode(mode) {
     if (mode === 'local') {
         localPanel.classList.remove('hidden');
         cloudPanel.classList.add('hidden');
-        // Auto-select first local provider if current is cloud
-        var currentIsLocal = localProviders.some(function(p) { return p.id === currentProvider; });
-        if (!currentIsLocal && localProviders.length > 0) {
-            switchProvider(localProviders[0].id);
-        }
     } else {
         localPanel.classList.add('hidden');
         cloudPanel.classList.remove('hidden');
-        // Auto-select first cloud provider if current is local
-        var currentIsCloud = cloudProviders.some(function(p) { return p.id === currentProvider; });
-        if (!currentIsCloud && cloudProviders.length > 0) {
-            switchProvider(cloudProviders[0].id);
-        }
     }
 
     // Update toggle visuals

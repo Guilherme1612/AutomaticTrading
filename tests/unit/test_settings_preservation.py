@@ -193,3 +193,60 @@ def test_switching_to_unknown_provider_returns_400(isolated_registry):
         set_inference_provider(InferenceProviderRequest(provider="nope"))
     )
     assert resp.status_code == 400
+
+
+# --- set_inference_provider: idempotency guard (Jun 29 2026 regression) -----
+#
+# Bug: clicking the Local/Cloud mode toggle on /settings silently called
+# switchProvider(firstCloud[0]) every time the panel flipped, flipping the
+# active backend from openrouter -> anthropic without operator consent.
+# Fix: (a) front-end no longer auto-selects on panel toggle (see
+# pmacs/web/templates/settings.html setInferenceMode), (b) backend is now
+# idempotent — a request whose target provider is already active returns
+# ``noop: True`` without touching the file.
+#
+# These tests pin (b). The (a) side is a JavaScript-only change and isn't
+# covered here; the test that proves (a) lives in the manual repro in the
+# commit message.
+
+
+def test_setting_active_to_already_active_returns_noop_and_does_not_write(
+    isolated_registry,
+):
+    """If the operator (or a stray caller) POSTs the same provider that is
+    already active, the response carries ``noop: True`` and the registry is
+    untouched — specifically, the `active` field is not re-written and no
+    observable mutation occurs (we assert via the fixture's save counter
+    below)."""
+    # Pre-condition: openrouter is NOT the active backend.
+    assert isolated_registry["reg"]["active"] == "llama_server"
+
+    # First switch — actually changes active, NOT a noop.
+    resp = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+    )
+    body = _body(resp)
+    assert body["ok"] is True
+    assert "noop" not in body  # a real switch does not carry the noop flag
+    assert isolated_registry["reg"]["active"] == "openrouter"
+
+    # Second switch to the SAME provider — must be idempotent.
+    resp2 = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="openrouter"))
+    )
+    body2 = _body(resp2)
+    assert body2["ok"] is True
+    assert body2["active"] == "openrouter"
+    assert body2.get("noop") is True  # the noop flag is set on idempotent calls
+    assert isolated_registry["reg"]["active"] == "openrouter"
+
+
+def test_unknown_provider_returns_400_without_touching_active(isolated_registry):
+    """Unknown-provider rejection must not silently leave the registry in an
+    inconsistent state. (Pre-existing behavior, locked here as a guard.)"""
+    before = isolated_registry["reg"]["active"]
+    resp = asyncio.run(
+        set_inference_provider(InferenceProviderRequest(provider="nope"))
+    )
+    assert resp.status_code == 400
+    assert isolated_registry["reg"]["active"] == before

@@ -44,9 +44,16 @@ These are absolute. They are not guidelines. Violating any of them is a bug.
 4. **Mode-pure inference.** The active backend sets the mode for the whole cycle. *Local mode* (llama-server/Ollama): no cloud LLM calls; inference `pf`-blocked from internet. *API mode* (OpenAI/OpenRouter/Anthropic/other): inference calls the configured cloud provider (no `pf`-block on inference). No telemetry in either mode. No per-persona backend mixing — all personas use the active backend. Data fetching uses the internet in both modes.
 5. **Operator owns the kill switch.** Disengagement requires an explicit operator action (typed reason). The system can engage it. Only the operator can lift it.
 
-## Anti-Patterns (enforce via pre-commit + CI)
+## Anti-Patterns (enforce via pre-commit + hookify)
 
-These are from `spec/Architecture.md §16`. Every one of them is a specific code pattern that is FORBIDDEN. When writing code, check your output against these:
+These are from `spec/Architecture.md §16`. Every one of them is a specific code pattern that is FORBIDDEN. When writing code, check your output against these.
+
+**Enforcement (complementary layers):**
+
+- **pre-commit** (`.pre-commit-config.yaml`) — 6 patterns, fires on `git commit`. Covers file-level exact-string greps (e.g. `class Config:` only in `pmacs/schemas/`, `eur_per_usd:` field declarations, secrets-in-logs).
+- **hookify** (`.claude/hookify.pmacs-anti-patterns.local.md`) — 5 patterns, fires on live `Edit`/`Write`/`MultiEdit` from Claude Code against `pmacs/*.py`. Covers content-shape regex (e.g. `cycle_id=None`) that pre-commit's exact-string grep would miss.
+
+Together: 11 distinct anti-patterns covered. The hookify rule MUST live directly in `.claude/` (not a subdirectory — loader pattern is `glob('.claude/hookify.*.local.md')`) and MUST use `field: content` in its YAML conditions (not `field: new_text` — that field does not resolve for Edit operations). See `spec/Architecture.md §16.15` for the full rationale and `tests/unit/test_hookify_rule.py` for the regex regression suite.
 
 - ❌ `holding.state = "ABORTED_LLM"` — MUST use `state_machine.transition()`
 - ❌ `json.dumps(payload)` for audit — MUST use `canonical_json(payload)`
@@ -151,6 +158,16 @@ All in `config/`:
 - `model_registry.json` — backend selection (llama-server primary, Ollama secondary)
 - `model_hashes.toml` — GGUF SHA256 for integrity verification
 - `source_criticality.toml` — CRITICAL / IMPORTANT / NICE_TO_HAVE per data source
+
+## Daily slash commands (PMACS-specific)
+
+Three PMACS-specific skills and matching slash commands automate the spec-vs-code audit discipline. Use these every session — they replace manual reviews that have been done by hand at every Phase merge.
+
+- `/gap-audit [base]` — 5-dimension sweep (untested code paths, contradicting tests, invalidated spec, stale memory, anti-pattern regressions) against `base` (default `origin/main`). **Run before opening a PR.**
+- `/design-scorecard <path>` — 6-pillar scorecard vs `Source.md §13.1` visual identity (color, typography, spacing, components, anti-patterns, a11y). PASS at 14, FLAG at 11, BLOCK at 10. **Run before merging a UI change.**
+- `/trace-cycle [id-prefix]` — Post-mortem a failing cycle via SQLite + audit log + `orchestrator.py`. **Check `memory/pmacs_skills_and_hook_jun29.md` first** — many prior post-mortems live there.
+
+All three skills live at `~/.claude/skills/pmacs-*/SKILL.md` (user-scoped, persistent). The slash-command wrappers live at `.claude/commands/{gap-audit,design-scorecard,trace-cycle}.md` (gitignored — operator config). See `spec/Source.md §27` for the operator-facing summary.
 
 ## Key constants
 

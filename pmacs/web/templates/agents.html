@@ -31,9 +31,9 @@
                 <div class="min-w-0">
                     <h3 id="current-ticker-heading" class="text-[10px] sm:text-xs font-semibold text-text-muted uppercase tracking-widest mb-0.5">{{ 'Analyzing' if is_cycle_running else 'Last Analyzed' if last_analyzed_ticker else 'Ready' }}</h3>
                     {% if current_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ current_ticker }}</span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight"><a href="/ticker/{{ current_ticker }}" class="hover:underline hover:text-accent">{{ current_ticker }}</a></span>
                     {% elif last_analyzed_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight">{{ last_analyzed_ticker }}</span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight"><a href="/ticker/{{ last_analyzed_ticker }}" class="hover:underline hover:text-accent">{{ last_analyzed_ticker }}</a></span>
                     {% else %}
                     <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight hidden"></span>
                     <span class="text-xs sm:text-sm text-text-muted">Start a cycle to begin analysis</span>
@@ -44,7 +44,7 @@
                 {% if next_ticker %}
                 <div id="next-up-panel" class="text-right hidden sm:block">
                     <span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Next</span>
-                    <span id="next-ticker" class="font-mono text-sm font-semibold text-text-secondary block">{{ next_ticker }}</span>
+                    <span id="next-ticker" class="font-mono text-sm font-semibold text-text-secondary block"><a href="/ticker/{{ next_ticker }}" class="hover:underline hover:text-accent">{{ next_ticker }}</a></span>
                 </div>
                 {% else %}
                 <div id="next-up-panel" class="hidden"><span id="next-ticker" class="hidden"></span></div>

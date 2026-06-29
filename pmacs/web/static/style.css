@@ -509,6 +509,25 @@ header {
     box-shadow: inset 0 0 0 2px var(--accent-ring);
 }
 
+/* ─── Kanban Card (Modern) — additive wrapper for visual treatment ─── */
+
+.kanban-card-modern {
+    border-radius: 0.875rem;
+    border: 1px solid var(--border-subtle);
+    background: linear-gradient(180deg, var(--surface-elevated), var(--surface));
+    padding: 1rem 1.125rem;
+    transition: transform 0.18s var(--ease-out-expo), border-color 0.18s, box-shadow 0.18s;
+}
+.kanban-card-modern:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.03);
+}
+.kanban-card-modern.dragging {
+    opacity: 0.5;
+    transform: rotate(1deg) scale(1.02);
+}
+
 .queue-chip {
     transition: all 0.2s var(--ease-out-expo);
 }
@@ -818,6 +837,67 @@ header {
     border-color: var(--border-strong);
 }
 
+/* ─── Stat Row / Stat Tile / Metric Row (rail-less KPI grids) ────────── */
+
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+@media (min-width: 768px) {
+    .stat-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.stat-tile {
+    border: 1px solid var(--border-subtle);
+    border-radius: 1rem;
+    background: linear-gradient(180deg, var(--surface-elevated), var(--surface));
+    padding: 0.875rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    transition: transform 0.15s var(--ease-out-expo), border-color 0.15s;
+}
+.stat-tile:hover {
+    transform: translateY(-1px);
+    border-color: var(--accent);
+}
+
+.stat-tile__value {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--text-primary);
+}
+.stat-tile__label {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.stat-tile__sub {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.metric-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 1rem;
+}
+.metric-row--3 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+@media (min-width: 768px) {
+    .metric-row--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 /* ─── Animation Language ─────────────────────────────────────────────── */
 
 @keyframes fade-in {
@@ -1029,6 +1109,29 @@ details[open] summary::before {
         grid-template-columns: 1fr 260px;
         gap: 16px;
     }
+}
+
+/* ─── Panel Grid (cortex 6-panel layout) ─────────────────────────────── */
+
+.panel-grid-2x3 {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+    .panel-grid-2x3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1200px) {
+    .panel-grid-2x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.panel-grid-1x2 {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+@media (min-width: 768px) {
+    .panel-grid-1x2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ─── Tablet (768px–1023px) — sidebar hidden, full-width content ── */
@@ -1768,6 +1871,73 @@ details.pm-details[open] > summary::after {
     100% { transform: translate3d(-2%, 4%, 0) rotate(-4deg); }
 }
 
+/* ─── Page Hero (generalized from .memo-hero) ────────────────────────── */
+
+.page-hero {
+    --page-tint-a: var(--accent-soft);
+    --page-tint-b: var(--crucible-soft);
+    --page-tint-c: var(--positive-soft);
+    position: relative;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    background:
+        radial-gradient(ellipse at 12% 0%, var(--page-tint-a) 0%, transparent 55%),
+        radial-gradient(ellipse at 90% 100%, var(--page-tint-b) 0%, transparent 55%),
+        radial-gradient(ellipse at 100% 0%, var(--page-tint-c) 0%, transparent 50%),
+        linear-gradient(180deg, var(--surface-elevated), var(--surface));
+    border: 1px solid var(--border-subtle);
+    padding: 2rem 2rem 1.75rem;
+    box-shadow: 0 1px 0 var(--border-subtle), 0 10px 32px rgba(15, 23, 42, 0.05);
+}
+@media (max-width: 640px) {
+    .page-hero { padding: 1.25rem 1rem 1rem; }
+}
+.dark .page-hero {
+    box-shadow: 0 1px 0 var(--border-subtle), 0 10px 32px rgba(0, 0, 0, 0.30);
+}
+
+/* Tint variants — one class per page. Reuse existing tokens; no new colors. */
+.page-hero--blue    { --page-tint-a: var(--accent-soft);    --page-tint-b: var(--accent-soft);    --page-tint-c: var(--positive-soft); }
+.page-hero--emerald { --page-tint-a: var(--positive-soft);  --page-tint-b: var(--viz-emerald-soft); --page-tint-c: var(--accent-soft); }
+.page-hero--amber   { --page-tint-a: var(--warning-soft);   --page-tint-b: var(--viz-amber-soft);  --page-tint-c: var(--accent-soft); }
+.page-hero--violet  { --page-tint-a: var(--crucible-soft);  --page-tint-b: var(--viz-violet-soft); --page-tint-c: var(--accent-soft); }
+.page-hero--slate   { --page-tint-a: var(--border-subtle);  --page-tint-b: var(--viz-slate-soft);  --page-tint-c: var(--surface-sunken); }
+.page-hero--indigo  { --page-tint-a: var(--accent-soft);    --page-tint-b: var(--crucible-soft);  --page-tint-c: var(--accent-soft); }
+.page-hero--rose    { --page-tint-a: var(--negative-soft);  --page-tint-b: var(--viz-rose-soft);   --page-tint-c: var(--crucible-soft); }
+
+/* Soft mesh — uses memo-mesh-drift keyframe (already defined above) */
+.page-hero::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
+    background:
+        radial-gradient(circle at 30% 20%, var(--page-tint-a), transparent 38%),
+        radial-gradient(circle at 70% 60%, var(--page-tint-b), transparent 42%),
+        radial-gradient(circle at 50% 90%, var(--page-tint-c), transparent 48%);
+    filter: blur(40px);
+    animation: memo-mesh-drift 18s ease-in-out infinite alternate;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.6;
+}
+.page-hero > * { position: relative; z-index: 1; }
+
+.page-hero__inner { display: grid; gap: 1rem; }
+.page-hero__lead {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.page-hero__sub { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; }
+.page-hero__cta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* prefers-reduced-motion: pause mesh — reuse .reduce-motion body class */
+.reduce-motion .page-hero::before,
+.reduce-motion .page-hero { animation: none !important; }
+
 .memo-hero > * { position: relative; z-index: 1; }
 
 /* Big ticker glyph — monospaced, oversized, animated in */
@@ -2406,6 +2576,130 @@ select[data-priority-band-select] {
     color: var(--text-muted);
 }
 .empty-chip__icon { opacity: 0.6; }
+
+/* ─── Empty / Loading / Error State (generalized page blocks) ────────── */
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 3rem 1.5rem;
+    border: 1px dashed var(--border-subtle);
+    border-radius: 1rem;
+    background: var(--surface-sunken);
+    color: var(--text-muted);
+}
+.empty-state__icon {
+    width: 2.25rem;
+    height: 2.25rem;
+    margin-bottom: 0.75rem;
+    opacity: 0.55;
+    color: var(--text-secondary);
+}
+.empty-state__title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.4rem;
+    letter-spacing: -0.01em;
+}
+.empty-state__message {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    max-width: 28rem;
+    line-height: 1.5;
+}
+
+.loading-state {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 2rem 1.5rem;
+}
+.loading-state__skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.loading-state__line {
+    height: 0.75rem;
+    border-radius: 999px;
+    background: linear-gradient(
+        90deg,
+        var(--surface-sunken) 0%,
+        color-mix(in srgb, var(--surface-sunken) 70%, var(--surface-elevated)) 50%,
+        var(--surface-sunken) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.loading-state__line--lg { height: 1.5rem; width: 70%; }
+.loading-state__line--md { height: 1rem; width: 90%; }
+.loading-state__line--sm { height: 0.75rem; width: 50%; }
+
+@keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 2.5rem 1.5rem;
+    border: 1px solid color-mix(in srgb, var(--negative) 35%, var(--border));
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--negative-soft) 70%, var(--surface));
+    color: var(--text-secondary);
+}
+.error-state__icon {
+    width: 2rem;
+    height: 2rem;
+    margin-bottom: 0.75rem;
+    color: var(--negative);
+}
+.error-state__title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--negative);
+    margin-bottom: 0.4rem;
+}
+.error-state__message {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    max-width: 28rem;
+    line-height: 1.5;
+}
+
+.reduce-motion .loading-state__line {
+    animation: none;
+    background: var(--surface-sunken);
+}
+
+/* ─── Event Row (Modern) — debug event log rows ───────────────────────── */
+
+.event-row-modern {
+    display: grid;
+    grid-template-columns: 6.5rem 5rem minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: baseline;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background-color 0.15s;
+}
+.event-row-modern:hover {
+    background: var(--surface-sunken);
+}
+@media (max-width: 767px) {
+    .event-row-modern {
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
+        padding: 0.85rem 1rem;
+    }
+}
 
 /* ─── Thesis bullet (Premise→Mechanism→Outcome→Number chain) ──────────── */
 

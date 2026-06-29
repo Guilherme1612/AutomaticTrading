@@ -216,7 +216,7 @@
 
         <div class="decision-card decision-card--rr">
             <p class="decision-card__label">Risk : Reward</p>
-            {% if rr_ratio is not none %}
+            {% if rr_ratio is defined and rr_ratio is not none %}
             <p class="decision-card__value"
                data-anim-target="{{ "%.2f"|format(rr_ratio) }}"
                data-anim-decimals="2"
@@ -935,7 +935,7 @@
                 <span class="font-mono font-semibold">${{ "%.2f"|format(fair_value) }}</span>
             </div>
             {% endif %}
-            {% if rr_ratio is not none %}
+            {% if rr_ratio is defined and rr_ratio is not none %}
             <div class="flex items-center justify-between">
                 <span class="text-text-muted">R:R</span>
                 <span class="font-mono font-semibold">{{ "%.2f"|format(rr_ratio) }}</span>

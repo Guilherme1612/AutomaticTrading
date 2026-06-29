@@ -31,11 +31,11 @@
                 <div class="min-w-0">
                     <h3 id="current-ticker-heading" class="text-[10px] sm:text-xs font-semibold text-text-muted uppercase tracking-widest mb-0.5">{{ 'Analyzing' if is_cycle_running else 'Last Analyzed' if last_analyzed_ticker else 'Ready' }}</h3>
                     {% if current_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight"><a href="/ticker/{{ current_ticker }}" class="hover:underline hover:text-accent">{{ current_ticker }}</a></span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem]"><a href="/ticker/{{ current_ticker }}" class="hover:underline hover:text-accent">{{ current_ticker }}</a></span>
                     {% elif last_analyzed_ticker %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight"><a href="/ticker/{{ last_analyzed_ticker }}" class="hover:underline hover:text-accent">{{ last_analyzed_ticker }}</a></span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem]"><a href="/ticker/{{ last_analyzed_ticker }}" class="hover:underline hover:text-accent">{{ last_analyzed_ticker }}</a></span>
                     {% else %}
-                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight hidden"></span>
+                    <span id="current-ticker" class="font-mono text-2xl sm:text-3xl font-black text-text-primary tracking-tight truncate max-w-[10rem] hidden"></span>
                     <span class="text-xs sm:text-sm text-text-muted">Start a cycle to begin analysis</span>
                     {% endif %}
                 </div>
@@ -308,6 +308,19 @@
                     {% endif %}
                 {% endif %}
             </div>
+            {# Audit-failure chip: surfaces a CITATION_GAP / CONCLUSION_UNSUPPORTED
+               warning when a persona completed but produced no narrative so the
+               operator sees WHY the card body is empty without diving into the
+               audit log. #}
+            {% if persona.status == 'complete' and not (persona.key_signal or persona.analysis or persona.evidence_cited) %}
+            <div class="mt-2 pt-2 border-t border-border-subtle">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                      title="Persona completed but produced no narrative — auditor flagged CITATION_GAP / CONCLUSION_UNSUPPORTED. Check the audit log for details.">
+                    <span aria-hidden="true">⚠</span>
+                    <span>Audit: no narrative</span>
+                </span>
+            </div>
+            {% endif %}
             {% if persona.completed_at %}
             <p class="text-[9px] text-text-muted/80 mt-1.5" data-time-ago="{{ persona.completed_at }}">{{ persona.completed_at }}</p>
             {% endif %}
@@ -2067,4 +2080,10 @@ _registerAgentsSSE();
 document.addEventListener("DOMContentLoaded", _registerAgentsSSE);
 </script>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{# Sankey diagram module: drives the Communication Layer "Signals" tab.
+   Loaded lazily; guards on PMACS_SANKEY so duplicate loads are no-ops. #}
+<script src="/static/sankey.js?v=1" defer></script>
 {% endblock %}

@@ -2687,6 +2687,7 @@ class CycleOrchestrator:
                 abort_decided_at = _dt.now(_tz.utc).isoformat()
                 abort_memo_dict = {
                     "verdict_line": f"HOLD — Crucible aborted (severity {crucible_severity:.2f})",
+                    "verdict": abort_verdict_str,  # explicit HOLD — template reads this from memo_json
                     "thesis": (
                         f"Crucible adversarial review aborted this symbol at "
                         f"severity {crucible_severity:.2f} after "

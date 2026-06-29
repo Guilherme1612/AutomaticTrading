@@ -1,3 +1,28 @@
+# PMACS anti-pattern enforcement — pre-commit (commit time) + hookify (live Edit).
+#
+# Pre-commit (this file) fires on `git commit` from any tool (manual git, IDE,
+# husky, etc.) and runs file-level exact-string greps. Hookify lives at
+# `.claude/hookify.pmacs-anti-patterns.local.md` and fires on Claude Code's
+# live Edit/Write/MultiEdit operations against `pmacs/*.py`, running a regex
+# over the edited content.
+#
+# Pre-commit covers 6 patterns; hookify covers 5 (4 overlapping + 1 unique to
+# hookify: `cycle_id=None` content-shape regex). Together they enforce 11
+# distinct anti-patterns from `spec/Architecture.md §16` (see §16.15 for the
+# full breakdown). They are COMPLEMENTARY, not duplicate — pre-commit wins on
+# coverage (file-level greps over schemas/, secrets-in-logs), hookify wins on
+# real-time feedback (fires before the operator stages the change).
+#
+# Both layers MUST stay wired. A clean working tree passes both.
+#
+# Hookify field-name gotcha (also documented in the rule file itself): the
+# hookify rule engine maps `field: content` to BOTH `Write.content` AND
+# `Edit.new_string`. Do NOT use `field: new_text` — it does not resolve for
+# Edit operations. See `spec/Architecture.md §16.15` for rationale.
+#
+# Slash commands and skills live at `~/.claude/skills/pmacs-*/SKILL.md` and
+# `.claude/commands/{gap-audit,design-scorecard,trace-cycle}.md`. See
+# `spec/Source.md §27` for the full tooling surface.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

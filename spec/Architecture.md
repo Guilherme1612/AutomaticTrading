@@ -3091,6 +3091,28 @@ log_debug(level="ERROR", msg="something failed")
 log_debug(level="ERROR", error_code="LLM_TIMEOUT", msg="...")
 ```
 
+### 16.15 Enforcement tooling — pre-commit AND hookify (complementary, not duplicate)
+
+`Architecture.md §16` anti-patterns are enforced by **two complementary layers**, not one. They are intentionally not deduplicated — each layer fires at a different point in the change lifecycle and catches different shapes of violation.
+
+| Layer | Trigger | Coverage | Config location | Catches |
+|---|---|---|---|---|
+| **pre-commit** | `git commit` (any tool, including manual `git commit`) | 6 patterns | `.pre-commit-config.yaml` (this repo) | File-level exact-string greps (e.g., `class Config:` only in `pmacs/schemas/`, `eur_per_usd:` field declarations) |
+| **hookify** | Live `Edit` / `Write` / `MultiEdit` from Claude Code | 5 patterns (overlaps 4 of pre-commit's 6) | `.claude/hookify.pmacs-anti-patterns.local.md` (operator config, gitignored) | Real-time regex on edited content; fires before the operator even stages the change |
+
+**Union of patterns covered: 11 distinct.**
+- Pre-commit-only (3): `secrets-in-logs`, `class Config:` (schemas-only), `eur_per_usd:` field declarations.
+- Hookify-only (1): `cycle_id=None` (content-shape regex, would over-fire as a file grep).
+- Both layers (4): `holding.state =`, `json.dumps(audit)`, `from pydantic.v1`, plus `.dict()`/`.parse_obj()`/`.parse_raw()` (hookify-only — pre-commit does not match Pydantic v2 method calls).
+
+**Hookify rule location MUST be `.claude/hookify.<rule-name>.local.md`** — file MUST be in `.claude/` directly with no subdirectory. The hookify loader pattern is `glob('.claude/hookify.*.local.md')`. Subdirectories are silently ignored.
+
+**Hookify field-name gotcha:** the rule engine's `content` condition field maps to **both** `Write.content` AND `Edit.new_string`. Use `field: content` in the condition; do **not** use `field: new_text` — it does not resolve for Edit operations. This is documented inline in `.pre-commit-config.yaml` and the hookify rule file.
+
+**Known acceptable false-positives (operator reviews, dismisses):** comments documenting the forbidden pattern (e.g. `# see .dict()`); string literals mentioning the pattern (e.g. `text = "use .dict() or model_dump"`); print/debug messages containing the pattern. The full fixture suite is pinned by `tests/unit/test_hookify_rule.py` so any regression is caught.
+
+**Why two layers?** Pre-commit wins on coverage at commit time (it can grep whole files, not just the edit delta). Hookify wins on real-time feedback (fires during the Claude Code session, before the operator stages the change). A clean working tree passes both. Removing either layer degrades review quality without saving effort.
+
 ---
 
 ## 17. Configuration files
@@ -3242,6 +3264,8 @@ memo_writer = 0.3
 The mode is **derived from the backend** (spec-only guarantee — no runtime guard, no extra config field): a backend with a non-empty `api_key_ref` or a non-localhost `base_url` is API mode; otherwise local mode. Data fetching (yfinance/EDGAR/Finnhub/Polygon) is orthogonal and uses the internet in both modes — "local" governs *inference*, not data sourcing. No telemetry in either mode. The web pipeline's own caller (`pmacs/web/routes/pipeline.py::_call_llm`) reads the same `active` field, so both dispatch paths honor the selected mode.
 
 **Config preservation (operator directive).** Switching the active backend (`set_inference_provider`) changes only `active` — it never touches a backend's `default_model` or API key. Writing a per-backend model (`set_inference_model`) is guarded: an empty/whitespace model means "keep the existing value", so a switch can never silently clobber a previously-configured model with a placeholder. The wizard's provider step follows the same guard (`if api_model:` — only overwrite when a model is actually entered). API keys live in the macOS keychain (`pmacs.credentials.<provider>_api_key`), not in this file, so they survive config rewrites.
+
+**Operator runtime override (`config/runtime_state.json`, gitignored).** The `active` field above is the *bootstrap default* that ships with the repository. The operator's runtime override — written by `/api/settings/inference/provider` (force=true required) and wizard step-3 — lives in `config/runtime_state.json` (gitignored; sample is `config/runtime_state.sample.json`). `load_config()` in `pmacs/config.py` applies the runtime override AFTER parsing the registry, so a `git pull`, `git checkout`, fresh clone, or any VCS operation that resets `model_registry.json` still honors the operator's last explicit choice. To reset the operator override (rare): delete `config/runtime_state.json`, or POST `force=true` to `/api/settings/inference/provider` with a different provider. The file is single-key (`active_backend`) but the schema is a dict so future per-operator overrides (notification level preferences, dashboard layout) can be added without a new file.
 
 The `candidates` field is populated by the Mutation Engine for in-flight A/B tests (candidate arms run SHADOW-only and must stay within the active mode — no cross-mode A/B).
 

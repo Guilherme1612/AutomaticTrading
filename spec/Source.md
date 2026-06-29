@@ -62,7 +62,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | Kill switch triggers and disengagement | `Architecture.md` | §13 |
 | Memory hierarchy (Working / Episodic / Semantic / Immutable) | `Architecture.md` | §15 |
 | Mutation Engine process and lifecycle | `Architecture.md` | §10 |
-| Anti-patterns (what Claude Code must not do) | `Architecture.md` | §16 |
+| Anti-patterns (what Claude Code must not do) | `Architecture.md` | §16 (incl. §16.15 enforcement tooling) |
 | Per-persona prompts, schemas, sanity validators | `Agents.md` | §4-§13 |
 | Crucible adversarial loop | `Agents.md` | §16 |
 | Failure Diagnostic Engine — 18 outcome + 5 reasoning-flaw taxonomy types | `Agents.md` | §15 |
@@ -71,6 +71,7 @@ When this file references something defined elsewhere, the pointer is explicit. 
 | Build phases (Phase 1 through Phase N) | `Phases.md` | §2 |
 | Mode promotion and demotion gates (numerical) | `Phases.md` | §3 |
 | Per-phase exit tests | `Phases.md` | §2.x |
+| Operator tooling (skills, slash commands, enforcement hooks) | `Source.md` | §27 |
 
 ---
 
@@ -1603,6 +1604,62 @@ These are deliberate non-features. Each is excluded for a reason. Adding any req
 - **Self-play, agent-vs-agent training.** Deferred to v2.
 - **Automatic universe expansion via screener.** Operator-curated only — see §8.4.
 - **LLM-generated mutation candidates.** v1 mutation candidates are deterministic-rule-generated. LLM-as-mutation-author is deferred to v2 to avoid an unconstrained self-modification loop.
+
+---
+
+## 27. Tooling — skills, slash commands, and enforcement hooks
+
+PMACS's spec-vs-code audit discipline is encoded as first-class tooling. Every artifact in this section exists because the same manual audit has been run before every Phase merge and every PR review, and each one is now automated. Operator workflow is unchanged; the tools surface signal earlier so the operator's review is shorter.
+
+### 27.1 Three skills (operator-invocable via slash commands)
+
+| Skill | Slash command | Purpose | When to run |
+|---|---|---|---|
+| `pmacs-gap-finder` | `/gap-audit [base]` | 5-dimension audit (untested code paths, contradicting tests, invalidated spec, stale memory, anti-pattern regressions) against `base` (default `origin/main`) | Before opening a PR |
+| `pmacs-design-review` | `/design-scorecard <path>` | 6-pillar scorecard vs `Source.md` §13.1 visual identity (color, typography, spacing, components, anti-patterns, a11y). PASS at 14, FLAG at 11, BLOCK at 10 | Before merging a UI change |
+| `pmacs-orchestrator-trace` | `/trace-cycle [id-prefix]` | Post-mortem a failing cycle via SQLite + audit log + orchestrator.py. Step reference table with line numbers + spec citations | After a cycle aborts unexpectedly |
+
+Each skill lives at `~/.claude/skills/pmacs-<name>/SKILL.md` (user-scoped, persists across projects). The slash-command wrappers live at `.claude/commands/<name>.md` (gitignored — operator config, not committed). Check `memory/pmacs_skills_and_hook_jun29.md` for prior post-mortems before running `/trace-cycle` — many patterns repeat.
+
+### 27.2 Three slash commands (`.claude/commands/`)
+
+Thin wrappers that invoke the skills above with structured args. Each one-liner points to the skill and states the procedure. **Each command falls back to its inline procedure if the skill is not loaded — it never silently skips.** Listing per the user request:
+
+- `/gap-audit [base]` — pre-PR 5-dimension sweep; default base `origin/main`.
+- `/design-scorecard <path>` — pre-merge design PASS/FLAG/BLOCK.
+- `/trace-cycle [id-prefix]` — cycle post-mortem with SQLite + audit log + orchestrator trace.
+
+These commands are operator-scoped (live in `.claude/commands/`, gitignored) and so do not pollute the project repo. The skills themselves live at user scope so they persist across projects.
+
+### 27.3 Enforcement hooks — pre-commit AND hookify (complementary, not duplicate)
+
+Two enforcement layers protect `Architecture.md §16` anti-patterns. They are intentionally complementary — pre-commit wins on coverage at commit time, hookify wins on real-time feedback during Claude Code Edit operations. A clean working tree passes both.
+
+| Layer | Fires on | Patterns | Config | Why it exists |
+|---|---|---|---|---|
+| **pre-commit** | `git commit` (any tool) | 6 patterns (`holding.state =`, `json.dumps(audit)`, secrets, `pydantic.v1`, `class Config:`, `eur_per_usd`) | `.pre-commit-config.yaml` | Catches violations at the last possible moment before they reach CI |
+| **hookify** | Live `Edit`/`Write`/`MultiEdit` from Claude Code | 5 patterns (`holding.state =`, `json.dumps(...audit)`, `cycle_id=None`, `pydantic.v1`, `.dict()`/`.parse_obj()`/`.parse_raw()`) | `.claude/hookify.pmacs-anti-patterns.local.md` | Catches violations during the Claude Code session, before the operator even considers a commit |
+
+**Hookify rule location:** `.claude/hookify.<rule-name>.local.md` — file MUST be in `.claude/` directly (no subdirectory). The loader pattern is `glob('.claude/hookify.*.local.md')`.
+
+**Hookify field-name gotcha:** the rule engine maps the `content` field to **both** `Write.content` and `Edit.new_string`. Use `field: content` in the condition; do **not** use `field: new_text` (does not resolve for Edit). This is documented inline in `.pre-commit-config.yaml` and the rule file itself.
+
+**Known acceptable false-positives (operator reviews, dismisses):** comments documenting the forbidden pattern (e.g. `# see .dict()`); string literals mentioning the pattern (e.g. `text = "use .dict() or model_dump"`); print/debug messages containing the pattern. The full fixture suite is pinned by `tests/unit/test_hookify_rule.py`.
+
+### 27.4 Anti-pattern enforcement total = 11 patterns
+
+Pre-commit's 6 + hookify's 5 = **11** distinct patterns. The 2 deltas are:
+
+- Hookify adds `cycle_id=None` (pre-commit has no equivalent).
+- Pre-commit adds `class Config:`, `eur_per_usd:`, secrets-in-logs.
+
+This is not a contradiction — pre-commit covers file-level grep that hookify cannot (e.g., `pmacs/schemas/`-only check for `class Config:`). Hookify covers content-shape patterns (regex over edited content) that pre-commit's exact-string grep would miss.
+
+### 27.5 Why all three artifacts exist
+
+Every recent session has re-derived the same spec-vs-code audit by hand (Phase 7c audit, Jun 29 memo audit, Jun 29 /agents audit). Automating the discipline via skills + commands + hooks moves the operator's review time from "find the violation" to "decide whether the violation is acceptable." The 3 skills + 3 commands + 2 enforcement layers are the codified result of those audits.
+
+---
 - **Live trading via Alpaca.** Lisbon residency. IBKR is the live path.
 
 ---

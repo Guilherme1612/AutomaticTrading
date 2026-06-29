@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pmacs.agents._peer_render import extract_narrative
 from pmacs.agents.base import PersonaRunner
 from pmacs.schemas.data import EvidencePacket
 
@@ -132,19 +133,16 @@ def _render_peer_outputs(persona_outputs: list[Any]) -> str:
         pd = getattr(po, "p_down", None)
 
         # Try to extract a reasoning excerpt from the raw JSON output.
+        # Uses the shared persona-narrative cascade (pmacs.agents._peer_render)
+        # so the advocate sees the same field names the auditor sees.
         excerpt = ""
         raw = getattr(po, "raw_output", None)
         if raw:
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
-                    excerpt = (
-                        parsed.get("reasoning")
-                        or parsed.get("key_signal")
-                        or parsed.get("analysis")
-                        or parsed.get("growth_durability_reasoning")
-                        or parsed.get("signal_reasoning")
-                        or ""
+                    excerpt = extract_narrative(
+                        name if isinstance(name, str) else "", parsed
                     )
             except (json.JSONDecodeError, TypeError):
                 excerpt = ""

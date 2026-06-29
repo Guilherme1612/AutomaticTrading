@@ -22,8 +22,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pmacs.agents._peer_render import (
+    _PERSONA_NARRATIVE_FIELDS,
+    _UNIVERSAL_NARRATIVE_FIELDS,
+    _aggregate_nested_narrative,
+    extract_narrative,
+)
 from pmacs.agents.base import PersonaRunner
 from pmacs.schemas.data import EvidencePacket
+
+
+# Re-export for backward compatibility with existing imports
+# (tests/unit/test_auditor_flags.py imports these symbols from this module).
+__all__ = [
+    "CrossPersonaAuditorRunner",
+    "_PERSONA_NARRATIVE_FIELDS",
+    "_UNIVERSAL_NARRATIVE_FIELDS",
+    "_aggregate_nested_narrative",
+    "_render_peer_outputs",
+]
 
 
 class CrossPersonaAuditorRunner(PersonaRunner):
@@ -153,14 +170,10 @@ def _render_peer_outputs(persona_outputs: list[Any]) -> str:
         pf = body.get("p_flat", getattr(po, "p_flat", None))
         pd = body.get("p_down", getattr(po, "p_down", None))
         cited = body.get("evidence_ids", []) or []
-        reasoning = (
-            body.get("reasoning")
-            or body.get("key_signal")
-            or body.get("analysis")
-            or body.get("growth_durability_reasoning")
-            or body.get("signal_reasoning")
-            or ""
-        )
+        # Shared helper walks the persona-specific cascade, falling back to
+        # the universal cascade. Returns "" when no narrative matches.
+        persona_key = name if isinstance(name, str) else ""
+        reasoning = extract_narrative(persona_key, body)
 
         prob_str = (
             f"p_up={pu:.3f} p_flat={pf:.3f} p_down={pd:.3f}"

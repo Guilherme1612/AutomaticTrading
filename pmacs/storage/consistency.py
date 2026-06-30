@@ -310,9 +310,13 @@ def _check_kuzu_qdrant_theses(
     thesis_ids: list[str] = []
 
     try:
+        # Spec exit test #3 (Phase 12): traverse Holding -[:HAS_THESIS]-> Thesis
+        # to find the embedding_id stored on the Thesis node (the schema property
+        # is on Thesis, not on Holding — see pmacs/storage/kuzu.py:112-116).
         rows = kuzu_adapter.execute(
-            "MATCH (h:Holding) WHERE h.thesis_embedding_id IS NOT NULL "
-            "RETURN h.thesis_embedding_id AS eid"
+            "MATCH (h:Holding)-[:HAS_THESIS]->(t:Thesis) "
+            "WHERE t.embedding_id IS NOT NULL AND t.embedding_id <> '' "
+            "RETURN t.embedding_id AS eid"
         )
         for row in rows:
             eid = row.get("eid")

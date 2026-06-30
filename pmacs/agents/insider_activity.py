@@ -48,13 +48,48 @@ class InsiderActivityRunner(PersonaRunner):
         """InsiderActivity drift fixes (deepseek-v4-flash on openrouter).
 
         - Top-level ``evidence_ids`` may be empty — padded.
-        - No other drift observed for this persona in cycle 58e3e6c2.
+        - **``transactions: <int>`` instead of list** — deepseek sometimes
+          emits ``{"transactions": 0}`` or ``{"transactions": 3}`` as a
+          count rather than a list of ``InsiderTransaction`` objects.
+          Pydantic ``list[InsiderTransaction]`` would reject the int
+          (type error), persona aborts after 3 attempts, evidence lost.
+          Fix coerces int→empty-list (count 0 means "no transactions
+          found") and float→int→empty list; non-list values that can't
+          be interpreted get logged and zeroed.
+        - **Empty/missing transactions list** — normal for tickers with
+          no Form 4 filings in the window. Treat as legitimate
+          ``NO_SIGNAL`` / ``INSUFFICIENT_DATA`` rather than aborting the
+          persona; deepseek often omits the field entirely.
         """
         all_fixes: list[dict[str, Any]] = []
         model_cls = self.get_pydantic_model()
 
         parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
         all_fixes.extend(fixes)
+
+        # Coerce non-list ``transactions`` to a list. Deepseek-v4-flash
+        # sometimes returns a bare integer (count of transactions) or
+        # None, which Pydantic rejects because the schema requires
+        # ``list[InsiderTransaction]``. Cycle 1 ONDS Jun 30 surfaced
+        # ``transactions: 0`` — persona would otherwise abort.
+        txns = parsed.get("transactions")
+        if not isinstance(txns, list):
+            original = type(txns).__name__
+            parsed["transactions"] = []
+            all_fixes.append({
+                "field": "transactions",
+                "from": f"{original}({txns!r})",
+                "to": "[]",
+                "reason": (
+                    f"LLM emitted transactions as {original} (count) "
+                    f"rather than list[InsiderTransaction]. Pydantic "
+                    f"would reject the type mismatch and abort the "
+                    f"persona. Normalized to empty list — for tickers "
+                    f"with no Form 4 filings in the window, this is the "
+                    f"honest answer (signal=NO_SIGNAL or "
+                    f"INSUFFICIENT_DATA)."
+                ),
+            })
 
         self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed

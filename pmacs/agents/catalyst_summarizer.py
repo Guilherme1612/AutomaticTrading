@@ -64,16 +64,56 @@ class CatalystSummarizerRunner(PersonaRunner):
         model_cls = self.get_pydantic_model()
 
         # 1) Inject thesis_impact="NEUTRAL" if missing on any catalyst entry
+        #    Also inject catalyst_type / description if missing — cycle 1
+        #    ONDS Jun 30 surfaced Pydantic ValidationError on
+        #    ``catalysts[i].description`` (Field required) and on
+        #    ``catalysts[i].catalyst_type`` (Field required). Synthesizing
+        #    these is the same pattern as thesis_impact: we make the
+        #    entry internally consistent so the persona can survive the
+        #    3-attempt budget without losing the net outlook.
         catalysts = parsed.get("catalysts", [])
         if isinstance(catalysts, list):
             for i, c in enumerate(catalysts):
-                if isinstance(c, dict) and "thesis_impact" not in c:
+                if not isinstance(c, dict):
+                    continue
+                if "thesis_impact" not in c:
                     c["thesis_impact"] = "NEUTRAL"
                     all_fixes.append({
                         "field": f"catalysts[{i}].thesis_impact",
                         "type": "missing_injected",
                         "before": None,
                         "after": "NEUTRAL",
+                    })
+                if "catalyst_type" not in c or not c.get("catalyst_type"):
+                    c["catalyst_type"] = "earnings"
+                    all_fixes.append({
+                        "field": f"catalysts[{i}].catalyst_type",
+                        "type": "missing_injected",
+                        "before": None,
+                        "after": "earnings",
+                        "reason": (
+                            "LLM omitted required catalyst_type field. "
+                            "Synthesized 'earnings' as the most common "
+                            "catalyst class; Pydantic would otherwise "
+                            "reject the missing required Literal."
+                        ),
+                    })
+                if "description" not in c or not c.get("description"):
+                    c["description"] = (
+                        f"Catalyst (type={c.get('catalyst_type', 'unknown')}) "
+                        f"flagged by LLM with no description; synthesized "
+                        f"placeholder so the entry remains parseable."
+                    )
+                    all_fixes.append({
+                        "field": f"catalysts[{i}].description",
+                        "type": "missing_injected",
+                        "before": None,
+                        "after": c["description"][:80] + "...",
+                        "reason": (
+                            "LLM omitted required description field. "
+                            "Synthesized a placeholder so the entry "
+                            "remains parseable."
+                        ),
                     })
 
         # 2) Normalize Literal enums (case-insensitive, default fallback)

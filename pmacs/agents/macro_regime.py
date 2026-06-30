@@ -51,6 +51,13 @@ class MacroRegimeRunner(PersonaRunner):
           (``"NO_DATA"``, ``"UNCERTAIN"``). Case-insensitive enum matcher
           maps them to canonical uppercase; unknowns fall back to first
           enum member (NORMAL / LOW — safest defaults).
+        - **Missing ``vix_regime`` field** — deepseek sometimes omits the
+          field entirely. Pydantic raises ``ValidationError`` on
+          required-field missing. Fix synthesizes a safe default
+          (``"MODERATE"`` — middle of the LOW/MODERATE/ELEVATED/CRISIS
+          range, the honest "I don't know" answer) so the persona
+          survives. Cycle 1 ONDS Jun 30 surfaced this — without the fix,
+          the persona aborts at attempt 3 and the macro read is lost.
         - Top-level ``evidence_ids`` may be empty — padded.
         """
         all_fixes: list[dict[str, Any]] = []
@@ -61,6 +68,26 @@ class MacroRegimeRunner(PersonaRunner):
 
         parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
         all_fixes.extend(fixes)
+
+        # Inject vix_regime if missing. Deepseek on openrouter has
+        # dropped the field in cycle 1 ONDS Jun 30. Pydantic rejects
+        # missing required Literal fields; pre-validate normalization
+        # keeps the persona alive by emitting the safest middle-of-range
+        # value (MODERATE) so downstream consumers see an honest
+        # "I-don't-know-but-not-extreme" read.
+        if "vix_regime" not in parsed or not parsed.get("vix_regime"):
+            parsed["vix_regime"] = "MODERATE"
+            all_fixes.append({
+                "field": "vix_regime",
+                "from": None,
+                "to": "MODERATE",
+                "reason": (
+                    "LLM omitted required vix_regime field. Synthesized "
+                    "MODERATE (middle of LOW/MODERATE/ELEVATED/CRISIS) "
+                    "as the safest I-don't-know default. Pydantic would "
+                    "otherwise reject the missing required Literal."
+                ),
+            })
 
         self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed

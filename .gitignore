@@ -55,3 +55,9 @@ screenshots/
 .playwright-mcp/
 *.png
 *.vsix
+
+# Audit-only screenshot/manual captures
+/agents-page-after-restart.jpeg
+
+# Runtime state (operator-local override of model_registry.json; survives git pull)
+config/runtime_state.json

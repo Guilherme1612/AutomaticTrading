@@ -16,14 +16,49 @@ from pmacs.agents.sanity.base import BaseSanityValidator, SanityResult
 from pmacs.schemas.personas import WAVE1_PERSONAS
 from pmacs.schemas.agents import PersonaName
 
-_TARGET_TOKENS = {
-    PersonaName.MACRO_REGIME: ("macro_regime", "macro regime", "macro"),
-    PersonaName.CATALYST_SUMMARIZER: ("catalyst_summarizer", "catalyst", "catalysts"),
-    PersonaName.MOAT_ANALYST: ("moat_analyst", "moat"),
-    PersonaName.GROWTH_HUNTER: ("growth_hunter", "growth"),
-    PersonaName.INSIDER_ACTIVITY: ("insider_activity", "insider"),
-    PersonaName.SHORT_INTEREST: ("short_interest", "short"),
-    PersonaName.FORENSICS: ("forensics", "forensic"),
+# Wave-1 persona tokens — same expansion as BullAdvocateSanity (ONDS 3-cycle
+# audit Jun 29). The literal slug is the primary check, but the synonyms
+# cover common semantic-drift cases where the LLM discusses the topic
+# without using the canonical name.
+_TARGET_TOKENS: dict[PersonaName, tuple[str, ...]] = {
+    PersonaName.MACRO_REGIME: (
+        "macro_regime", "macro regime", "macro",
+        "macro environment", "regime", "fiscal", "monetary",
+        "rate environment", "yield curve",
+    ),
+    PersonaName.CATALYST_SUMMARIZER: (
+        "catalyst_summarizer", "catalyst", "catalysts",
+        "upcoming event", "upcoming", "launch", "fda",
+        "earnings release", "guidance", "near-term event",
+    ),
+    PersonaName.MOAT_ANALYST: (
+        "moat_analyst", "moat", "moats",
+        "competitive advantage", "competitive position",
+        "barrier", "barriers", "switching cost", "switching costs",
+        "network effect", "network effects", "defensibility",
+    ),
+    PersonaName.GROWTH_HUNTER: (
+        "growth_hunter", "growth",
+        "topline", "top-line", "revenue growth", "expansion",
+        "tam", "total addressable market", "ramp", "penetration",
+        "growth trajectory",
+    ),
+    PersonaName.INSIDER_ACTIVITY: (
+        "insider_activity", "insider", "insiders",
+        "form 4", "form-4", "insider buying", "insider selling",
+        "ceo", "cfo", "officer", "director", "10b5-1", "10b5",
+    ),
+    PersonaName.SHORT_INTEREST: (
+        "short_interest", "short", "shorts",
+        "short interest", "short squeeze", "borrow", "squeeze",
+        "days to cover", "short selling", "bearish positioning",
+    ),
+    PersonaName.FORENSICS: (
+        "forensics", "forensic",
+        "accounting quality", "red flag", "red flags",
+        "earnings quality", "cash flow quality", "fraud",
+        "sbc", "stock-based compensation", "restatement",
+    ),
 }
 
 

@@ -161,6 +161,55 @@ class TestAdvocateSanity:
         assert not res.passed
         assert "ev-1" in res.reason
 
+    @pytest.mark.parametrize(
+        "target,semantic_phrase",
+        [
+            # Each row: persona the bull advocates FOR, semantic phrase that
+            # must now satisfy the persona-engagement check (ONDS 3-cycle
+            # audit Jun 29: drift was semantic, not adversarial).
+            ("moat_analyst", "the competitive advantage is widening per ev-1"),
+            ("moat_analyst", "switching costs are durable per ev-1"),
+            ("moat_analyst", "network effects deepen per ev-1"),
+            ("growth_hunter", "topline expansion is accelerating per ev-1"),
+            ("growth_hunter", "TAM penetration is still early per ev-1"),
+            ("catalyst_summarizer", "the upcoming earnings release is a tailwind per ev-1"),
+            ("short_interest", "short interest positioning is overcrowded per ev-1"),
+            ("forensics", "the red flags listed are immaterial per ev-1"),
+            ("insider_activity", "the insider buying pattern is informative per ev-1"),
+            ("macro_regime", "the macro environment is supportive per ev-1"),
+        ],
+    )
+    def test_bull_semantic_synonyms_engage_target(self, target, semantic_phrase):
+        """Bull advocate reasoning must engage the target persona's topic — the
+        ONDS 3-cycle audit (Jun 29) showed the strict literal-slug check was
+        the dominant wave-2 blocker. Synonyms that engage the topic must now
+        pass alongside the canonical slug."""
+        out = dict(BULL_VALID)
+        out["target_persona"] = target
+        out["reasoning"] = semantic_phrase
+        res = BullAdvocateSanity().validate(out, _evidence(["ev-1"]))
+        assert res.passed, f"semantic phrase should pass for {target}: {res.reason}"
+
+    @pytest.mark.parametrize(
+        "target,semantic_phrase",
+        [
+            ("moat_analyst", "the competitive advantage is overstated per ev-1"),
+            ("growth_hunter", "revenue growth is decelerating per ev-1"),
+            ("catalyst_summarizer", "the upcoming launch is likely to disappoint per ev-1"),
+            ("short_interest", "short interest is overcrowded per ev-1"),
+            ("forensics", "red flags are material per ev-1"),
+            ("insider_activity", "insider selling is informative per ev-1"),
+            ("macro_regime", "the macro environment is hostile per ev-1"),
+        ],
+    )
+    def test_bear_semantic_synonyms_engage_target(self, target, semantic_phrase):
+        """Bear advocate mirror of bull synonym test (ONDS 3-cycle audit Jun 29)."""
+        out = dict(BEAR_VALID)
+        out["target_persona"] = target
+        out["reasoning"] = semantic_phrase
+        res = BearAdvocateSanity().validate(out, _evidence(["ev-1"]))
+        assert res.passed, f"semantic phrase should pass for {target}: {res.reason}"
+
 
 # ── Auditor Pydantic + sanity ─────────────────────────────────────────────
 

@@ -106,7 +106,9 @@
 {# ── Unified ticker workspace (Source.md §16.6 single-ticker drawer) ── #}
 {% set _ws_has = (ws_memo is not none) or (ws_holding is not none) %}
 {% if _ws_has %}
-<div class="card card-elevated p-4 mb-5 reveal" role="region" aria-label="{{ ticker }} workspace summary">
+<section class="page-hero page-hero--rose reveal" role="region" aria-label="{{ ticker }} workspace summary" data-stagger>
+    <div class="page-hero__inner">
+    <div class="card card-elevated p-4">
     <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         {% set _ws_verdict = (ws_memo._verdict if ws_memo else none) or (ws_holding.verdict if ws_holding else none) %}
         {% if _ws_verdict %}
@@ -155,7 +157,9 @@
         </span>
         {% endif %}
     </div>
-</div>
+    </div>
+    </div>
+</section>
 <div class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
     <button type="button" role="tab" id="ws-tab-fundamentals" aria-controls="ws-fundamentals" tabindex="0" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
     <button type="button" role="tab" id="ws-tab-memo"       aria-controls="ws-memo"       tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo"       aria-selected="false">Memo</button>
@@ -164,6 +168,12 @@
     <button type="button" role="tab" id="ws-tab-failures"   aria-controls="ws-failures"   tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="failures"   aria-selected="false">Failures</button>
 </div>
 {% endif %}
+<div class="page-section-head mt-6 mb-4">
+    <span class="page-section-num page-section-num--pos">01</span>
+    <span class="page-section-title">Workspace</span>
+    <span class="page-section-line"></span>
+    <span class="page-section-tag">{{ _ws_verdict | default('Pending') }}</span>
+</div>
 <div id="ws-fundamentals" class="ws-panel">
 {% macro fmt(value, unit="") -%}
     {%- if value is none -%}<span class="text-text-muted">&mdash;</span>
@@ -547,7 +557,7 @@
         <span class="text-[10px] text-text-muted">{{ a.num_analysts }} analyst{{ 's' if a.num_analysts != 1 else '' }} covering</span>
         {%- endif -%}
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="metric-row metric-row--3 gap-4">
         {# Price target #}
         <div class="rounded-xl bg-surface-sunken/40 p-4">
             <div class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest mb-2">Price target</div>

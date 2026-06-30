@@ -37,7 +37,8 @@
 {% endfor %}
 {% if ns_stats.total > 0 %}{% set ns_stats.avg_conv = ns_stats.sum_conv / ns_stats.total %}{% endif %}
 
-<div class="mb-6 reveal" data-stagger>
+<section class="page-hero page-hero--amber reveal" data-stagger>
+    <div class="page-hero__inner">
     {# -- Header row -- #}
     <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div class="flex items-center gap-3">
@@ -119,6 +120,15 @@
             <p class="text-[10px] text-text-muted">highest priority</p>
         </div>
     </div>
+    </div>
+</section>
+
+{# -- Section head for kanban -- #}
+<div class="page-section-head mt-6 mb-4">
+    <span class="page-section-num">02</span>
+    <span class="page-section-title">Verdict Board</span>
+    <span class="page-section-line"></span>
+    <span class="page-section-tag">drag to reorder</span>
 </div>
 
 {# -- Kanban Board -------------------------------------------------------- #}
@@ -163,7 +173,7 @@
             <div class="space-y-2">
                 {% for item in col.cards %}
                 {% set upside = ((item.fair_value - item.price_usd) / item.price_usd * 100) if (item.fair_value and item.price_usd and item.price_usd > 0) else 0 %}
-                <div class="group bg-surface-elevated/90 backdrop-blur-sm rounded-xl border border-border/40 hover:border-{{ col_colors.get(col.verdict, 'accent') }}/40 transition-all duration-200 hover:shadow-lg overflow-hidden"
+                <div class="group bg-surface-elevated/90 backdrop-blur-sm rounded-xl border border-border/40 hover:border-{{ col_colors.get(col.verdict, 'accent') }}/40 transition-all duration-200 hover:shadow-lg overflow-hidden kanban-card-modern"
                      draggable="true"
                      ondragstart="onDragStart(event)"
                      ondragend="onDragEnd(event)"

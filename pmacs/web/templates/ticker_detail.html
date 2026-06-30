@@ -85,7 +85,45 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% elif no_data %}
-<section class="card card-elevated reveal" aria-labelledby="nd-heading">
+{# Cold ticker — show a slim rose page-hero above the warming/empty state so the
+   design-system promise ("every top-level page gets a page-hero") still holds.
+   All chips placeholder; one row, no metric-row--3 below. #}
+<section class="page-hero page-hero--rose reveal" role="region" aria-label="{{ ticker }} status" data-stagger>
+    <div class="page-hero__inner">
+    <div class="card card-elevated p-4">
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Verdict</span>
+            <span class="font-mono font-semibold text-text-secondary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Conviction</span>
+            <span class="font-mono tabular-nums text-text-primary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Entry</span>
+            <span class="font-mono tabular-nums text-text-primary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Current</span>
+            <span class="font-mono tabular-nums text-text-primary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Target</span>
+            <span class="font-mono tabular-nums text-text-primary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Held</span>
+            <span class="font-mono tabular-nums text-text-primary">—</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5 ml-auto">
+            <span class="text-[10px] text-text-muted">{% if warming %}Fetching first evidence…{% else %}No analysis yet{% endif %}</span>
+        </span>
+    </div>
+    </div>
+    </div>
+</section>
+<section class="card card-elevated reveal mt-6" aria-labelledby="nd-heading">
     <h2 id="nd-heading" class="text-lg font-semibold text-text-primary mb-2">No data for {{ ticker }} yet</h2>
     {%- if warming -%}
     {# §13.4: no bare spinner — shared loading_state with WHAT + ETA + cancel.
@@ -105,61 +143,59 @@
 {% else %}
 {# ── Unified ticker workspace (Source.md §16.6 single-ticker drawer) ── #}
 {% set _ws_has = (ws_memo is not none) or (ws_holding is not none) %}
-{% if _ws_has %}
+{# Hoist page-hero out of the `if _ws_has` so cold tickers (no memo, no holding)
+   still get the rose tint + a numbered section head above the workspace.
+   Verdict/conviction/entry/target/held chips show real values when present,
+   "—" placeholders otherwise. Last-analyzed is hidden when no memo exists. #}
+{% set _ws_verdict = (ws_memo._verdict if (ws_memo is defined and ws_memo and ws_memo._verdict) else none) or (ws_holding.verdict if (ws_holding is defined and ws_holding and ws_holding.verdict) else none) %}
+{% set _ws_conv = (ws_memo._conviction_score if (ws_memo is defined and ws_memo) else none) if (ws_memo is defined and ws_memo) else (ws_holding.conviction_score if (ws_holding is defined and ws_holding) else none) %}
+{% set _ws_entry = ws_holding.entry_price_usd if (ws_holding is defined and ws_holding and ws_holding.entry_price_usd) else none %}
+{% set _ws_target = ws_holding.price_target_usd if (ws_holding is defined and ws_holding and ws_holding.price_target_usd) else none %}
 <section class="page-hero page-hero--rose reveal" role="region" aria-label="{{ ticker }} workspace summary" data-stagger>
     <div class="page-hero__inner">
     <div class="card card-elevated p-4">
     <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-        {% set _ws_verdict = (ws_memo._verdict if ws_memo else none) or (ws_holding.verdict if ws_holding else none) %}
-        {% if _ws_verdict %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Verdict</span>
             <span class="font-mono font-semibold
                          {{ 'text-positive' if _ws_verdict in ('STRONG_BUY','BUY') else '' }}
                          {{ 'text-negative' if _ws_verdict == 'SKIP' else '' }}
-                         {{ 'text-text-secondary' if _ws_verdict == 'HOLD' else '' }}">{{ _ws_verdict }}</span>
+                         {{ 'text-text-secondary' if _ws_verdict == 'HOLD' else '' }}">{{ _ws_verdict if _ws_verdict else '—' }}</span>
         </span>
-        {% endif %}
-        {% set _ws_conv = (ws_memo._conviction_score if ws_memo else none) if ws_memo else (ws_holding.conviction_score if ws_holding else none) %}
-        {% if _ws_conv is not none %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Conviction</span>
-            <span class="font-mono tabular-nums text-text-primary">{{ "%.2f"|format(_ws_conv|float) }}</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ "%.2f"|format(_ws_conv|float) if _ws_conv is not none else '—' }}</span>
         </span>
-        {% endif %}
-        {% if ws_holding and ws_holding.entry_price_usd %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Entry</span>
-            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.entry_price_usd) }}</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(_ws_entry|float) if _ws_entry is not none else '—' }}</span>
         </span>
-        {% endif %}
-        {% if current_price %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Current</span>
-            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(current_price) }}</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(current_price|float) if current_price is not none and current_price is number else '—' }}</span>
         </span>
-        {% endif %}
-        {% if ws_holding and ws_holding.price_target_usd %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Target</span>
-            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(ws_holding.price_target_usd) }}</span>
+            <span class="font-mono tabular-nums text-text-primary">${{ "%.2f"|format(_ws_target|float) if _ws_target is not none else '—' }}</span>
         </span>
-        {% endif %}
-        {% if ws_days_held is not none %}
         <span class="inline-flex items-center gap-1.5">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Held</span>
-            <span class="font-mono tabular-nums text-text-primary">{{ ws_days_held }}d</span>
+            <span class="font-mono tabular-nums text-text-primary">{{ ws_days_held if ws_days_held is not none else '—' }}{{ 'd' if ws_days_held is not none else '' }}</span>
         </span>
-        {% endif %}
         {% if ws_memo and ws_memo._decided_at %}
         <span class="inline-flex items-center gap-1.5 ml-auto">
             <span class="text-[10px] text-text-muted">Last analyzed {{ ws_memo._decided_at[:10] }}</span>
+        </span>
+        {% else %}
+        <span class="inline-flex items-center gap-1.5 ml-auto">
+            <span class="text-[10px] text-text-muted">No analysis yet</span>
         </span>
         {% endif %}
     </div>
     </div>
     </div>
 </section>
+{% if _ws_has %}
 <div class="flex flex-wrap gap-1 mb-5 reveal" role="tablist" aria-label="{{ ticker }} workspace tabs" id="ws-tablist">
     <button type="button" role="tab" id="ws-tab-fundamentals" aria-controls="ws-fundamentals" tabindex="0" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="fundamentals" aria-selected="true">Fundamentals</button>
     <button type="button" role="tab" id="ws-tab-memo"       aria-controls="ws-memo"       tabindex="-1" class="ws-tab min-h-[44px] inline-flex items-center px-3 py-1.5 text-xs rounded-xl font-medium transition-colors" data-ws-tab="memo"       aria-selected="false">Memo</button>
@@ -172,7 +208,7 @@
     <span class="page-section-num page-section-num--pos">01</span>
     <span class="page-section-title">Workspace</span>
     <span class="page-section-line"></span>
-    <span class="page-section-tag">{{ _ws_verdict | default('Pending') }}</span>
+    <span class="page-section-tag">{{ _ws_verdict if _ws_verdict else 'Pending' }}</span>
 </div>
 <div id="ws-fundamentals" class="ws-panel">
 {% macro fmt(value, unit="") -%}

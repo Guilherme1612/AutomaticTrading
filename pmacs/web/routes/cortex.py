@@ -35,9 +35,13 @@ async def cortex_page(request: Request):
     """Render the cortex system health page."""
     cfg = get_config()
 
-    # Detect active backend and classify as local vs cloud
-    registry = _load_registry()
-    active = registry.get("active", "llama_server")
+    # Detect active backend and classify as local vs cloud.
+    # Routes through load_config() so runtime_state.json (gitignored operator
+    # override) wins — UI must never disagree with what the cycle will actually
+    # use. Operator directive Jun 30: only the explicit POST on /settings may
+    # change active; the cortex panel is read-only.
+    from pmacs.web.routes.settings import _effective_active_backend
+    active, registry = _effective_active_backend()
     backends = registry.get("backends", {})
     backend_cfg = backends.get(active, {})
     is_local = not backend_cfg.get("api_key_ref", "")

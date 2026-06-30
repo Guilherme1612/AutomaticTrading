@@ -74,9 +74,47 @@ def _save_runtime_state(payload: dict) -> None:
     tmp_path.replace(_RUNTIME_STATE_PATH)
 
 
+def _effective_active_backend() -> tuple[str, dict]:
+    """Read the operator's effective active backend + full registry.
+
+    Operator invariant (Jun 30): the only thing that may change `active` is the
+    operator's explicit POST to /api/settings/inference/provider with force=true.
+    The registry file may drift (e.g. ``git pull`` resetting to committed default)
+    but ``config/runtime_state.json`` (gitignored) holds the operator's actual
+    choice. ``pmacs.config.load_config()`` applies the override on every cycle,
+    so this helper routes the same path so the UI cannot disagree with the engine.
+
+    Returns (effective_active, full_registry_dict) so callers can render the
+    backend's metadata (api_key_ref, default_model, base_url) without re-reading.
+    """
+    try:
+        from pmacs.config import load_config
+
+        cfg = load_config()
+        effective_active = cfg.model_registry.active
+        # ``backends`` is ``dict[str, ModelBackend]`` per pmacs/config.py.
+        # Re-derive the dict form so callers can still walk backends/<name>
+        # the same way they walked _load_registry() output.
+        backends: dict = {}
+        for name, backend in cfg.model_registry.backends.items():
+            backends[name] = {
+                "url": backend.url,
+                "default_model": backend.default_model,
+                "structured_output": backend.structured_output,
+                "api_key_ref": backend.api_key_ref,
+                "base_url": backend.base_url,
+            }
+        return effective_active, {"backends": backends, "active": effective_active}
+    except Exception:
+        # Fall back to the raw file only if the loader is itself broken —
+        # never silently pick a different answer than the engine will use.
+        registry = _load_registry()
+        return registry.get("active", "llama_server"), registry
+
+
 def _get_inference_state() -> dict:
-    registry = _load_registry()
-    active = registry.get("active", "llama_server")
+    effective_active, registry = _effective_active_backend()
+    active = effective_active
     backends = registry.get("backends", {})
     backend = backends.get(active, {})
     api_key_ref = backend.get("api_key_ref", "")

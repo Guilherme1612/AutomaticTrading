@@ -16,19 +16,19 @@ router = APIRouter()
 def _check_backend_type() -> str:
     """Check if the system is configured for cloud or local inference.
 
-    Uses model_registry.json as source of truth — the active backend's
-    api_key_ref determines whether it's cloud or local.
+    Routes through ``pmacs.config.load_config()`` so the dashboard chrome
+    agrees with what cycles will actually use. The operator's runtime-state
+    override (gitignored ``runtime_state.json``) wins over the committed
+    ``model_registry.json`` default; without this, the header would show
+    "anthropic" while cycles still hit openrouter (operator directive
+    Jun 30 2026: only the explicit POST on /settings may change active).
     """
     try:
-        import json
-        from pathlib import Path
-        registry_path = Path(__file__).resolve().parents[3] / "config" / "model_registry.json"
-        if registry_path.exists():
-            registry = json.loads(registry_path.read_text())
-            active = registry.get("active", "llama_server")
-            backend = registry.get("backends", {}).get(active, {})
-            return "local" if not backend.get("api_key_ref", "") else "cloud"
-        return "local"
+        from pmacs.web.routes.settings import _effective_active_backend
+
+        active, registry = _effective_active_backend()
+        backend = registry.get("backends", {}).get(active, {})
+        return "local" if not backend.get("api_key_ref", "") else "cloud"
     except Exception:
         return "local"
 

@@ -27,110 +27,114 @@
 </div>
 {% else %}
 
-<!-- Portfolio hero -->
-<div class="card card-elevated card-accent-blue mb-8" data-stagger>
-    <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-4 sm:gap-6">
-        <div>
-            <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Portfolio Value</p>
-            <p class="text-2xl sm:text-display font-mono font-bold text-text-primary hero-value"
-               id="portfolio-value-display"
-               data-anim-target="{{ portfolio_value }}"
-               data-anim-prefix="$"
-               data-anim-decimals="2">$0.00</p>
-            <p class="text-xs text-text-muted font-mono mt-2">≈{{ "%.2f"|format(portfolio_value * 0.92) }} EUR · fixed reference rate</p>
-        </div>
-        <div class="sm:text-right">
-            <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Day Change</p>
-            <p class="text-head font-mono font-bold {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}"
-               id="day-change-display">
-                {{ "+" if day_change_pct >= 0 else "" }}{{ "%.2f"|format(day_change_pct) }}%
-            </p>
-            <div class="flex items-center justify-end gap-1.5 mt-2">
-                <svg class="w-3.5 h-3.5 {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {% if day_change_pct >= 0 %}
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/>
-                    {% else %}
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
-                    {% endif %}
-                </svg>
-                <span class="text-xs text-text-muted font-mono" id="cycle-timing" {% if last_cycle and last_cycle != '--' %}data-time-ago="{{ last_cycle }}"{% endif %}>{{ last_cycle }}</span>
+<!-- Portfolio hero (page-hero, blue tint) -->
+<section class="page-hero page-hero--blue" data-stagger>
+    <div class="card card-elevated card-accent-blue">
+        <div class="page-hero__inner">
+            <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-4 sm:gap-6">
+                <div>
+                    <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Portfolio Value</p>
+                    <p class="text-2xl sm:text-display font-mono font-bold text-text-primary hero-value"
+                       id="portfolio-value-display"
+                       data-anim-target="{{ portfolio_value }}"
+                       data-anim-prefix="$"
+                       data-anim-decimals="2">$0.00</p>
+                    <p class="text-xs text-text-muted font-mono mt-2">≈{{ "%.2f"|format(portfolio_value * 0.92) }} EUR · fixed reference rate</p>
+                </div>
+                <div class="sm:text-right">
+                    <p class="text-xs text-text-muted uppercase tracking-widest font-medium mb-2">Day Change</p>
+                    <p class="text-head font-mono font-bold {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}"
+                       id="day-change-display">
+                        {{ "+" if day_change_pct >= 0 else "" }}{{ "%.2f"|format(day_change_pct) }}%
+                    </p>
+                    <div class="flex items-center justify-end gap-1.5 mt-2">
+                        <svg class="w-3.5 h-3.5 {{ 'text-positive' if day_change_pct >= 0 else 'text-negative' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            {% if day_change_pct >= 0 %}
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/>
+                            {% else %}
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                            {% endif %}
+                        </svg>
+                        <span class="text-xs text-text-muted font-mono" id="cycle-timing" {% if last_cycle and last_cycle != '--' %}data-time-ago="{{ last_cycle }}"{% endif %}>{{ last_cycle }}</span>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
 
-    <!-- Portfolio sparkline -->
-    <div class="mt-6" id="portfolio-sparkline-container">
-        {% if sparkline_data.get("portfolio") and sparkline_data["portfolio"]|length > 1 %}
-        {% set points = sparkline_data["portfolio"] %}
-        {% set values = points|map(attribute=1)|list %}
-        {% set vmin = values|min %}
-        {% set vmax = values|max %}
-        {% set vrange = [vmax - vmin, 0.001]|max %}
-        {% set trend = "positive" if values[-1] >= values[0] else "negative" %}
-        <div class="sparkline-container sparkline-{{ trend }}">
-            <svg viewBox="0 0 100 40" preserveAspectRatio="none" class="w-full" style="height:48px">
-                <defs>
-                    <linearGradient id="spark-grad" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0.15"/>
-                        <stop offset="100%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0"/>
-                    </linearGradient>
-                </defs>
-                <polygon fill="url(#spark-grad)" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}100,40 0,40"/>
-                <polyline class="sparkline-line" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}"/>
-            </svg>
-        </div>
-        {% else %}
-        <div class="flex flex-col items-center justify-center h-32 gap-2">
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
-                <span class="text-xs font-semibold text-text-primary">Bootstrap Phase Active</span>
-            </div>
-            <p class="text-[11px] text-text-muted text-center max-w-xs mx-auto">
-                Running paper cycles to build confidence. Chart populates after first resolved position.
-            </p>
-            <div class="flex items-center gap-4 mt-1">
-                <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Total</p>
-                    <p class="text-sm font-mono font-bold text-text-primary">{{ total_cycles | default(0) }}</p>
+            <!-- Portfolio sparkline -->
+            <div class="mt-6" id="portfolio-sparkline-container">
+                {% if sparkline_data.get("portfolio") and sparkline_data["portfolio"]|length > 1 %}
+                {% set points = sparkline_data["portfolio"] %}
+                {% set values = points|map(attribute=1)|list %}
+                {% set vmin = values|min %}
+                {% set vmax = values|max %}
+                {% set vrange = [vmax - vmin, 0.001]|max %}
+                {% set trend = "positive" if values[-1] >= values[0] else "negative" %}
+                <div class="sparkline-container sparkline-{{ trend }}">
+                    <svg viewBox="0 0 100 40" preserveAspectRatio="none" class="w-full" style="height:48px">
+                        <defs>
+                            <linearGradient id="spark-grad" x1="0" x2="0" y1="0" y2="1">
+                                <stop offset="0%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0.15"/>
+                                <stop offset="100%" stop-color="{{ 'var(--positive)' if trend == 'positive' else 'var(--negative)' }}" stop-opacity="0"/>
+                            </linearGradient>
+                        </defs>
+                        <polygon fill="url(#spark-grad)" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}100,40 0,40"/>
+                        <polyline class="sparkline-line" points="{% for i in range(points|length) %}{{ "%.1f"|format(i / (points|length - 1) * 100) }},{{ "%.1f"|format(2 + (1 - (points[i][1] - vmin) / vrange) * 36) }} {% endfor %}"/>
+                    </svg>
                 </div>
-                <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Completed</p>
-                    <p class="text-sm font-mono text-positive">{{ completed_cycles | default(0) }}</p>
-                </div>
-                {% set failed = (total_cycles | default(0)) - (completed_cycles | default(0)) %}
-                {% if failed > 0 %}
-                <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Failed</p>
-                    <p class="text-sm font-mono text-negative">{{ failed }}</p>
+                {% else %}
+                <div class="flex flex-col items-center justify-center h-32 gap-2">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
+                        <span class="text-xs font-semibold text-text-primary">Bootstrap Phase Active</span>
+                    </div>
+                    <p class="text-[11px] text-text-muted text-center max-w-xs mx-auto">
+                        Running paper cycles to build confidence. Chart populates after first resolved position.
+                    </p>
+                    <div class="flex items-center gap-4 mt-1">
+                        <div class="text-center">
+                            <p class="text-[10px] text-text-muted uppercase tracking-wider">Total</p>
+                            <p class="text-sm font-mono font-bold text-text-primary">{{ total_cycles | default(0) }}</p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-[10px] text-text-muted uppercase tracking-wider">Completed</p>
+                            <p class="text-sm font-mono text-positive">{{ completed_cycles | default(0) }}</p>
+                        </div>
+                        {% set failed = (total_cycles | default(0)) - (completed_cycles | default(0)) %}
+                        {% if failed > 0 %}
+                        <div class="text-center">
+                            <p class="text-[10px] text-text-muted uppercase tracking-wider">Failed</p>
+                            <p class="text-sm font-mono text-negative">{{ failed }}</p>
+                        </div>
+                        {% endif %}
+                        <div class="text-center">
+                            <p class="text-[10px] text-text-muted uppercase tracking-wider">Target</p>
+                            <p class="text-sm font-mono text-text-muted">50 cycles</p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-[10px] text-text-muted uppercase tracking-wider">Progress</p>
+                            <p class="text-sm font-mono text-accent">{{ ((completed_cycles | default(0)) / 50 * 100) | int }}%</p>
+                        </div>
+                    </div>
                 </div>
                 {% endif %}
-                <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Target</p>
-                    <p class="text-sm font-mono text-text-muted">50 cycles</p>
-                </div>
-                <div class="text-center">
-                    <p class="text-[10px] text-text-muted uppercase tracking-wider">Progress</p>
-                    <p class="text-sm font-mono text-accent">{{ ((completed_cycles | default(0)) / 50 * 100) | int }}%</p>
-                </div>
+            </div>
+
+            <!-- Cost widget -->
+            <div class="border-t border-border-subtle mt-5 pt-5">
+                {% set cost_daily = cost_state.today_cost %}
+                {% set cost_monthly = cost_state.month_cost %}
+                {% set daily_cap = cost_state.daily_cap %}
+                {% set monthly_cap = cost_state.monthly_cap %}
+                {% set last_cycle_cost = cost_state.last_cycle_cost %}
+                {% set avg_cycle_cost = cost_state.avg_cycle_cost %}
+                {% include "cost_widget.html" %}
             </div>
         </div>
-        {% endif %}
     </div>
-
-    <!-- Cost widget -->
-    <div class="border-t border-border-subtle mt-5 pt-5">
-        {% set cost_daily = cost_state.today_cost %}
-        {% set cost_monthly = cost_state.month_cost %}
-        {% set daily_cap = cost_state.daily_cap %}
-        {% set monthly_cap = cost_state.monthly_cap %}
-        {% set last_cycle_cost = cost_state.last_cycle_cost %}
-        {% set avg_cycle_cost = cost_state.avg_cycle_cost %}
-        {% include "cost_widget.html" %}
-    </div>
-</div>
+</section>
 
 <!-- Time-window selector -->
-<div class="flex flex-wrap items-center gap-3 mb-6" data-stagger>
+<div class="flex flex-wrap items-center gap-3 mb-6 mt-6" data-stagger>
     <span class="text-xs text-text-muted uppercase tracking-widest font-medium">Period</span>
     <div class="flex flex-wrap gap-1 bg-surface-sunken/50 rounded-xl p-1" id="sparkline-window-btns" role="tablist" aria-label="Portfolio time window">
         {% for window in ['1D', '1W', '1M', '3M', 'YTD', 'ALL'] %}
@@ -145,7 +149,13 @@
     </div>
 </div>
 
-<!-- Risk metrics -->
+<!-- Risk metrics (page-section-head + stat-row) -->
+<div class="page-section-head">
+    <span class="page-section-num page-section-num--pos">01</span>
+    <span class="page-section-title">Risk Metrics</span>
+    <span class="page-section-line"></span>
+    <span class="page-section-tag">last 5 windows</span>
+</div>
 {% set metric_cards = [
     ("max_drawdown_pct", "Max Drawdown", "%.1f", "%", "max_drawdown_pct", "red"),
     ("sharpe", "Sharpe", "%.2f", "", "sharpe", "blue"),
@@ -153,11 +163,11 @@
     ("win_rate_pct", "Win Rate", "%.1f", "%", "win_rate_pct", "green"),
     ("avg_risk_reward", "Avg R/R", "%.1f", "x", "avg_risk_reward", "blue"),
 ] %}
-<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-8" id="sparkline-metrics">
+<div class="stat-row stat-row--5 grid-cols-5 gap-3 mb-8" id="sparkline-metrics">
 {% for metric_key, label, fmt, suffix, spark_key, accent in metric_cards %}
-    <div class="card card-stat card-accent-{{ accent }}" data-stagger>
-        <span class="text-[10px] font-medium text-text-muted uppercase tracking-widest">{{ label }}</span>
-        <span class="mt-1.5 text-2xl font-mono font-bold text-text-primary block"
+    <div class="stat-tile" data-stagger>
+        <span class="stat-tile__label">{{ label }}</span>
+        <span class="stat-tile__value mt-1.5"
               data-anim-target="{{ risk_metrics[metric_key] }}"
               data-anim-suffix="{{ suffix }}"
               data-anim-decimals="{{ '2' if 'f' in fmt and fmt[-1] == 'f' else '1' }}">{{ fmt|format(risk_metrics[metric_key]) }}{{ suffix }}</span>
@@ -189,14 +199,14 @@
 <div class="card card-elevated card-accent-{{ 'green' if mode == 'SHADOW + PAPER' else 'blue' }} mb-8" data-stagger>
     <div class="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
         <div class="flex flex-wrap items-center gap-3 sm:gap-4">
-            <span class="mode-badge px-3 py-1.5 text-sm font-semibold rounded-xl
+            <span id="dashboard-mode-badge" class="mode-badge px-3 py-1.5 text-sm font-semibold rounded-xl
                          {{ 'bg-accent-soft text-accent' if mode == 'SHADOW + PAPER' else 'bg-positive-soft text-positive' }}">
                 {{ mode }}
             </span>
             <dl class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
                 <div class="flex items-center gap-1.5">
                     <dt class="text-text-muted">Last cycle:</dt>
-                    <dd class="font-mono text-text-primary" id="last-cycle-time"
+                    <dd class="font-mono text-text-primary" id="dashboard-last-cycle"
                         {% if system_health.last_cycle and system_health.last_cycle != '--' %}data-time-ago="{{ system_health.last_cycle }}"{% endif %}>{{ system_health.last_cycle }}</dd>
                 </div>
                 <div class="flex items-center gap-1.5">

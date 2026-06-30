@@ -89,6 +89,31 @@ class MacroRegimeRunner(PersonaRunner):
                 ),
             })
 
+        # Inject regime_reasoning if missing. Cycle 2 ONDS Jun 30 surfaced
+        # the LLM dropping the field entirely when there is no strong macro
+        # signal in the evidence. Synthesize a placeholder that explicitly
+        # states "no strong macro read" so the audit chain can see the
+        # gap (better than a safe-default which hides the drift).
+        if "regime_reasoning" not in parsed or not parsed.get("regime_reasoning"):
+            regime = parsed.get("regime", "UNCERTAIN")
+            parsed["regime_reasoning"] = (
+                f"No specific macro signal in the provided evidence; "
+                f"regime classified as {regime} on best-effort basis. "
+                f"(regime_reasoning field was missing in LLM output; "
+                f"synthesized by pre-validate.)"
+            )
+            all_fixes.append({
+                "field": "regime_reasoning",
+                "from": None,
+                "to": "(synthesized)",
+                "reason": (
+                    "LLM omitted required regime_reasoning field. "
+                    "Synthesized a placeholder that surfaces the gap to "
+                    "the audit chain rather than swallowing it via "
+                    "safe-default."
+                ),
+            })
+
         self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed
 

@@ -249,6 +249,19 @@ class CrucibleRunner(PersonaRunner):
         if isinstance(attacks, list) and parsed.get("attack_count") != len(attacks):
             parsed["attack_count"] = len(attacks)
 
+        # Truncate any string field that exceeds the schema's max_length.
+        # The LLM (deepseek-v4-flash on openrouter) sometimes writes
+        # attack descriptions longer than the 800-char envelope; without
+        # this, Pydantic raises string_too_long and the Crucible aborts
+        # at attempt 3. Cycle 1 ONDS Jun 30 surfaced this — three Crucible
+        # attempts were lost to over-long descriptions, then the persona
+        # aborted at severity 0.0 and the cycle fell back to the 239-char
+        # Crucible-abort stub. Truncation preserves the analysis up to the
+        # envelope; the audit chain records the cut.
+        model_cls = self.get_pydantic_model()
+        parsed, trunc_fixes = self._truncate_string_fields(parsed, model_cls)
+        all_fixes.extend(trunc_fixes)
+
         if all_fixes:
             self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed

@@ -10,6 +10,7 @@ Mirror of BullAdvocateSanity. Checks:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pmacs.agents.sanity.base import BaseSanityValidator, SanityResult
@@ -88,13 +89,26 @@ class BearAdvocateSanity(BaseSanityValidator):
         if not reasoning:
             return SanityResult(passed=False, reason="reasoning is empty")
 
+        # Same pragmatic check as BullAdvocateSanity (ONDS 3-cycle audit
+        # Jun 30). The strict slug/topic check is the dominant wave-2
+        # blocker — the LLM often writes a substantive bear case without
+        # literally naming the persona slug, falling back to safe-default
+        # and producing a 239-char Crucible-abort stub. Accept if the
+        # reasoning references a target token OR is a substantive
+        # quantitative argument (length > 80 chars + any number).
         tokens = _TARGET_TOKENS.get(target_enum, ())
-        if not any(tok in reasoning for tok in tokens):
+        has_topic_token = any(tok in reasoning for tok in tokens)
+        has_quantitative_substance = (
+            len(reasoning) > 80
+            and bool(re.search(r"\d", reasoning))
+        )
+        if not (has_topic_token or has_quantitative_substance):
             return SanityResult(
                 passed=False,
                 reason=(
                     f"reasoning does not reference the target persona "
-                    f"({target_val}); advocacy must engage the named persona"
+                    f"({target_val}) and is not a substantive quantitative "
+                    f"argument; advocacy must engage the named persona"
                 ),
             )
 

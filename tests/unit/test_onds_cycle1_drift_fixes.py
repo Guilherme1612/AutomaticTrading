@@ -451,3 +451,91 @@ def test_moat_analyst_team_expertise_coerced_to_network_effects():
     out = MoatAnalystOutput.model_validate(fixed)
     assert out.moat_components[0].moat_type == "SWITCHING_COSTS"
     assert out.moat_components[1].moat_type == "NETWORK_EFFECTS"
+
+
+# ---------------------------------------------------------------------------
+# MacroRegime: missing regime_reasoning
+# ---------------------------------------------------------------------------
+
+
+def test_macro_regime_missing_regime_reasoning_injected():
+    """Cycle 2 ONDS Jun 30 surfaced the LLM dropping the regime_reasoning
+    field entirely when there is no strong macro signal in the evidence.
+    The fix must synthesize a placeholder that surfaces the gap to the
+    audit chain rather than letting Pydantic reject and the persona
+    fall back to safe-default."""
+    from pmacs.agents.macro_regime import MacroRegimeRunner
+    from pmacs.schemas.personas import MacroRegimeOutput
+
+    parsed = {
+        "ticker": "ONDS",
+        "regime": "LATE_CYCLE",
+        "regime_confidence": 0.65,
+        # regime_reasoning deliberately omitted
+        "yield_curve_signal": "INVERTED",
+        "vix_regime": "MODERATE",
+        "sector_rotation_summary": "Rotation out of growth into value",
+        "p_up": 0.35,
+        "p_flat": 0.40,
+        "p_down": 0.25,
+        "evidence_ids": ["E001"],
+    }
+
+    runner = MacroRegimeRunner(cycle_id="test-onds-drift-4c")
+    fixed = runner._pre_validate(dict(parsed))
+    assert fixed["regime_reasoning"]
+    assert "LATE_CYCLE" in fixed["regime_reasoning"]  # references the regime
+
+    # And Pydantic must accept end-to-end
+    out = MacroRegimeOutput.model_validate(fixed)
+    assert "LATE_CYCLE" in out.regime_reasoning
+
+
+# ---------------------------------------------------------------------------
+# Crucible: attacks[].description exceeds 800-char max_length
+# ---------------------------------------------------------------------------
+
+
+def test_crucible_attack_description_truncated_to_max_length():
+    """Cycle 1 ONDS Jun 30 surfaced the LLM emitting 1100+ char attack
+    descriptions. Pydantic raises string_too_long and the Crucible
+    aborts at attempt 3 → severity 0.0 → 239-char Crucible-abort stub.
+    The fix must call _truncate_string_fields and clamp the field
+    to within the envelope so the attack survives."""
+    from pmacs.agents.crucible import CrucibleRunner
+    from pmacs.schemas.personas import CrucibleOutput
+
+    long_description = (
+        "ONDS has a 1,200+ char attack description that the LLM wrote "
+        "as a comprehensive narrative covering all four attack axes. " * 8
+    )
+    parsed = {
+        "ticker": "ONDS",
+        "attack_count": 1,
+        "attacks": [
+            {
+                "attack_type": "LOGICAL_HOLE",
+                "severity": 0.55,
+                "description": long_description,
+                "evidence_ids": ["normalized-fallback-001"],
+            },
+        ],
+        "severity": 0.55,
+        "thesis_survives": True,
+        "summary": "Truncation test",
+        "rewrite_cycle": 1,
+        "p_up": 0.35,
+        "p_flat": 0.40,
+        "p_down": 0.25,
+        "evidence_ids": ["normalized-fallback-001"],
+    }
+
+    runner = CrucibleRunner()
+    fixed = runner._pre_validate(dict(parsed))
+
+    # Description must now fit within the schema's max_length (800 chars).
+    assert len(fixed["attacks"][0]["description"]) <= 800
+
+    # And Pydantic must accept end-to-end
+    out = CrucibleOutput.model_validate(fixed)
+    assert len(out.attacks[0].description) <= 800

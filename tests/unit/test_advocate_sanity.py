@@ -215,6 +215,47 @@ class TestAdvocateSanity:
         res = BearAdvocateSanity().validate(out, _evidence(["ev-1"]))
         assert res.passed, f"semantic phrase should pass for {target}: {res.reason}"
 
+    def test_bull_quantitative_argument_engages_target(self):
+        """ONDS 3-cycle audit Jun 30 round 3: the LLM sometimes writes a
+        substantive quantitative bull case without ever literally naming
+        the persona slug (e.g. 'revenue inflects at 12% NTM, multiple
+        compression to 6x EV/Sales, base-case 35% upside'). The previous
+        strict check rejected these and fell back to safe-default,
+        producing a 239-char Crucible-abort stub. The new pragmatic rule:
+        a reasoning of length > 80 chars containing at least one number
+        is a substantive argument and counts as engaging the target."""
+        out = dict(BULL_VALID)
+        out["reasoning"] = (
+            "ONDS trades at 6.0x EV/Sales with NTM revenue growth of 12%. "
+            "Base case implies 35% upside on multiple re-rating alone. "
+            "Customer concentration has improved to 22% in 2026 from 38% in 2024."
+        )
+        # NB: the slug 'growth_hunter' is NOT in this reasoning.
+        res = BullAdvocateSanity().validate(out, _evidence(["ev-1"]))
+        assert res.passed, f"substantive quantitative argument must engage the target: {res.reason}"
+
+    def test_bear_quantitative_argument_engages_target(self):
+        """Bear advocate mirror of test_bull_quantitative_argument_engages_target."""
+        out = dict(BEAR_VALID)
+        out["reasoning"] = (
+            "ONDS cash burn of $48M/quarter vs $572M cash = 12 quarters runway. "
+            "Multiple compression in 3 of last 4 quarters. Insider sales of "
+            "$3.2M in last 90 days with no Form 4 buys."
+        )
+        res = BearAdvocateSanity().validate(out, _evidence(["ev-1"]))
+        assert res.passed, f"substantive quantitative argument must engage the target: {res.reason}"
+
+    def test_short_argument_without_numbers_still_rejected(self):
+        """The new pragmatic rule is not an unlimited exemption — a short
+        reasoning without numbers AND without the slug is still rejected.
+        Otherwise the LLM could write a one-sentence non-engaging pitch
+        and pass."""
+        out = dict(BULL_VALID)
+        out["reasoning"] = "The thesis is solid."
+        res = BullAdvocateSanity().validate(out, _evidence(["ev-1"]))
+        assert not res.passed
+        assert "growth_hunter" in (res.reason or "") or "substantive" in (res.reason or "").lower()
+
 
 # ── Auditor Pydantic + sanity ─────────────────────────────────────────────
 

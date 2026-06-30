@@ -103,7 +103,9 @@ class TestPreValidateListPassthrough:
             _attack(0.5, "COUNTERARGUMENT", "a2"),
         ]
         result = runner._pre_validate(_base_dict_output(attacks, attack_count=2))
-        assert result["attacks"] is attacks
+        # Structural equality (not identity — _truncate_string_fields
+        # re-creates the list even when no truncation is needed).
+        assert result["attacks"] == attacks
         assert result["attack_count"] == 2
 
     def test_empty_list_unchanged(self):

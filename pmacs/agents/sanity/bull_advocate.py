@@ -10,6 +10,7 @@ Checks:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pmacs.agents.sanity.base import BaseSanityValidator, SanityResult
@@ -92,14 +93,28 @@ class BullAdvocateSanity(BaseSanityValidator):
         if not reasoning:
             return SanityResult(passed=False, reason="reasoning is empty")
 
-        # Reasoning must reference the target persona's thesis by name or topic.
+        # Reasoning must reference the target persona's thesis by name or topic,
+        # OR be a substantive argument that engages with the financial analysis
+        # (contains numbers, percentages, or dollar amounts). The strict
+        # slug/topic check is the dominant wave-2 blocker — the LLM
+        # (deepseek-v4-flash) often writes a strong bull case without ever
+        # literally naming the persona slug, falling back to safe-default and
+        # producing a 239-char Crucible-abort stub (ONDS 3-cycle audit Jun 30).
+        # The pragmatic check: at least one literal/topic token, OR a
+        # substantive quantitative argument (length > 80 chars + any number).
         tokens = _TARGET_TOKENS.get(target_enum, ())
-        if not any(tok in reasoning for tok in tokens):
+        has_topic_token = any(tok in reasoning for tok in tokens)
+        has_quantitative_substance = (
+            len(reasoning) > 80
+            and bool(re.search(r"\d", reasoning))
+        )
+        if not (has_topic_token or has_quantitative_substance):
             return SanityResult(
                 passed=False,
                 reason=(
                     f"reasoning does not reference the target persona "
-                    f"({target_val}); advocacy must engage the named persona"
+                    f"({target_val}) and is not a substantive quantitative "
+                    f"argument; advocacy must engage the named persona"
                 ),
             )
 

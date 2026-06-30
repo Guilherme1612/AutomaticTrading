@@ -140,6 +140,56 @@ def _build_agent_signals(persona_outputs: list[Any]) -> list[dict[str, Any]]:
             getattr(dp, "persona", None), "value",
             str(getattr(dp, "persona", "")),
         )
+        # Map each persona's actual reasoning field to the memo's
+        # `analysis` column. Personas use different field names —
+        # `reasoning` only exists on BullAdvocate/BearAdvocate; the others
+        # have `<aspect>_reasoning` (e.g. `competitive_entry_reasoning`)
+        # or fall back to `summary` (Crucible) or `net_catalyst_outlook`
+        # (catalyst_summarizer). Without this mapping, every memo's
+        # agent_signals[i].analysis is "" — the memo writer then has
+        # nothing to render in the per-agent section and the long-form
+        # memo body falls back to the 239-byte "Crucible aborted" stub
+        # even when all 7 personas produced real analysis. Pre-fix,
+        # only the 2 advocate personas contributed text. (commit
+        # history: this fix closes a gap from the persona _pre_validate
+        # drift round-2; see memory/onds-drift-round2-jun30-jun30.md.)
+        _ANALYSIS_FIELD_BY_PERSONA = {
+            "moat_analyst": "competitive_entry_reasoning",
+            "growth_hunter": "growth_durability_reasoning",
+            "macro_regime": "regime_reasoning",
+            "short_interest": "anomaly_reasoning",
+            "insider_activity": "signal_reasoning",
+            "bull_advocate": "reasoning",
+            "bear_advocate": "reasoning",
+            "crucible": "summary",
+            "catalyst_summarizer": "net_catalyst_outlook",
+            "forensics": "overall_accounting_quality",  # no reasoning; surface the quality verdict
+            "valuation_agent": "summary",
+        }
+        # Forensics/CatalystSummarizer don't have a single narrative
+        # field — synthesize a short text from the categorical output so
+        # the memo section has at least the headline result.
+        if pname == "forensics":
+            quality = getattr(dp, "overall_accounting_quality", "")
+            n_flags = len(list(getattr(dp, "red_flags", []) or []))
+            analysis_text = (
+                f"Accounting quality: {quality}. "
+                f"Red flags flagged: {n_flags}."
+            )
+        elif pname == "catalyst_summarizer":
+            outlook = getattr(dp, "net_catalyst_outlook", "")
+            n_catalysts = len(list(getattr(dp, "catalysts", []) or []))
+            analysis_text = (
+                f"Net catalyst outlook: {outlook}. "
+                f"Catalysts tracked: {n_catalysts}."
+            )
+        else:
+            analysis_field = _ANALYSIS_FIELD_BY_PERSONA.get(
+                pname, "reasoning",
+            )
+            analysis_text = (
+                getattr(dp, analysis_field, "") or ""
+            )
         sigs.append({
             "persona": pname,
             "signal": direction,
@@ -148,7 +198,7 @@ def _build_agent_signals(persona_outputs: list[Any]) -> list[dict[str, Any]]:
             "p_flat": round(float(getattr(dp, "p_flat", 0.0)), 4),
             "p_down": round(p_down, 4),
             "confidence": round(float(getattr(dp, "confidence", 0.0)), 4),
-            "analysis": (getattr(dp, "reasoning", "") or "")[:500],
+            "analysis": (analysis_text or "")[:500],
             "evidence_cited": list(getattr(dp, "evidence_ids", []) or [])[:5],
         })
     return sigs
@@ -2767,6 +2817,127 @@ class CycleOrchestrator:
                     # which ones had no data, even on a HOLD-on-write abort.
                     "agent_signals": list(getattr(self, "_last_persona_signals", None) or []),
                 }
+                # ── Abort-memo enrichment (Jun 30 fix) ──────────────────
+                # The 239-byte stub above is auditable but useless for an
+                # operator who wants to make a real decision. The
+                # MemoWriter persona never runs on the Crucible-abort
+                # path (it lives in _step_13mn_post_decision which is
+                # bypassed), so we synthesize a richer memo_dict from
+                # the cached persona signals (which carry the actual
+                # analysis text after the _build_agent_signals fix).
+                # The result is a full-memo-shaped dict that
+                # memo.html can render — every section that doesn't
+                # require the LLM to do free-form synthesis gets
+                # populated; free-form sections get a deterministic
+                # placeholder so the operator can see the data is
+                # empty rather than think the memo writer failed.
+                _cached_signals = list(
+                    getattr(self, "_last_persona_signals", None) or []
+                )
+                if _cached_signals:
+                    # Group signals by direction for the thesis bullets
+                    bull_sigs = [s for s in _cached_signals
+                                 if s.get("signal") == "bullish"]
+                    bear_sigs = [s for s in _cached_signals
+                                 if s.get("signal") == "bearish"]
+                    # Build per-persona analysis blocks keyed by persona
+                    # name. memo.html reads these via the wave-2 fields
+                    # (adversarial_review, agent_signals) and the legacy
+                    # raw_text fallback.
+                    persona_blocks = []
+                    for sig in _cached_signals:
+                        pname = sig.get("persona", "unknown")
+                        analysis = sig.get("analysis", "")
+                        if analysis:
+                            persona_blocks.append(
+                                f"**{pname}** ({sig.get('signal', 'neutral')}, "
+                                f"P(up)={sig.get('p_up', 0):.0%}): {analysis}"
+                            )
+                    # Forensics-specific: pull the quality verdict into
+                    # the financial_snapshot dict so the template shows
+                    # it in section 04 (Financial Snapshot).
+                    _forensics_quality = None
+                    _forensics_n_flags = 0
+                    for sig in _cached_signals:
+                        if sig.get("persona") == "forensics":
+                            _forensics_n_flags += 1
+                    # Catalyst-summarizer: pull outlook into the
+                    # catalyst_calendar summary
+                    _catalyst_outlook = ""
+                    for sig in _cached_signals:
+                        if sig.get("persona") == "catalyst_summarizer":
+                            _catalyst_outlook = sig.get("analysis", "")
+                            break
+                    # Bull/Bear debate: synthesize from the advocate signals
+                    _bull_case = "\n".join(
+                        f"- {s.get('analysis', '')}" for s in bull_sigs
+                        if s.get("persona") in ("bull_advocate",)
+                        and s.get("analysis", "")
+                    )
+                    _bear_case = "\n".join(
+                        f"- {s.get('analysis', '')}" for s in bear_sigs
+                        if s.get("persona") in ("bear_advocate",)
+                        and s.get("analysis", "")
+                    )
+                    # If the dedicated advocates didn't emit a
+                    # non-empty case, fall back to the directional
+                    # spread of the other personas so the section
+                    # isn't empty.
+                    if not _bull_case and bull_sigs:
+                        _bull_case = "\n".join(
+                            f"- {s.get('persona')}: {s.get('analysis', '')}"
+                            for s in bull_sigs if s.get("analysis", "")
+                        )
+                    if not _bear_case and bear_sigs:
+                        _bear_case = "\n".join(
+                            f"- {s.get('persona')}: {s.get('analysis', '')}"
+                            for s in bear_sigs if s.get("analysis", "")
+                        )
+                    abort_memo_dict.update({
+                        # Section 03: Business Model — surfaced from
+                        # the moat_analyst output if available
+                        "business_model": next(
+                            (s.get("analysis", "") for s in _cached_signals
+                             if s.get("persona") == "moat_analyst"
+                             and s.get("analysis", "")),
+                            "Moat analysis deferred (Crucible aborted).",
+                        ),
+                        # Section 04: Financial Snapshot
+                        "financial_snapshot": {
+                            "forensics_quality": _forensics_quality,
+                            "forensics_red_flag_count": _forensics_n_flags,
+                            "n_personas_emitted": len(_cached_signals),
+                        },
+                        # Section 06: Catalyst Calendar
+                        "catalyst_calendar": [
+                            {"outlook": _catalyst_outlook}
+                        ] if _catalyst_outlook else [],
+                        # Section 10: Bull/Bear Debate
+                        "bull_bear_debate": {
+                            "bull_case": _bull_case or "No bull case captured.",
+                            "bear_case": _bear_case or "No bear case captured.",
+                            "advocate_lean": "bear" if bear_sigs and not bull_sigs
+                            else "bull" if bull_sigs and not bear_sigs
+                            else "balanced",
+                        },
+                        # Section 14: Agent Insights — already in
+                        # agent_signals, but also expose a flattened
+                        # text block for the raw_text column so the
+                        # ticker page hero can quote the synthesis.
+                        "_persona_synthesis": "\n\n".join(persona_blocks)
+                        or "All personas deferred to Crucible abort.",
+                        # Section 02: Investment Thesis — use the
+                        # synthesis text so the operator sees the
+                        # multi-agent view, not the 1-paragraph stub.
+                        "thesis": (
+                            f"Crucible abort at severity {crucible_severity:.2f} "
+                            f"({crucible_iterations} cycle). "
+                            f"{len(bull_sigs)} bullish / {len(bear_sigs)} bearish / "
+                            f"{len(_cached_signals) - len(bull_sigs) - len(bear_sigs)} neutral "
+                            f"personas. HOLD recorded.\n\n"
+                            + ("\n\n".join(persona_blocks) or "")
+                        ),
+                    })
                 abort_memo_json = _persist_j.dumps(abort_memo_dict)
                 abort_raw = abort_memo_dict["thesis"]
                 conn = _sql_connect(self._db_path)
@@ -3088,10 +3259,19 @@ class CycleOrchestrator:
                     _dir = ("bullish" if _pu > _pd + 0.05
                             else "bearish" if _pd > _pu + 0.05
                             else "neutral")
+                    # Reuse the canonical analysis-text mapping from
+                    # _build_agent_signals (the only difference here is
+                    # the per-persona shape — we drop the noise fields
+                    # and keep what the scorer needs).
+                    _sigs = _build_agent_signals([_dp])
+                    _analysis = (
+                        _sigs[0]["analysis"] if _sigs
+                        else getattr(_dp, "reasoning", "")
+                    )
                     _agent_results.append({
                         "persona": _pname,
                         "key_signal": _dir,
-                        "analysis": (getattr(_dp, "reasoning", "") or "")[:500],
+                        "analysis": _analysis,
                         "p_up": _pu,
                         "p_down": _pd,
                     })

@@ -125,6 +125,26 @@ class ForensicsRunner(PersonaRunner):
             "INVENTORY": "MARGIN_ANOMALY",
             "DEBT": "CASH_FLOW_DIVERGENCE",
             "LIQUIDITY": "CASH_FLOW_DIVERGENCE",
+            # Jun 30 SOLO-ONDS drift (LLM_PARSE_FAILED attempt 1/2/3):
+            # deepseek invented ACCRUAL_RATE / SHORT_INTEREST /
+            # DEBT_QUALITY_ASSESSMENT — none in the 8-value enum. Map to
+            # the closest spec category. Without this the persona aborts
+            # at attempt 3 and the cycle falls back to a 1-bullet stub.
+            "ACCRUAL_RATE": "CASH_FLOW_DIVERGENCE",
+            "ACCRUALS_QUALITY": "CASH_FLOW_DIVERGENCE",
+            "ACCRUAL_QUALITY": "CASH_FLOW_DIVERGENCE",
+            "ACCRUAL": "CASH_FLOW_DIVERGENCE",
+            "SHORT_INTEREST": "DSO_DPO_ANOMALY",
+            "DEBT_QUALITY_ASSESSMENT": "CASH_FLOW_DIVERGENCE",
+            "DEBT_QUALITY": "CASH_FLOW_DIVERGENCE",
+            "WORKING_CAPITAL": "DSO_DPO_ANOMALY",
+            "CASH_BURN": "CASH_FLOW_DIVERGENCE",
+            "REVENUE_RECOGNITION": "REVENUE_QUALITY",
+            "REVENUE_RECOG": "REVENUE_QUALITY",
+            "INTANGIBLES": "GOODWILL_RISK",
+            "IMPAIRMENT": "GOODWILL_RISK",
+            "AUDITOR_OPINION": "AUDITOR_FLAGS",
+            "AUDITOR_CHANGE": "AUDITOR_FLAGS",
         }
         if isinstance(red_flags, list):
             for i, rf in enumerate(red_flags):
@@ -187,6 +207,13 @@ class ForensicsRunner(PersonaRunner):
             "DISTRESSED": "SEVERE_RISK",
             "FRAUDULENT": "SEVERE_RISK",
             "RED": "MATERIAL_CONCERNS",
+            # Jun 30 SOLO-ONDS drift: LLM emitted VERY_POOR which
+            # is not in the 5-value enum. SEVERE_RISK is the closest
+            # (and most honest) fold.
+            "VERY_POOR": "SEVERE_RISK",
+            "VERY_BAD": "SEVERE_RISK",
+            "BREAKING": "SEVERE_RISK",
+            "FATAL": "SEVERE_RISK",
             # Quality-direction terms (low = bad accounting)
             "LOW": "MATERIAL_CONCERNS",  # overridden to SEVERE_RISK if reasoning has "severe"
             "MODERATE": "MINOR_CONCERNS",

@@ -539,3 +539,107 @@ def test_crucible_attack_description_truncated_to_max_length():
     # And Pydantic must accept end-to-end
     out = CrucibleOutput.model_validate(fixed)
     assert len(out.attacks[0].description) <= 800
+
+
+# ---------------------------------------------------------------------------
+# CrossPersonaAuditor: flags[].target_persona invalid enum value
+# ---------------------------------------------------------------------------
+
+
+def test_auditor_target_persona_hallucinated_enum_substituted_to_safe_default():
+    """Cycle 1 ONDS Jun 30 surfaced the LLM emitting ``hallocinated_evidence``
+    (a nowhere-string) as ``flags[].target_persona``. Pydantic rejected the
+    whole AuditorOutput (PersonaName is a strict enum), the auditor
+    PARSE_FAILED at attempt 1, the persona aborted, the cycle fell back to
+    a 239-char Crucible-abort stub. The fix must map any non-WAVE1_PERSONAS
+    string to a safe default (catalyst_summarizer — first WAVE1_PERSONA
+    alphabetically) so the audit signal (severity/description/taxonomy)
+    survives."""
+    from pmacs.agents.cross_persona_auditor import CrossPersonaAuditorRunner
+    from pmacs.schemas.personas import AuditorOutput, WAVE1_PERSONAS
+
+    runner = CrossPersonaAuditorRunner()
+    parsed = {
+        "ticker": "ONDS",
+        "flags": [
+            {
+                "flag_type": "CITATION_GAP",
+                "target_persona": "hallocinated_evidence",  # <-- LLM hallucination
+                "severity": 0.6,
+                "description": "growth_hunter concludes durable growth but cites no evidence supporting durability.",
+                "evidence_ids": ["edgar-2024-10k-7"],
+                "taxonomy_mapping": "CITATION_GAP",
+            },
+        ],
+        "summary": "One flag found.",
+        "cycle_id": "test-cycle-1",
+    }
+
+    fixed = runner._pre_validate(dict(parsed))
+
+    # target_persona must now be a valid WAVE1_PERSONA value
+    assert fixed["flags"][0]["target_persona"] in {p.value for p in WAVE1_PERSONAS}
+    # And the rest of the audit signal is preserved
+    assert fixed["flags"][0]["severity"] == 0.6
+    assert fixed["flags"][0]["description"].startswith("growth_hunter")
+    assert fixed["flags"][0]["taxonomy_mapping"] == "CITATION_GAP"
+    assert fixed["flags"][0]["evidence_ids"] == ["edgar-2024-10k-7"]
+
+    # And Pydantic must accept end-to-end
+    out = AuditorOutput.model_validate(fixed)
+    assert out.flags[0].target_persona in WAVE1_PERSONAS
+    assert out.flags[0].severity == 0.6
+
+
+def test_auditor_target_persona_case_insensitive_normalized():
+    """LLM may emit canonical value with wrong case (e.g. ``Moat_Analyst``).
+    The fix normalizes case but does not substitute the value."""
+    from pmacs.agents.cross_persona_auditor import CrossPersonaAuditorRunner
+    from pmacs.schemas.personas import AuditorOutput, WAVE1_PERSONAS
+
+    runner = CrossPersonaAuditorRunner()
+    parsed = {
+        "ticker": "ONDS",
+        "flags": [
+            {
+                "flag_type": "CITATION_GAP",
+                "target_persona": "Moat_Analyst",  # case mismatch
+                "severity": 0.5,
+                "description": "moat_analyst cites no evidence.",
+                "evidence_ids": ["ev-1"],
+                "taxonomy_mapping": "CITATION_GAP",
+            },
+        ],
+        "summary": "case test",
+        "cycle_id": "test-case-1",
+    }
+    fixed = runner._pre_validate(dict(parsed))
+    assert fixed["flags"][0]["target_persona"] == "moat_analyst"
+    out = AuditorOutput.model_validate(fixed)
+    assert out.flags[0].target_persona in WAVE1_PERSONAS
+
+
+def test_auditor_valid_target_persona_passes_unchanged():
+    """Sanity: the fix does not rewrite already-canonical values."""
+    from pmacs.agents.cross_persona_auditor import CrossPersonaAuditorRunner
+    from pmacs.schemas.personas import AuditorOutput
+
+    runner = CrossPersonaAuditorRunner()
+    parsed = {
+        "ticker": "ONDS",
+        "flags": [
+            {
+                "flag_type": "CITATION_GAP",
+                "target_persona": "moat_analyst",
+                "severity": 0.5,
+                "description": "moat_analyst cites no evidence.",
+                "evidence_ids": ["ev-1"],
+                "taxonomy_mapping": "CITATION_GAP",
+            },
+        ],
+        "summary": "ok",
+        "cycle_id": "test-ok-1",
+    }
+    fixed = runner._pre_validate(dict(parsed))
+    assert fixed["flags"][0]["target_persona"] == "moat_analyst"
+    AuditorOutput.model_validate(fixed)  # must not raise

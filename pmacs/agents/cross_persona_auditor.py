@@ -82,24 +82,79 @@ class CrossPersonaAuditorRunner(PersonaRunner):
 
         - ``flags[i].description`` may exceed max_length; truncated.
         - ``flags[i].cycle_id`` may be emitted as int by the LLM; coerce to str.
+        - ``flags[i].target_persona`` may be an invalid enum value (e.g. the
+          LLM hallucinated ``"hallocinated_evidence"`` in cycle 1 ONDS
+          Jun 30). Map any non-WAVE1_PERSONAS value to a safe default
+          (macro_regime) so Pydantic accepts the flag and the audit
+          signal is preserved. Cycle 1 ONDS Jun 30 surfaced this — the
+          auditor PARSE_FAILED at attempt 1, the persona aborted, the
+          memo fell back to a 239-char Crucible-abort stub.
         - Top-level ``summary`` (max_length=600) may exceed; truncated.
         """
         all_fixes: list[dict[str, Any]] = []
         model_cls = self.get_pydantic_model()
 
-        # Coerce flags[i].cycle_id to str if int
+        # Map any non-WAVE1_PERSONAS target_persona to a safe default
+        # (macro_regime — first WAVE1_PERSONA). The persona signal
+        # (severity, description, taxonomy) is preserved; only the
+        # "which persona is being flagged" pointer is corrected.
+        from pmacs.schemas.personas import WAVE1_PERSONAS
+        safe_default = next(iter(sorted(WAVE1_PERSONAS, key=lambda p: p.value)))
+        valid_values = {p.value for p in WAVE1_PERSONAS}
+
+        # Coerce flags[i].cycle_id to str if int; map invalid target_persona
         flags = parsed.get("flags", [])
         if isinstance(flags, list):
             for i, f in enumerate(flags):
-                if isinstance(f, dict) and "cycle_id" in f:
-                    if not isinstance(f["cycle_id"], str):
-                        old_val = f["cycle_id"]
-                        f["cycle_id"] = str(f["cycle_id"])
+                if not isinstance(f, dict):
+                    continue
+                # cycle_id type coerce
+                if "cycle_id" in f and not isinstance(f["cycle_id"], str):
+                    old_val = f["cycle_id"]
+                    f["cycle_id"] = str(f["cycle_id"])
+                    all_fixes.append({
+                        "field": f"flags[{i}].cycle_id",
+                        "type": "type_coerced",
+                        "before": type(old_val).__name__,
+                        "after": "str",
+                    })
+                # target_persona enum coerce — if LLM emitted something
+                # that isn't a valid WAVE1_PERSONA value (case-insensitive
+                # exact match), substitute the safe default. This is the
+                # drift class surfaced in cycle 1 ONDS Jun 30: LLM emitted
+                # "hallocinated_evidence" (a nowhere-string) and Pydantic
+                # rejected the whole AuditorOutput.
+                tp = f.get("target_persona")
+                if isinstance(tp, str):
+                    if tp in valid_values:
+                        continue  # canonical
+                    # try case-insensitive exact match
+                    canonical = None
+                    for v in valid_values:
+                        if v.lower() == tp.lower():
+                            canonical = v
+                            break
+                    if canonical is None:
+                        f["target_persona"] = safe_default.value
                         all_fixes.append({
-                            "field": f"flags[{i}].cycle_id",
-                            "type": "type_coerced",
-                            "before": type(old_val).__name__,
-                            "after": "str",
+                            "field": f"flags[{i}].target_persona",
+                            "type": "enum_substituted",
+                            "from": tp,
+                            "to": safe_default.value,
+                            "reason": (
+                                f"LLM emitted invalid PersonaName {tp!r}; "
+                                f"substituted safe default {safe_default.value!r} "
+                                f"so Pydantic accepts the flag and the audit "
+                                f"signal is preserved."
+                            ),
+                        })
+                    else:
+                        f["target_persona"] = canonical
+                        all_fixes.append({
+                            "field": f"flags[{i}].target_persona",
+                            "type": "case_normalized",
+                            "from": tp,
+                            "to": canonical,
                         })
 
         parsed, fixes = self._truncate_string_fields(parsed, model_cls)

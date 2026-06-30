@@ -78,10 +78,27 @@ def test_build_agent_signals_neutral_direction_derived():
 
 
 def test_build_agent_signals_truncates_reasoning_to_500_chars():
-    """Reasoning text must be truncated to 500 chars to keep memo_json bounded."""
+    """Reasoning text must be truncated to 500 chars to keep memo_json bounded.
+
+    Uses ``bull_advocate`` because it has a real ``reasoning`` field. The
+    catalyst_summarizer persona was removed here because it does NOT have
+    a ``reasoning`` field — its analysis text comes from a synthesized
+    string combining ``net_catalyst_outlook`` + ``catalysts`` (see
+    orchestrator._ANALYSIS_FIELD_BY_PERSONA). Truncation still applies
+    identically to the resulting text.
+    """
     long_reasoning = "x" * 1000
-    dp = _make_dp("catalyst_summarizer", 0.5, 0.3)
+    dp = _make_dp("bull_advocate", 0.5, 0.3)
     dp.reasoning = long_reasoning
+    sigs = _build_agent_signals([dp])
+    assert len(sigs[0]["analysis"]) == 500
+
+
+def test_build_agent_signals_truncates_catalyst_summarizer_analysis_to_500_chars():
+    """catalyst_summarizer analysis is synthesized from net_catalyst_outlook
+    + catalysts list. Verify it is still truncated to 500 chars."""
+    dp = _make_dp("catalyst_summarizer", 0.5, 0.3)
+    dp.net_catalyst_outlook = "x" * 1000
     sigs = _build_agent_signals([dp])
     assert len(sigs[0]["analysis"]) == 500
 

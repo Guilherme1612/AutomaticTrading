@@ -139,6 +139,49 @@ def test_forensics_poor_with_trailing_reasoning_text_stripped():
     assert out.overall_accounting_quality == "MATERIAL_CONCERNS"
 
 
+def test_forensics_low_quality_with_trailing_text_coerced_to_severe_risk():
+    """Cycle 3 ONDS Jun 30 surfaced the LLM emitting
+    ``"LOW — severe accrual distortions inflate earnings"`` —
+    ``LOW`` is not in the 5-value enum, and the trailing ``severe``
+    text means the LLM is reporting a serious accounting concern.
+    Must coerce to ``SEVERE_RISK`` (or ``MATERIAL_CONCERNS`` if max
+    red_flag severity is below 0.7)."""
+    from pmacs.agents.forensics import ForensicsRunner
+    from pmacs.schemas.personas import ForensicsOutput
+
+    # Case 1: LOW with low-severity flags → MATERIAL_CONCERNS
+    parsed = {
+        "ticker": "ONDS",
+        "overall_accounting_quality": "LOW — soft accruals but not catastrophic",
+        "red_flag_count": 1,
+        "red_flags": [
+            {
+                "category": "EARNINGS_QUALITY",
+                "severity": 0.30,
+                "description": "Mild concern",
+                "evidence_ids": ["E001"],
+            },
+        ],
+        "p_up": 0.40,
+        "p_flat": 0.35,
+        "p_down": 0.25,
+        "evidence_ids": ["E001"],
+    }
+    runner = ForensicsRunner(cycle_id="test-onds-drift-2d")
+    fixed = runner._pre_validate(dict(parsed))
+    assert fixed["overall_accounting_quality"] == "MATERIAL_CONCERNS"
+    out = ForensicsOutput.model_validate(fixed)
+    assert out.overall_accounting_quality == "MATERIAL_CONCERNS"
+
+    # Case 2: LOW with high-severity flags → SEVERE_RISK
+    parsed["overall_accounting_quality"] = "LOW — severe accrual distortions inflate earnings"
+    parsed["red_flags"][0]["severity"] = 0.85
+    fixed = runner._pre_validate(dict(parsed))
+    assert fixed["overall_accounting_quality"] == "SEVERE_RISK"
+    out = ForensicsOutput.model_validate(fixed)
+    assert out.overall_accounting_quality == "SEVERE_RISK"
+
+
 # ---------------------------------------------------------------------------
 # InsiderActivity: transactions: <int> → []
 # ---------------------------------------------------------------------------

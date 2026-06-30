@@ -155,11 +155,16 @@ class TestAdvocateSanity:
         assert "conceding" in res.reason.lower()
 
     def test_bull_evidence_id_must_resolve(self):
+        # Policy change (ONDS 3-cycle audit Jun 30 round 2): hallucinated
+        # evidence_ids are STRIPPED in-place, not rejected. The advocate's
+        # real signal (target_persona, reasoning, distribution) is preserved.
         out = BullAdvocateOutput.model_validate(BULL_VALID).model_dump()
-        # ev-1 NOT in provided evidence
         res = BullAdvocateSanity().validate(out, _evidence(["other-id"]))
-        assert not res.passed
-        assert "ev-1" in res.reason
+        assert res.passed
+        # ev-1 was hallucinated (not in ["other-id"]) and was substituted
+        assert any(
+            c["from"] == "ev-1" for c in res.normalized_citations
+        )
 
     @pytest.mark.parametrize(
         "target,semantic_phrase",

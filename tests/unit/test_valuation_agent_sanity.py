@@ -82,18 +82,30 @@ class TestValuationAgentSanityEvidenceResolution:
         self.evidence = _evidence("e1")
 
     def test_unknown_scenario_evidence_id_fails(self):
+        # Policy change (ONDS 3-cycle audit Jun 30 round 2): hallucinated
+        # evidence_ids in nested bull/base/bear blocks are STRIPPED, not
+        # rejected. The persona's real signal (exit_multiple, ebitda_margin,
+        # rationale) is preserved.
         out = _output()
         out["bull"]["evidence_ids"] = ["eX"]
         r = self.validator.validate(out, self.evidence)
-        assert not r.passed
-        assert "eX" in (r.reason or "")
+        assert r.passed
+        assert any(
+            c["from"] == "eX" for c in r.normalized_citations
+        )
+        # And the in-place mutation replaces the hallucinated ID with synthetic
+        assert out["bull"]["evidence_ids"] == ["normalized-fallback-001"]
 
     def test_unknown_top_level_evidence_id_fails(self):
+        # Same strip-and-substitute policy applies to the top-level
+        # evidence_ids field. The persona's real signal survives.
         out = _output()
         out["evidence_ids"] = ["e1", "eY"]
         r = self.validator.validate(out, self.evidence)
-        assert not r.passed
-        assert "eY" in (r.reason or "")
+        assert r.passed
+        assert any(
+            c["from"] == "eY" for c in r.normalized_citations
+        )
 
 
 class TestValuationAgentSanityBounds:

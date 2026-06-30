@@ -29,7 +29,13 @@ class CatalystSummarizerSanity(BaseSanityValidator):
                 reason=f"catalyst count {len(catalysts)} exceeds maximum of 10",
             )
 
-        # Validate catalyst evidence_ids reference real packets
+        # Validate catalyst evidence_ids reference real packets. Per the new
+        # base.py policy (ONDS 3-cycle audit Jun 30 round 2), hallucinated
+        # citations are STRIPPED in-place and replaced with a synthetic
+        # ``normalized-fallback-NNN`` ID rather than aborting the persona.
+        # The persona's real signal (catalyst text, expected_date, status,
+        # thesis_impact, probabilities) is preserved so the Crucible and
+        # memo writer see actual research, not safe-default stubs.
         known_ids: set[str] = set()
         for packet in evidence:
             for ev in getattr(packet, "evidence", []):
@@ -37,14 +43,29 @@ class CatalystSummarizerSanity(BaseSanityValidator):
                 if ev_id is not None:
                     known_ids.add(ev_id)
 
+        normalized_citations: list[dict] = []
         for i, cat in enumerate(catalysts):
             cat_evidence_ids = cat.get("evidence_ids", [])
+            if not cat_evidence_ids:
+                continue
+            cleaned: list[str] = []
+            fb_counter = 1
             for eid in cat_evidence_ids:
-                if eid not in known_ids:
-                    return SanityResult(
-                        passed=False,
-                        reason=f"catalyst[{i}] evidence_id '{eid}' not found in packets",
-                    )
+                if eid in known_ids:
+                    cleaned.append(eid)
+                    continue
+                if eid.startswith("normalized-fallback-"):
+                    cleaned.append(eid)
+                    continue
+                synthetic = f"normalized-fallback-{fb_counter:03d}"
+                fb_counter += 1
+                cleaned.append(synthetic)
+                normalized_citations.append({
+                    "field": f"catalysts[{i}].evidence_ids",
+                    "from": eid,
+                    "to": synthetic,
+                })
+            cat["evidence_ids"] = cleaned
 
         # expected_date should be in the future for PENDING catalysts
         now = datetime.now(timezone.utc)
@@ -72,4 +93,9 @@ class CatalystSummarizerSanity(BaseSanityValidator):
                 reason="degenerate distribution: p_up == p_flat == p_down",
             )
 
+        if normalized_citations:
+            return SanityResult(
+                passed=True,
+                normalized_citations=tuple(normalized_citations),
+            )
         return SanityResult(passed=True)

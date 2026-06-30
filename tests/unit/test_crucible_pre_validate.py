@@ -167,3 +167,158 @@ class TestEndToEndValidation:
         # Should not raise; downstream Pydantic will then catch the type mismatch
         result = runner._pre_validate(parsed)
         assert result["attacks"] == 42  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Real ONDS LLM drift shape — Jun 30 2026 SOLO-ONDS aborted 3× because
+# deepseek-v4-flash emits dict-keyed attacks with field aliases
+# (score/attack/rationale) that have NO `attack_type` field. The base
+# validator's min_length=1 on evidence_ids would also reject. These tests
+# pin the exact drift class the production code now normalizes.
+# ---------------------------------------------------------------------------
+
+
+class TestPreValidateOndsDriftShape:
+    """Lock down the drift pattern captured in
+    /private/tmp/claude-501/.../baehv5znc.output from SOLO-ONDS-20260630T09*.
+
+    The LLM emits::
+
+        {
+          "ticker": "ONDS",
+          "attacks": {
+            "valuation_assumptions": {"score": 0.70, "attack": "..."},
+            "mgmt_track_record": {"score": 0.5, "attack": "..."},
+            "A": {"score": 0.25, "rationale": "..."}
+          }
+        }
+
+    After _pre_validate the parsed dict must pass CrucibleOutput
+    model_validate() end-to-end.
+    """
+
+    def test_dict_with_full_axis_name_key_passes_validation(self):
+        runner = CrucibleRunner()
+        raw = {
+            "valuation_assumptions": {
+                "score": 0.70,
+                "attack": (
+                    "At $8.02, ONDS trades at a trailing P/E of ~89x and "
+                    "forward P/E of -160x. The company must sustain "
+                    "hyper-growth to justify the multiple."
+                ),
+            },
+            "mgmt_track_record": {
+                "score": 0.50,
+                "attack": (
+                    "Management has not yet demonstrated the operating "
+                    "leverage needed to convert revenue into cash flow."
+                ),
+            },
+        }
+        parsed = runner._pre_validate(_base_dict_output(raw, attack_count=99))
+        # Reconcile top-level severity to match max attack severity
+        max_sev = max(a["severity"] for a in parsed["attacks"])
+        parsed["severity"] = max_sev
+        # Model validator: thesis_survives must be False when severity > 0.6
+        parsed["thesis_survives"] = max_sev <= 0.6
+        # End-to-end Pydantic validation must now succeed
+        output = CrucibleOutput.model_validate(parsed)
+        assert output.ticker == "MSFT"
+        assert len(output.attacks) == 2
+        assert output.attack_count == 2
+        # attack_type was inferred from the outer key
+        types = {a.attack_type for a in output.attacks}
+        assert "LOGICAL_HOLE" in types
+        assert "COUNTERARGUMENT" in types
+        # evidence_ids was injected (synthetic fallback)
+        for a in output.attacks:
+            assert a.evidence_ids == ["synthetic-normalized-fallback-001"]
+        # description survived the rename (any attack's text is present)
+        joined = " | ".join(a.description for a in output.attacks)
+        assert "hyper-growth" in joined
+        assert "operating leverage" in joined
+
+    def test_dict_with_letter_key_and_rationale_field(self):
+        """The 'A' / 'B' / 'C' / 'D' letter form, with `rationale` alias."""
+        runner = CrucibleRunner()
+        raw = {
+            "A": {
+                "score": 0.25,
+                "rationale": (
+                    "Current EV/S is ~43.7x TTM revenue of $96.6M, which "
+                    "implies massive growth expectations."
+                ),
+            },
+        }
+        parsed = runner._pre_validate(_base_dict_output(raw, attack_count=99))
+        parsed["severity"] = parsed["attacks"][0]["severity"]
+        output = CrucibleOutput.model_validate(parsed)
+        assert len(output.attacks) == 1
+        assert output.attacks[0].attack_type == "LOGICAL_HOLE"
+        assert "EV/S" in output.attacks[0].description
+        assert output.attacks[0].evidence_ids == ["synthetic-normalized-fallback-001"]
+
+    def test_list_form_with_score_and_attack_aliases(self):
+        """When the LLM gets the list shape right but field names wrong."""
+        runner = CrucibleRunner()
+        attacks_list = [
+            {
+                "score": 0.40,
+                "attack": "VALUATION attack",
+            },
+            {
+                "score": 0.55,
+                "rationale": "MOAT attack with rationale field",
+            },
+            {
+                "score": 0.30,
+                "evidence": "MGMT attack with evidence field",
+            },
+            {
+                "score": 0.45,
+                "text": "THREATS attack with text field",
+            },
+        ]
+        parsed = runner._pre_validate(_base_dict_output(attacks_list, attack_count=99))
+        max_sev = max(a["severity"] for a in parsed["attacks"])
+        parsed["severity"] = max_sev
+        output = CrucibleOutput.model_validate(parsed)
+        assert len(output.attacks) == 4
+        # All four alias field names (attack/rationale/evidence/text) should
+        # have been renamed to description.
+        for a in output.attacks:
+            assert a.description  # non-empty
+        # No attack_type was provided and no axis hint on the items —
+        # they fall back to BASE_RATE_NEGLECT.
+        for a in output.attacks:
+            assert a.attack_type == "BASE_RATE_NEGLECT"
+
+    def test_inner_axis_hint_infers_attack_type(self):
+        """Inner 'axis' / 'name' / 'category' hint picks attack_type."""
+        runner = CrucibleRunner()
+        attacks_list = [
+            {"score": 0.4, "attack": "...", "axis": "MOAT_DURABILITY"},
+            {"score": 0.5, "attack": "...", "name": "Competitive Threats"},
+        ]
+        parsed = runner._pre_validate(_base_dict_output(attacks_list, attack_count=2))
+        parsed["severity"] = 0.5
+        output = CrucibleOutput.model_validate(parsed)
+        types = [a.attack_type for a in output.attacks]
+        assert "CITATION_GAP" in types
+        assert "OVERLOOKED_RISK" in types
+
+    def test_existing_evidence_ids_preserved(self):
+        """If the LLM does emit evidence_ids, do NOT overwrite them."""
+        runner = CrucibleRunner()
+        raw = {
+            "valuation_assumptions": {
+                "score": 0.4,
+                "attack": "...",
+                "evidence_ids": ["edgar-2024-10k-7"],
+            },
+        }
+        parsed = runner._pre_validate(_base_dict_output(raw, attack_count=99))
+        parsed["severity"] = 0.4
+        output = CrucibleOutput.model_validate(parsed)
+        assert output.attacks[0].evidence_ids == ["edgar-2024-10k-7"]

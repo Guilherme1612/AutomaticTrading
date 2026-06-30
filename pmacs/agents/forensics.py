@@ -177,16 +177,37 @@ class ForensicsRunner(PersonaRunner):
         # enum literal). We match the prefix (case-insensitive) and strip
         # the trailing reasoning text so Pydantic gets a clean enum value.
         _QUALITY_ALIASES = {
+            # Negative (escalate) terms
             "POOR": "MATERIAL_CONCERNS",  # overridden below if severity warrants
             "BAD": "MATERIAL_CONCERNS",
             "TERRIBLE": "SEVERE_RISK",
             "CRITICAL": "SEVERE_RISK",
-            "GOOD": "MINOR_CONCERNS",
-            "FAIR": "MINOR_CONCERNS",
-            "EXCELLENT": "CLEAN",
-            "OK": "MINOR_CONCERNS",
-            "MIXED": "MINOR_CONCERNS",
             "NEGATIVE": "MATERIAL_CONCERNS",
+            "WEAK": "MATERIAL_CONCERNS",
+            "DISTRESSED": "SEVERE_RISK",
+            "FRAUDULENT": "SEVERE_RISK",
+            "RED": "MATERIAL_CONCERNS",
+            # Quality-direction terms (low = bad accounting)
+            "LOW": "MATERIAL_CONCERNS",  # overridden to SEVERE_RISK if reasoning has "severe"
+            "MODERATE": "MINOR_CONCERNS",
+            "MEDIUM": "MINOR_CONCERNS",
+            "AVERAGE": "MINOR_CONCERNS",
+            "FAIR": "MINOR_CONCERNS",
+            "OK": "MINOR_CONCERNS",
+            "ACCEPTABLE": "MINOR_CONCERNS",
+            "ADEQUATE": "MINOR_CONCERNS",
+            "MIXED": "MINOR_CONCERNS",
+            # Positive terms
+            "GOOD": "MINOR_CONCERNS",
+            "GREAT": "CLEAN",
+            "EXCELLENT": "CLEAN",
+            "STRONG": "CLEAN",
+            "HIGH": "CLEAN",
+            "ROBUST": "CLEAN",
+            "SOUND": "CLEAN",
+            "HEALTHY": "CLEAN",
+            "PRISTINE": "CLEAN",
+            "GOLD": "CLEAN",
         }
         quality = parsed.get("overall_accounting_quality")
         if isinstance(quality, str):
@@ -201,9 +222,15 @@ class ForensicsRunner(PersonaRunner):
                 # Normalize via alias if not already a canonical enum value
                 if quality_head in _QUALITY_ALIASES:
                     new_quality = _QUALITY_ALIASES[quality_head]
-                    # If the LLM says "POOR" but red_flags all have severity >= 0.7,
+                    # If the LLM emits a strongly-negative descriptor
+                    # (POOR/BAD/TERRIBLE/CRITICAL/LOW/WEAK/DISTRESSED/
+                    # FRAUDULENT/RED) but red_flags all have severity >= 0.7,
                     # escalate to SEVERE_RISK so the verdict is honest.
-                    if quality_head in ("POOR", "BAD", "TERRIBLE", "CRITICAL") and red_flags:
+                    if quality_head in (
+                        "POOR", "BAD", "TERRIBLE", "CRITICAL",
+                        "LOW", "WEAK", "DISTRESSED", "FRAUDULENT",
+                        "RED", "NEGATIVE",
+                    ) and red_flags:
                         max_sev = max(
                             (rf.get("severity", 0.0) for rf in red_flags
                              if isinstance(rf, dict)),

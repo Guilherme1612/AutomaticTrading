@@ -74,9 +74,14 @@ class TestMacroRegimeSanity:
         assert result.passed
 
     def test_invalid_evidence_id_fails(self):
+        # Policy change (ONDS 3-cycle audit Jun 30 round 2): hallucinated
+        # evidence_ids are STRIPPED in-place and replaced with synthetic
+        # normalized-fallback-NNN, so the persona's real signal survives.
+        # The audit chain records the swap.
         result = self.validator.validate(self._make_output(evidence_ids=["ev-999"]), self.evidence)
-        assert not result.passed
-        assert "ev-999" in result.reason
+        assert result.passed
+        assert len(result.normalized_citations) == 1
+        assert result.normalized_citations[0]["from"] == "ev-999"
 
     def test_empty_reasoning_fails(self):
         result = self.validator.validate(self._make_output(reasoning=""), self.evidence)
@@ -126,17 +131,27 @@ class TestCatalystSummarizerSanity:
         assert "degenerate" in result.reason
 
     def test_invalid_evidence_id_fails(self):
+        # Policy change: hallucinated evidence_ids are STRIPPED, not rejected.
         output = self._make_output(evidence_ids=["ev-999"])
         result = self.validator.validate(output, self.evidence)
-        assert not result.passed
-        assert "ev-999" in result.reason
+        assert result.passed
+        assert any(
+            c["from"] == "ev-999" for c in result.normalized_citations
+        )
 
     def test_catalyst_invalid_evidence_id_fails(self):
+        # Policy change: hallucinated evidence_ids are STRIPPED, not rejected.
+        # The persona's real signal (catalyst text, expected_date, etc.) is
+        # preserved and the audit chain records the swap.
         output = self._make_output()
         output["catalysts"][0]["evidence_ids"] = ["ev-999"]
         result = self.validator.validate(output, self.evidence)
-        assert not result.passed
-        assert "ev-999" in result.reason
+        assert result.passed
+        assert any(
+            c["from"] == "ev-999" for c in result.normalized_citations
+        )
+        # And the in-place mutation replaces the hallucinated ID with synthetic
+        assert output["catalysts"][0]["evidence_ids"] == ["normalized-fallback-001"]
 
     def test_catalyst_count_over_10_fails(self):
         catalysts = [
@@ -215,10 +230,13 @@ class TestMoatAnalystSanity:
         assert "degenerate" in result.reason
 
     def test_invalid_evidence_id_fails(self):
+        # Policy change: hallucinated evidence_ids are STRIPPED, not rejected.
         output = self._make_output(evidence_ids=["ev-999"])
         result = self.validator.validate(output, self.evidence)
-        assert not result.passed
-        assert "ev-999" in result.reason
+        assert result.passed
+        assert any(
+            c["from"] == "ev-999" for c in result.normalized_citations
+        )
 
     def test_duplicate_moat_types_fails(self):
         output = self._make_output(

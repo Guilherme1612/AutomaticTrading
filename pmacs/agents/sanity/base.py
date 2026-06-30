@@ -16,6 +16,13 @@ class SanityResult:
     """Result of sanity validation."""
     passed: bool
     reason: str | None = None
+    # Populated by the evidence_ids normalization step. Each entry is
+    # ``{"field": "<path>", "from": "<hallucinated_id>", "to": "normalized-fallback-NNN"}``.
+    # Empty when no hallucinated IDs were detected. The orchestrator surfaces
+    # these in the cycle's audit chain so the operator can see exactly which
+    # LLM-hallucinated citations were silently substituted (they preserve
+    # the persona's real signal but the citation was not real).
+    normalized_citations: tuple[dict, ...] = ()
 
 
 PROB_SUM_TOLERANCE = 0.05
@@ -67,14 +74,23 @@ class BaseSanityValidator:
                     reason="analysis must include at least one specific number from evidence",
                 )
 
-        # Common check: evidence_ids reference real packets
-        # Synthetic IDs (e.g. `normalized-fallback-001`) injected by the
-        # `_pre_validate._ensure_min_evidence_ids` padder are ALWAYS accepted —
-        # they are the system's own bookkeeping, not LLM-hallucinated citations.
-        # Without this exemption, base.py rejects every persona whose LLM
-        # output was padded with a synthetic ID, aborting cycles that
-        # otherwise have valid research (see ONDS 3-cycle audit Jun 30).
+        # Common check: evidence_ids reference real packets.
+        # Hallucinated IDs (e.g. ``finnhub_ONDS_earnings_history`` for a packet
+        # the system never fetched) are STRIPPED and replaced with a synthetic
+        # ``normalized-fallback-NNN`` ID. Without this, every cycle whose LLM
+        # hallucinates a single citation aborts the persona, falls back to the
+        # safe-default simulation output, and the Crucible sees zero signal
+        # (ONDS 3-cycle audit Jun 30 produced 239-char Crucible-abort stubs
+        # for exactly this reason). The persona's *real* signal (probabilities,
+        # reasoning, key_signal) is preserved; only the citation is normalized.
+        # Synthetic ``normalized-fallback-XXX`` IDs are accepted as-is (they are
+        # the system's own bookkeeping, not LLM-hallucinated).
+        #
+        # Returns: tuple of (updated_output, normalized_citations).
+        # The caller (validate) propagates normalized_citations into the
+        # returned SanityResult so the orchestrator can audit-log them.
         evidence_ids = output.get("evidence_ids", [])
+        normalized_citations: list[dict] = []
         if evidence_ids:
             known_ids: set[str] = set()
             for packet in evidence:
@@ -83,15 +99,32 @@ class BaseSanityValidator:
                     if ev_id is not None:
                         known_ids.add(ev_id)
 
+            cleaned_ids: list[str] = []
+            fallback_counter = 1
             for eid in evidence_ids:
                 if eid in known_ids:
+                    cleaned_ids.append(eid)
                     continue
                 if eid.startswith("normalized-fallback-"):
+                    cleaned_ids.append(eid)
                     continue
-                return SanityResult(
-                    passed=False,
-                    reason=f"evidence_id '{eid}' not found in provided packets",
-                )
+                # Hallucinated ID — substitute a synthetic one. Audit-log
+                # the swap so the operator can see which citations were
+                # silently dropped.
+                synthetic = f"normalized-fallback-{fallback_counter:03d}"
+                fallback_counter += 1
+                cleaned_ids.append(synthetic)
+                normalized_citations.append({
+                    "field": "evidence_ids",
+                    "from": eid,
+                    "to": synthetic,
+                })
+            output["evidence_ids"] = cleaned_ids
+            # Mutate the caller's dict in place too, so the parsed output the
+            # orchestrator stores in PersonaOutput.raw_output carries the
+            # normalized citations (not the hallucinated ones).
+            if isinstance(output, dict) and "evidence_ids" in output:
+                output["evidence_ids"] = cleaned_ids
 
         # Common check: probability sum ≈ 1.0 (defense-in-depth)
         p_keys = ("p_up", "p_flat", "p_down")
@@ -104,7 +137,14 @@ class BaseSanityValidator:
                 )
 
         # Persona-specific checks
-        return self._persona_checks(output, evidence)
+        persona_result = self._persona_checks(output, evidence)
+        if normalized_citations:
+            return SanityResult(
+                passed=persona_result.passed,
+                reason=persona_result.reason,
+                normalized_citations=tuple(normalized_citations),
+            )
+        return persona_result
 
     def _persona_checks(
         self, output: dict[str, Any], evidence: list[Any]

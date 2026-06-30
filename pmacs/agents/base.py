@@ -267,6 +267,25 @@ class PersonaRunner(ABC):
                 continue
 
             # All three layers passed — build PersonaOutput.
+            # Sanity may have stripped hallucinated evidence_ids from `parsed`
+            # (see pmacs/agents/sanity/base.py). The audit chain records the
+            # swap so the operator can see exactly which LLM-hallucinated
+            # citations were silently substituted.
+            if sanity_result.normalized_citations:
+                log_debug(
+                    "PERSONA_CITATIONS_NORMALIZED",
+                    payload={
+                        "persona": self.persona_name,
+                        "ticker": self._extract_ticker(evidence),
+                        "swaps": list(sanity_result.normalized_citations),
+                    },
+                    level="INFO",
+                    cycle_id=self.cycle_id,
+                    msg=(
+                        f"{self.persona_name}: stripped {len(sanity_result.normalized_citations)} "
+                        f"hallucinated evidence_id(s) (substituted with normalized-fallback-*)"
+                    ),
+                )
             # Store the NORMALIZED JSON (post _pre_validate + model_dump) in
             # raw_output so downstream re-parsers (e.g. the orchestrator's
             # ValuationAgentOutput.model_validate(json.loads(raw_output))) see

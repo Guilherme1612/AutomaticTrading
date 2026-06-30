@@ -4580,6 +4580,27 @@ class CycleOrchestrator:
         if anomaly == "INSUFFICIENT_DATA" or signal == "INSUFFICIENT_DATA":
             confidence = 0.0
 
+        # Each persona uses a DIFFERENT field name for its reasoning text.
+        # Map persona → reasoning field; this is what flows into the memo's
+        # agent analysis block and ultimately `/memo/{ticker}`'s section 14
+        # (Agent Insights) — without this, every persona but forensics +
+        # catalyst_summarizer shows empty analysis.
+        _REASONING_FIELD_BY_PERSONA = {
+            "moat_analyst": "competitive_entry_reasoning",
+            "growth_hunter": "growth_durability_reasoning",
+            "macro_regime": "regime_reasoning",
+            "short_interest": "anomaly_reasoning",
+            "insider_activity": "signal_reasoning",
+            "bull_advocate": "reasoning",
+            "bear_advocate": "reasoning",
+            "crucible": "summary",
+            "catalyst_summarizer": "net_catalyst_outlook",
+            "forensics": "overall_accounting_quality",
+            "valuation_agent": "summary",
+        }
+        reasoning_field = _REASONING_FIELD_BY_PERSONA.get(persona_name_str, "reasoning")
+        reasoning_text = data.get(reasoning_field, "") or data.get("reasoning", "") or ""
+
         try:
             return DirectionalProbability(
                 persona=persona_enum,
@@ -4588,6 +4609,7 @@ class CycleOrchestrator:
                 p_flat=float(p_flat),
                 p_down=float(p_down),
                 confidence=float(confidence),
+                reasoning=str(reasoning_text),
                 evidence_ids=data.get("evidence_ids", []),
                 cycle_id=cycle_id,
             )

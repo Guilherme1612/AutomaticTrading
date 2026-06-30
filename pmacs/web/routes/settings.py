@@ -186,6 +186,7 @@ async def settings_page(request: Request):
                 "brokers": brokers,
                 "operator_cfg": operator_cfg,
                 "personas": personas,
+                "settings_last_saved": "",
             },
         )
     except Exception as exc:

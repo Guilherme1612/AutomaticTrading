@@ -17,6 +17,12 @@ router = APIRouter()
 class KillSwitchRequest(BaseModel):
     """Request body for kill switch actions."""
     reason: str = ""
+    # When True, this engagement is a §20.12 wiring-test event fired from
+    # /settings — surfaced on /cortex for visibility but MUST NOT fire the
+    # critical alert modal or "KILL SWITCH ENGAGED" toast (operator UX
+    # bug Jun 30: the test button looked indistinguishable from a real
+    # auto-trigger). See settings.html forceKillSwitchTest().
+    is_test: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +172,10 @@ async def kill_switch_engage(req: KillSwitchRequest):
     """Engage the kill switch (Source.md §18.5).
 
     Engagement does NOT require operator confirmation — any trigger can engage (safer to over-trigger).
+
+    The ``is_test`` flag marks a §20.12 wiring-test engagement so the
+    frontend can suppress the critical-alert modal (the test button looked
+    indistinguishable from a real auto-trigger).
     """
     cfg = get_config()
     try:
@@ -175,8 +185,9 @@ async def kill_switch_engage(req: KillSwitchRequest):
             trigger="MANUAL",
             db_path=cfg.sqlite_path,
             audit_path=cfg.audit_path,
+            is_test=req.is_test,
         )
-        return JSONResponse({"ok": True, "state": "ENGAGED"})
+        return JSONResponse({"ok": True, "state": "ENGAGED", "is_test": req.is_test})
     except Exception as exc:
         import logging
         logging.getLogger("pmacs.web").error("Kill switch engage failed: %s", exc, exc_info=True)
@@ -188,6 +199,8 @@ async def kill_switch_disengage(req: KillSwitchRequest):
     """Disengage the kill switch (Source.md §18.5).
 
     Only the operator can disengage — requires an explicit operator action.
+    The ``is_test`` flag propagates so the frontend suppresses alerts for
+    §20.12 wiring tests.
     """
     cfg = get_config()
     try:
@@ -196,9 +209,10 @@ async def kill_switch_disengage(req: KillSwitchRequest):
             reason=req.reason or "Manual disengagement via Cortex page",
             db_path=cfg.sqlite_path,
             audit_path=cfg.audit_path,
+            is_test=req.is_test,
         )
         if success:
-            return JSONResponse({"ok": True, "state": "ARMED"})
+            return JSONResponse({"ok": True, "state": "ARMED", "is_test": req.is_test})
         return JSONResponse(
             {"ok": False, "error": "Disengage failed"},
             status_code=500,

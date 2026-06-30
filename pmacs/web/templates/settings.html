@@ -1365,11 +1365,15 @@ function forceKillSwitchTest() {
         actionId: 'cortex.kill_switch_test',
         confirmSymbol: 'TEST',
         description: 'Force a synthetic kill-switch test event',
-        danger: '§20.12 — fires a synthetic kill-switch event to verify wiring. Type TEST to confirm. (Non-Negotiable #5: this does not lift an engaged switch.)',
+        danger: '§20.12 — fires a synthetic kill-switch test event to verify wiring. Type TEST to confirm. (Non-Negotiable #5: this does not lift an engaged switch.)',
         callbackUrl: '/api/cortex/kill-switch/engage',
-        extraPayload: {test: true, reason: 'operator-initiated wiring test'},
+        // `is_test: true` propagates through engage() → SSE so the
+        // frontend suppresses the critical-alert modal that a real
+        // auto-trigger would fire. Without this, the §20.12 test
+        // button looked indistinguishable from a genuine engagement.
+        extraPayload: {is_test: true, reason: 'operator-initiated wiring test'},
         onSuccess: function() {
-            showToast('Kill-switch test fired — check Cortex', 'success');
+            showToast('Kill-switch test fired (TEST) — visible on Cortex, no alert', 'success');
         }
     });
 }

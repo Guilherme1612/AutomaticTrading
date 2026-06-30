@@ -104,6 +104,7 @@ def engage(
     db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     cycle_id: str = "",
+    is_test: bool = False,
 ) -> None:
     """Engage the kill switch. Does NOT require operator confirmation.
 
@@ -116,6 +117,10 @@ def engage(
         db_path: Path to SQLite database.
         audit_path: Optional path to audit log file.
         cycle_id: Optional cycle ID for audit traceability.
+        is_test: True for §20.12 wiring-test engagement (Settings UI). The
+            SSE event carries this flag so the frontend can suppress the
+            critical-alert modal — the test button was indistinguishable
+            from a real auto-trigger before this was added (Jun 30).
     """
     db_path = _resolve_db(db_path)
     conn = _get_db(db_path)
@@ -125,7 +130,7 @@ def engage(
         if current and current[0] == KillSwitchState.ENGAGED.value:
             log_debug(
                 "KILL_SWITCH_ENGAGE_ALREADY_ENGAGED",
-                payload={"trigger": trigger, "reason": reason},
+                payload={"trigger": trigger, "reason": reason, "is_test": is_test},
                 level="INFO",
                 cycle_id=cycle_id or None,
                 msg=f"Kill switch already ENGAGED, ignoring trigger={trigger}",
@@ -142,16 +147,26 @@ def engage(
 
         log_debug(
             "KILL_SWITCH_ENGAGED",
-            payload={"trigger": trigger, "reason": reason, "engaged_at": now},
+            payload={
+                "trigger": trigger,
+                "reason": reason,
+                "engaged_at": now,
+                "is_test": is_test,
+            },
             level="WARN",
             error_code="KILL_SWITCH_ENGAGED",
             cycle_id=cycle_id or None,
-            msg=f"KILL SWITCH ENGAGED: trigger={trigger}, reason={reason}",
+            msg=f"KILL SWITCH ENGAGED: trigger={trigger}, reason={reason}, is_test={is_test}",
         )
 
-        # Publish system SSE event (no-op if nervous not running)
+        # Publish system SSE event (no-op if nervous not running).
+        # The `is_test` flag is carried on the event so the frontend can
+        # suppress the critical-alert modal for §20.12 wiring tests.
         publish_system_event("system.kill_switch_engaged", {
-            "trigger": trigger, "reason": reason, "engaged_at": now,
+            "trigger": trigger,
+            "reason": reason,
+            "engaged_at": now,
+            "is_test": is_test,
         })
 
         # Write to audit log if path provided
@@ -162,7 +177,12 @@ def engage(
                 writer = AuditWriter(audit_path)
                 writer.append(
                     "KILL_SWITCH_ENGAGED",
-                    {"trigger": trigger, "reason": reason, "engaged_at": now},
+                    {
+                        "trigger": trigger,
+                        "reason": reason,
+                        "engaged_at": now,
+                        "is_test": is_test,
+                    },
                     cycle_id=cycle_id,
                 )
                 writer.close()
@@ -214,6 +234,7 @@ def disengage(
     db_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     cycle_id: str = "",
+    is_test: bool = False,
 ) -> bool:
     """Disengage the kill switch. Requires an explicit operator action.
 
@@ -225,6 +246,8 @@ def disengage(
         db_path: Path to SQLite database.
         audit_path: Optional path to audit log file.
         cycle_id: Optional cycle ID for audit traceability.
+        is_test: True when disengaging a §20.12 wiring-test engagement.
+            Carried on the SSE event so the frontend suppresses the alert.
 
     Returns:
         True if disengaged successfully.
@@ -282,15 +305,16 @@ def disengage(
 
         log_debug(
             "KILL_SWITCH_DISENGAGED",
-            payload={"reason": reason, "disengaged_at": now},
+            payload={"reason": reason, "disengaged_at": now, "is_test": is_test},
             level="INFO",
             cycle_id=cycle_id or None,
-            msg=f"Kill switch DISENGAGED: reason={reason}",
+            msg=f"Kill switch DISENGAGED: reason={reason}, is_test={is_test}",
         )
 
-        # Publish system SSE event (no-op if nervous not running)
+        # Publish system SSE event (no-op if nervous not running).
+        # Carry `is_test` so the frontend suppresses the alert for §20.12 wiring tests.
         publish_system_event("system.kill_switch_disengaged", {
-            "reason": reason, "disengaged_at": now,
+            "reason": reason, "disengaged_at": now, "is_test": is_test,
         })
 
         if audit_path is not None:
@@ -300,7 +324,11 @@ def disengage(
                 writer = AuditWriter(audit_path)
                 writer.append(
                     "KILL_SWITCH_DISENGAGED",
-                    {"reason": reason, "disengaged_at": now},
+                    {
+                        "reason": reason,
+                        "disengaged_at": now,
+                        "is_test": is_test,
+                    },
                     cycle_id=cycle_id,
                 )
                 writer.close()

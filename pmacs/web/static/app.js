@@ -1406,13 +1406,22 @@ onSSE("system", function (data) {
     if (data.event_type) {
         handleNotification(data.event_type, data);
     }
-    // Kill switch engagement
+    // Kill switch engagement — suppress the critical-alert modal for
+    // §20.12 wiring-test engagements (is_test=true). The /cortex page
+    // still updates the state pill so the operator can verify wiring;
+    // only the modal/toast/alert is suppressed. (Jun 30: the test
+    // button was indistinguishable from a real auto-trigger before
+    // this guard was added.)
     if (data.event_type === "system.kill_switch_engaged" || data.engaged) {
-        handleNotification("kill_switch_engaged", data);
+        if (!data.is_test) {
+            handleNotification("kill_switch_engaged", data);
+        }
     }
-    // Kill switch disengaged
+    // Kill switch disengaged — same test-mode suppression
     if (data.event_type === "system.kill_switch_disengaged") {
-        handleNotification("kill_switch_disengaged", data);
+        if (!data.is_test) {
+            handleNotification("kill_switch_disengaged", data);
+        }
     }
     // Audit-chain failure — health card must reflect it immediately.
     if (data.event_type === "system.audit_chain_failure" || data.event === "audit_chain_failure") {

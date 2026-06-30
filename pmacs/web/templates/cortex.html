@@ -11,13 +11,16 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-<div class="flex items-center gap-3 mb-8 reveal">
+<!-- Page hero (violet tint — the brain) -->
+<section class="page-hero page-hero--violet reveal" data-stagger>
+    <div class="page-hero__inner">
+<div class="flex items-center gap-3 mb-5">
     <span class="w-2.5 h-2.5 rounded-full bg-accent anim-breathing"></span>
     <h2 class="text-head font-semibold text-text-primary">System Health</h2>
 </div>
 
 <!-- Health Summary Strip — 6 indicator dots, one per panel -->
-<div class="flex flex-wrap items-center gap-3 sm:gap-4 mb-8 reveal" data-stagger role="status" aria-label="System health summary">
+<div class="flex flex-wrap items-center gap-3 sm:gap-4 mb-2" role="status" aria-label="System health summary">
     {% set ns = namespace(all_healthy=true) %}
     <!-- 1. Audit chain -->
     {% if audit_chain.status != 'OK' %}{% set ns.all_healthy = false %}{% endif %}
@@ -56,8 +59,14 @@
     </div>
 </div>
 
-<!-- 2x3 grid (responsive: 1 col mobile, 2 cols tablet, 3 cols desktop) -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+<!-- Panel grid (responsive: 1 col mobile, 2 cols tablet, 3 cols desktop) -->
+<div class="page-section-head mt-8 mb-4">
+    <span class="page-section-num page-section-num--violet">01</span>
+    <span class="page-section-title">Panels</span>
+    <span class="page-section-line"></span>
+    <span class="page-section-tag">2x3 layout</span>
+</div>
+<div class="panel-grid-2x3 mt-4">
 
     <!-- (1,1) Audit Chain panel -->
     <div class="card card-elevated {{ 'card-accent-green' if audit_chain.status == 'OK' else 'card-accent-red' }} reveal" data-stagger>
@@ -341,6 +350,8 @@
     </div>
 
 </div>
+    </div>
+</section>
 
 <!-- Stagger entrance initialization -->
 <script>

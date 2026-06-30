@@ -20,6 +20,10 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _REGISTRY_PATH = _Path(__file__).resolve().parents[3] / "config" / "model_registry.json"
+# Operator runtime overrides (gitignored). Mirrors _REGISTRY_PATH for the
+# operator's local active_backend choice that survives VCS operations.
+# See tests/unit/test_runtime_state_persistence.py for the contract.
+_RUNTIME_STATE_PATH = _Path(__file__).resolve().parents[3] / "config" / "runtime_state.json"
 
 
 def _load_registry() -> dict:
@@ -39,6 +43,35 @@ def _save_registry(registry: dict) -> None:
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     tmp_path.replace(_REGISTRY_PATH)
+
+
+def _save_runtime_state(payload: dict) -> None:
+    """Atomic merge-write of config/runtime_state.json.
+
+    Merges payload over the existing file so unrelated keys (e.g.
+    notification_level) survive. Mirrors _save_registry's atomic write
+    pattern (fcntl flock + tmp+rename). Used by /api/settings/inference/
+    provider to persist the operator's active_backend override; load_config()
+    in pmacs/config.py re-applies it on every cycle.
+
+    spec_ref: §16 (operator-local config layer)
+    """
+    existing: dict = {}
+    if _RUNTIME_STATE_PATH.exists():
+        try:
+            existing = _json.loads(_RUNTIME_STATE_PATH.read_text())
+        except _json.JSONDecodeError:
+            existing = {}
+    merged = {**existing, **payload}
+    tmp_path = _RUNTIME_STATE_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            _json.dump(merged, f, indent=2)
+            f.flush()
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    tmp_path.replace(_RUNTIME_STATE_PATH)
 
 
 def _get_inference_state() -> dict:
@@ -316,6 +349,10 @@ async def set_inference_provider(req: InferenceProviderRequest):
 
     registry["active"] = req.provider
     _save_registry(registry)
+    # Dual-write to runtime_state.json (gitignored) so the operator's
+    # choice survives `git pull`/checkout/fresh-clone. pmacs.config.load_config()
+    # applies this override AFTER parsing model_registry.json on every cycle.
+    _save_runtime_state({"active_backend": req.provider})
     return JSONResponse({"ok": True, "active": req.provider})
 
 

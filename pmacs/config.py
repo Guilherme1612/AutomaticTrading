@@ -30,6 +30,13 @@ def _project_root() -> Path:
 PROJECT_ROOT = _project_root()
 CONFIG_DIR = PROJECT_ROOT / "config"
 
+# Operator runtime overrides (gitignored config/runtime_state.json). Lives next
+# to model_registry.json so the loader finds it cheaply, but gitignored so
+# `git pull` / `git checkout` / fresh clones cannot silently undo the
+# operator's last explicit choice. See tests/unit/test_runtime_state_persistence
+# for the contract. Spec: §16 (operator-local config layer).
+RUNTIME_STATE_PATH = CONFIG_DIR / "runtime_state.json"
+
 
 def data_dir() -> Path:
     """Return the PMACS data directory.
@@ -239,6 +246,26 @@ def _parse_mutation(data: dict) -> MutationConfig:
     )
 
 
+def _load_runtime_state() -> dict:
+    """Read config/runtime_state.json (gitignored operator-local override).
+
+    Returns {} on missing file, corrupt JSON, or schema mismatch.
+    Never raises — load_config() must work even if the file is garbage,
+    because the override is advisory; the registry is the source of truth.
+
+    spec_ref: §16 (operator-local config layer)
+    """
+    if not RUNTIME_STATE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(RUNTIME_STATE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
 def _parse_model_registry(data: dict) -> ModelRegistry:
     backends = {}
     for name, bd in data.get("backends", {}).items():
@@ -275,6 +302,14 @@ def load_config() -> PMACSConfig:
     """Load all PMACS configuration files.
 
     Returns a frozen PMACSConfig dataclass with typed access to all settings.
+
+    Runtime override: if config/runtime_state.json (gitignored) carries an
+    ``active_backend`` key, it overrides model_registry.json's ``active``
+    AFTER parsing. Validation: the override must be a non-empty string AND
+    a key of ``backends`` (typos fall through silently — see
+    tests/unit/test_runtime_state_persistence.py). This way VCS operations
+    (``git pull``, ``git checkout``, fresh clone) cannot silently undo the
+    operator's last explicit choice.
     """
     resources_data = _load_toml("resources.toml")
     risk_data = _load_toml("risk.toml")
@@ -283,6 +318,16 @@ def load_config() -> PMACSConfig:
     model_registry_data = _load_json("model_registry.json")
     source_criticality_data = _load_toml("source_criticality.toml")
     model_hashes_data = _load_toml("model_hashes.toml")
+
+    # Apply runtime_state.json override (advisory; never raises).
+    runtime_state = _load_runtime_state()
+    override_backend = runtime_state.get("active_backend")
+    if (
+        isinstance(override_backend, str)
+        and override_backend
+        and override_backend in model_registry_data.get("backends", {})
+    ):
+        model_registry_data = {**model_registry_data, "active": override_backend}
 
     return PMACSConfig(
         resources=_parse_resources(resources_data),

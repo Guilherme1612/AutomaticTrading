@@ -11,8 +11,9 @@
 {% set error_spec_ref = error.get("spec_ref", "") %}
 {% include "components/error_state.html" %}
 {% else %}
-<!-- Filter bar -->
-<div class="card card-elevated p-4 mb-8 reveal">
+<!-- Page hero (slate tint — neutral workshop) -->
+<section class="page-hero page-hero--slate reveal" data-stagger>
+    <div class="page-hero__inner">
     <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
             <div class="flex items-center gap-2">
@@ -29,7 +30,7 @@
                 {% endfor %}
             </div>
         </div>
-        <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div class="page-hero__cta flex flex-wrap items-center gap-2 sm:gap-3">
             <input type="text" placeholder="Search events..."
                    data-page-search
                    class="px-3 py-1.5 text-sm bg-surface-elevated/70 border border-border rounded-xl text-text-primary placeholder:text-text-muted/80 focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent transition-colors"
@@ -41,6 +42,15 @@
             </button>
         </div>
     </div>
+    </div>
+</section>
+
+<!-- Section head for stream -->
+<div class="page-section-head mt-6 mb-3">
+    <span class="page-section-num">01</span>
+    <span class="page-section-title">Live Events</span>
+    <span class="page-section-line"></span>
+    <span class="page-section-tag">tail -f</span>
 </div>
 
 <!-- Event stream -->
@@ -49,7 +59,7 @@
     {% if events %}
     <div class="divide-y divide-border-subtle">
         {% for event in events %}
-        <div class="px-4 py-3 hover:bg-surface-sunken/50 cursor-pointer transition-colors
+        <div class="event-row-modern hover:bg-surface-sunken/50 cursor-pointer transition-colors
                     {{ 'border-l-[3px] border-l-red-500' if event.level == 'ERROR' else '' }}
                     {{ 'border-l-[3px] border-l-amber-500' if event.level == 'WARN' else '' }}"
              data-event-level="{{ event.level }}" data-stagger onclick="toggleEventDetail(this)">
@@ -126,7 +136,7 @@
     </div>
     <div class="divide-y divide-border-subtle">
         {% for event in recent_events %}
-        <div class="px-4 py-3 hover:bg-surface-sunken/50 cursor-pointer transition-colors opacity-70
+        <div class="event-row-modern opacity-70 hover:bg-surface-sunken/50 cursor-pointer transition-colors
                     {{ 'border-l-[3px] border-l-red-500' if event.level == 'ERROR' else '' }}
                     {{ 'border-l-[3px] border-l-amber-500' if event.level == 'WARN' else '' }}"
              data-event-level="{{ event.level }}" data-historical data-stagger onclick="toggleEventDetail(this)">

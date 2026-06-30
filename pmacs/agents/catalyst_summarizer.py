@@ -54,6 +54,11 @@ class CatalystSummarizerRunner(PersonaRunner):
           ``_normalize_literal_enums`` will fall back to the first member.
         - ``catalysts[i].description`` may exceed max_length=400 — truncated.
         - Top-level ``evidence_ids`` may be empty — padded.
+        - **Probabilities sum to ~1.10** (ONDS 3-cycle audit Jun 29): the
+          LLM normalizes across `catalysts[i]` and ends up with the
+          top-level (p_up, p_flat, p_down) summing to 1.05–1.10. The
+          schema rejects this with `abs(total - 1.0) > 0.10`. Renormalize
+          before validation so we clamp instead of reject.
         """
         all_fixes: list[dict[str, Any]] = []
         model_cls = self.get_pydantic_model()
@@ -82,6 +87,33 @@ class CatalystSummarizerRunner(PersonaRunner):
         # 4) Pad empty evidence_ids at top + nested level
         parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
         all_fixes.extend(fixes)
+
+        # 5) Renormalize (p_up, p_flat, p_down) if they sum to 1.0–1.10
+        # (ONDS 3-cycle audit Jun 29: catalyst_summarizer aborted at the
+        # third attempt with "probabilities sum to 1.1"). The schema's
+        # `_check_prob_sum` would otherwise raise ValidationError.
+        p_up = parsed.get("p_up")
+        p_flat = parsed.get("p_flat")
+        p_down = parsed.get("p_down")
+        if all(isinstance(v, (int, float)) for v in (p_up, p_flat, p_down)):
+            total = float(p_up) + float(p_flat) + float(p_down)
+            if 1.0 < total <= 1.10:
+                # Renormalize to exactly 1.0
+                parsed["p_up"] = round(p_up / total, 2)
+                parsed["p_flat"] = round(p_flat / total, 2)
+                parsed["p_down"] = round(
+                    1.0 - parsed["p_up"] - parsed["p_flat"], 2,
+                )
+                all_fixes.append({
+                    "field": "(p_up, p_flat, p_down)",
+                    "type": "renormalized_sum_above_one",
+                    "before": [p_up, p_flat, p_down],
+                    "after": [parsed["p_up"], parsed["p_flat"], parsed["p_down"]],
+                    "reason": (
+                        f"probs summed to {total:.3f} (1.0 < total <= 1.10); "
+                        f"renormalized to 1.0"
+                    ),
+                })
 
         self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed

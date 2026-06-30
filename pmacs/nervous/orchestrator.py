@@ -4560,14 +4560,24 @@ class CycleOrchestrator:
     # -- Post-cycle step implementations --
 
     def _step_weekly_reeval(self, cycle_id: str) -> None:
-        """Step 14: Re-evaluate active holdings >= 7 days since last re-eval."""
+        """Step 14: Re-evaluate active holdings >= 7 days since last re-eval.
+
+        Bug fix (Phase 9): When ``last_reeval_at`` is NULL (brand-new position),
+        fall back to ``entry_date`` instead of treating it as "needs re-eval now"
+        — matches the pattern in ``engines.thesis_reeval.check_weekly_reeval``.
+
+        Invariant fix (Phase 9 / Architecture.md §16.1): Thesis invalidation
+        routes through ``state_machine.transition()`` instead of raw SQL
+        ``UPDATE holdings SET state = ...`` so every state change is hash-chained
+        via the audit log written by ``transition()``.
+        """
         from datetime import date, timedelta
 
         conn = _sql_connect(self._db_path)
         try:
             rows = conn.execute(
                 "SELECT id, ticker, entry_price_usd, position_size_usd, "
-                "last_reeval_at FROM holdings WHERE state = 'ACTIVE'"
+                "last_reeval_at, entry_date FROM holdings WHERE state = 'ACTIVE'"
             ).fetchall()
         except sqlite3.OperationalError:
             rows = []
@@ -4577,8 +4587,17 @@ class CycleOrchestrator:
         try:
             for row in rows:
                 last_reeval = row[4]  # last_reeval_at (string or None)
+                entry_date_str = row[5]  # entry_date (string or None)
                 if last_reeval is None:
-                    needs_reeval = True
+                    # Fall back to entry_date (matches thesis_reeval.check_weekly_reeval).
+                    # A NULL last_reeval_at means "never re-evaluated" — not "due now".
+                    needs_reeval = False
+                    if entry_date_str is not None:
+                        try:
+                            entry_d = date.fromisoformat(str(entry_date_str)[:10])
+                            needs_reeval = entry_d <= seven_days_ago
+                        except (ValueError, TypeError):
+                            needs_reeval = False
                 else:
                     try:
                         reeval_date = date.fromisoformat(str(last_reeval)[:10])
@@ -4644,16 +4663,44 @@ class CycleOrchestrator:
                                     (date.today().isoformat(), next_review, holding_id),
                                 )
                             else:
-                                # Thesis invalidated — transition to EXIT_THESIS_INVALIDATED
+                                # Thesis invalidated — route through state_machine.transition()
+                                # (Architecture §16.1: ONE place state changes; §5.1:
+                                # every transition is hash-chained). Read the Holding
+                                # from the row, mutate via transition(), then write
+                                # only the columns the DB schema owns.
                                 reeval_outcome = "thesis_invalidated"
-                                # Use targeted SQL to avoid overwriting entry_price/size/etc with NULL
+                                holding = Holding(
+                                    id=holding_id,
+                                    ticker=ticker,
+                                    state=HoldingState.ACTIVE,
+                                    entry_price_usd=row[2] or 0.0,
+                                    position_size_usd=row[3] or 0.0,
+                                )
+                                transition_reason = (
+                                    f"reeval_thesis_invalidated:"
+                                    f"p_down={arbitrated.p_down:.2f}"
+                                )
+                                holding = transition(
+                                    holding,
+                                    HoldingState.EXIT_THESIS_INVALIDATED,
+                                    reason=transition_reason,
+                                    cycle_id=cycle_id,
+                                    op_seq=reevaluated,  # local op_seq within this step
+                                )
+                                # Persist only the state-owned columns. NOTE:
+                                # ABORT_REASON_STATES does not include
+                                # EXIT_THESIS_INVALIDATED, so transition() does
+                                # NOT auto-set abort_reason — we pass it explicitly
+                                # from transition_reason (Architecture §5.1 audit).
                                 conn.execute(
                                     "UPDATE holdings SET state = ?, abort_reason = ?, "
-                                    "last_reeval_at = ? WHERE id = ?",
+                                    "last_reeval_at = ?, exit_date = COALESCE(exit_date, ?) "
+                                    "WHERE id = ?",
                                     (
-                                        HoldingState.EXIT_THESIS_INVALIDATED.value,
-                                        f"reeval_thesis_invalidated:p_down={arbitrated.p_down:.2f}",
+                                        holding.state.value,
+                                        transition_reason,
                                         date.today().isoformat(),
+                                        holding.exit_date.isoformat() if holding.exit_date else date.today().isoformat(),
                                         holding_id,
                                     ),
                                 )
@@ -4727,32 +4774,248 @@ class CycleOrchestrator:
         )
 
     def _step_thesis_aging(self, cycle_id: str) -> None:
-        """Step 15: Mandatory re-eval for holdings >= 90 days old."""
+        """Step 15: Mandatory 90-day thesis-aging re-evaluation (Architecture §12).
+
+        Phase 9 fix: previously this step counted aged holdings and emitted
+        a debug event only — no state transition, no persona re-run, no
+        outcome recorded. Spec exit test #5 requires that aged holdings
+        flow through the full re-eval pipeline and exit through the state
+        machine on invalidation.
+
+        Flow (per spec/Phases.md Phase 9 exit #5):
+        1. Find ACTIVE holdings with entry_date <= today - 90d
+        2. Transition each: ACTIVE -> THESIS_AGING_REVIEW (via state_machine)
+        3. Re-run the persona/arbitration pipeline (same as step 14)
+        4. On thesis-valid verdict  -> THESIS_AGING_REVIEW -> ACTIVE
+        5. On thesis-invalid verdict -> THESIS_AGING_REVIEW -> EXIT_THESIS_INVALIDATED
+        6. Record outcome in CYCLE_THESIS_AGING event + audit chain
+
+        All state changes route through ``state_machine.transition()``
+        (Architecture §16.1) so every transition is hash-chained (§5.1).
+        """
+        from datetime import date, timedelta
+
+        conn = _sql_connect(self._db_path)
         try:
-            conn = _sql_connect(self._db_path)
-            try:
-                rows = conn.execute(
-                    "SELECT id, ticker, entry_date FROM holdings WHERE state = 'ACTIVE'"
-                ).fetchall()
-            finally:
-                conn.close()
+            rows = conn.execute(
+                "SELECT id, ticker, entry_price_usd, position_size_usd, "
+                "entry_date FROM holdings WHERE state = 'ACTIVE'"
+            ).fetchall()
         except sqlite3.OperationalError:
             rows = []
 
-        from datetime import date, timedelta
-
         ninety_days_ago = date.today() - timedelta(days=90)
         aged_count = 0
-        for row in rows:
-            entry_date_str = row[2]
-            if entry_date_str is None:
-                continue
-            try:
-                entry_date = date.fromisoformat(str(entry_date_str)[:10])
-                if entry_date <= ninety_days_ago:
-                    aged_count += 1
-            except (ValueError, TypeError):
-                pass
+        aged_reviewed = 0
+        aged_invalidated = 0
+        aged_validated = 0
+
+        try:
+            for row in rows:
+                (
+                    holding_id, ticker, entry_price_usd, position_size_usd,
+                    entry_date_str,
+                ) = row
+
+                # Skip holdings with no entry_date or not yet 90 days old
+                if entry_date_str is None:
+                    continue
+                try:
+                    entry_d = date.fromisoformat(str(entry_date_str)[:10])
+                except (ValueError, TypeError):
+                    continue
+                if entry_d > ninety_days_ago:
+                    continue
+
+                aged_count += 1
+
+                # -- Step 15a: Transition ACTIVE -> THESIS_AGING_REVIEW --
+                review_outcome = "unknown"
+                try:
+                    from pmacs.engines.state_machine import transition
+                    from pmacs.schemas.contracts import Holding, HoldingState
+
+                    holding = Holding(
+                        id=holding_id,
+                        ticker=ticker,
+                        state=HoldingState.ACTIVE,
+                        entry_price_usd=entry_price_usd or 0.0,
+                        position_size_usd=position_size_usd or 0.0,
+                    )
+                    holding = transition(
+                        holding,
+                        HoldingState.THESIS_AGING_REVIEW,
+                        reason=f"thesis_aging_90d:entry_date={entry_d.isoformat()}",
+                        cycle_id=cycle_id,
+                        op_seq=aged_count,
+                    )
+                    conn.execute(
+                        "UPDATE holdings SET state = ? WHERE id = ?",
+                        (holding.state.value, holding_id),
+                    )
+
+                    # -- Step 15b: Re-run persona/arbitration pipeline --
+                    from pmacs.data.evidence_router import fetch_evidence_for_ticker
+                    from pmacs.engines.arbitration import arbitrate, ArbitrationSignal
+
+                    evidence_packet = fetch_evidence_for_ticker(ticker, cycle_id)
+                    evidence_list: list[Any] = list(evidence_packet.evidence)
+                    brief = f"THESIS_AGING_REVIEW: ticker={ticker}"
+
+                    persona_results = self._dispatch_personas_with_timeout(
+                        evidence=evidence_list,
+                        brief=brief,
+                        cycle_id=cycle_id,
+                        ticker=ticker,
+                        timeout_seconds=180,
+                    )
+
+                    brier_data = self._get_persona_brier_data()
+                    signals: list[ArbitrationSignal] = []
+                    for persona_name_str, raw_output in persona_results.items():
+                        dp = self._extract_directional_probability(
+                            persona_name_str, ticker, cycle_id, raw_output,
+                        )
+                        if dp is None or dp.confidence == 0.0:
+                            continue
+                        avg_brier, historical_n = brier_data.get(persona_name_str, (0.667, 0))
+                        signals.append(ArbitrationSignal(
+                            dp, historical_n=historical_n, rolling_brier=avg_brier,
+                        ))
+
+                    if not signals:
+                        # No valid signals — restore ACTIVE, log no_signals
+                        review_outcome = "no_signals"
+                        holding = transition(
+                            holding,
+                            HoldingState.ACTIVE,
+                            reason="thesis_aging_review:no_signals",
+                            cycle_id=cycle_id,
+                            op_seq=aged_count,
+                        )
+                        conn.execute(
+                            "UPDATE holdings SET state = ?, last_reeval_at = ? WHERE id = ?",
+                            (
+                                holding.state.value,
+                                date.today().isoformat(),
+                                holding_id,
+                            ),
+                        )
+                    else:
+                        arbitrated = arbitrate(signals, cycle_id=cycle_id)
+                        aged_reviewed += 1
+
+                        if (
+                            arbitrated.decision.value.startswith("PROCEED")
+                            and arbitrated.p_up >= arbitrated.p_down
+                        ):
+                            # -- Step 15c: Thesis still valid -> ACTIVE --
+                            review_outcome = "thesis_valid"
+                            aged_validated += 1
+                            holding = transition(
+                                holding,
+                                HoldingState.ACTIVE,
+                                reason=(
+                                    f"thesis_aging_review_valid:"
+                                    f"p_up={arbitrated.p_up:.2f}"
+                                ),
+                                cycle_id=cycle_id,
+                                op_seq=aged_count,
+                            )
+                            conn.execute(
+                                "UPDATE holdings SET state = ?, last_reeval_at = ? WHERE id = ?",
+                                (
+                                    holding.state.value,
+                                    date.today().isoformat(),
+                                    holding_id,
+                                ),
+                            )
+                        else:
+                            # -- Step 15d: Thesis invalid -> EXIT_THESIS_INVALIDATED --
+                            review_outcome = "thesis_invalidated"
+                            aged_invalidated += 1
+                            transition_reason = (
+                                f"thesis_aging_review_invalidated:"
+                                f"p_down={arbitrated.p_down:.2f}"
+                            )
+                            holding = transition(
+                                holding,
+                                HoldingState.EXIT_THESIS_INVALIDATED,
+                                reason=transition_reason,
+                                cycle_id=cycle_id,
+                                op_seq=aged_count,
+                            )
+                            conn.execute(
+                                "UPDATE holdings SET state = ?, abort_reason = ?, "
+                                "last_reeval_at = ?, exit_date = COALESCE(exit_date, ?) "
+                                "WHERE id = ?",
+                                (
+                                    holding.state.value,
+                                    transition_reason,
+                                    date.today().isoformat(),
+                                    holding.exit_date.isoformat() if holding.exit_date else date.today().isoformat(),
+                                    holding_id,
+                                ),
+                            )
+                            log_debug(
+                                "THESIS_AGING_INVALIDATED",
+                                payload={
+                                    "holding_id": holding_id,
+                                    "ticker": ticker,
+                                    "p_down": arbitrated.p_down,
+                                },
+                                level="INFO",
+                                cycle_id=cycle_id,
+                                msg=(
+                                    f"Thesis aging review invalidated {ticker} "
+                                    f"(p_down={arbitrated.p_down:.2f})"
+                                ),
+                            )
+
+                except Exception as exc:
+                    # Pipeline failure — restore ACTIVE so the holding isn't
+                    # stuck in THESIS_AGING_REVIEW. Log + audit fallback.
+                    review_outcome = f"error:{str(exc)[:80]}"
+                    log_debug(
+                        "THESIS_AGING_PIPELINE_FALLBACK",
+                        payload={
+                            "cycle_id": cycle_id,
+                            "ticker": ticker,
+                            "holding_id": holding_id,
+                            "error": str(exc)[:200],
+                        },
+                        level="WARN",
+                        error_code="REEVAL_FAILED",
+                        cycle_id=cycle_id,
+                        msg=(
+                            f"Thesis aging pipeline failed for {ticker}: {exc}; "
+                            f"restoring to ACTIVE"
+                        ),
+                    )
+                    try:
+                        conn.execute(
+                            "UPDATE holdings SET state = 'ACTIVE' WHERE id = ?",
+                            (holding_id,),
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+
+                conn.commit()
+
+                log_debug(
+                    "THESIS_AGING_SYMBOL_OUTCOME",
+                    payload={
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "holding_id": holding_id,
+                        "outcome": review_outcome,
+                    },
+                    level="INFO",
+                    cycle_id=cycle_id,
+                    msg=f"Thesis aging for {ticker}: {review_outcome}",
+                )
+        finally:
+            conn.close()
 
         log_debug(
             "CYCLE_THESIS_AGING",
@@ -4760,10 +5023,16 @@ class CycleOrchestrator:
                 "cycle_id": cycle_id,
                 "active_holdings": len(rows),
                 "aged_holdings_90d": aged_count,
+                "aged_reviewed": aged_reviewed,
+                "aged_validated": aged_validated,
+                "aged_invalidated": aged_invalidated,
             },
             level="INFO",
             cycle_id=cycle_id,
-            msg=f"Thesis aging: {aged_count} holdings >= 90 days old",
+            msg=(
+                f"Thesis aging: {aged_count} holdings >= 90 days old "
+                f"({aged_validated} validated, {aged_invalidated} invalidated)"
+            ),
         )
 
     def _step_process_fills(self, cycle_id: str) -> None:

@@ -409,6 +409,13 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE holdings ADD COLUMN cycle_id_closed TEXT")
     if not _column_exists(conn, "holdings", "thesis_review_due_date"):
         conn.execute("ALTER TABLE holdings ADD COLUMN thesis_review_due_date TEXT")
+    # Phase 9 fix: trailing columns needed by stop_loss_daemon SELECT (and
+    # Holding._sync_price_aliases). Without these the daemon reads them as
+    # None and trailing breaches silently never fire.
+    if not _column_exists(conn, "holdings", "trailing_stop_price_usd"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN trailing_stop_price_usd REAL")
+    if not _column_exists(conn, "holdings", "trailing_stop_armed"):
+        conn.execute("ALTER TABLE holdings ADD COLUMN trailing_stop_armed INTEGER NOT NULL DEFAULT 0")
 
     # op_idempotency migrations
     if not _column_exists(conn, "op_idempotency", "result_hash"):

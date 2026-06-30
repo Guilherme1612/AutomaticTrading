@@ -209,13 +209,16 @@ def run_stop_loss_loop(
                 conn = _sql_connect(db_path)
                 try:
                     rows = conn.execute(
-                        "SELECT id, ticker, state, stop_price_usd "
+                        "SELECT id, ticker, state, stop_price_usd, "
+                        "trailing_stop_price_usd, trailing_stop_armed "
                         "FROM holdings WHERE state = 'ACTIVE'"
                     ).fetchall()
 
                     for row in rows:
-                        holding_id, ticker, state, stop_price = row
-                        trailing_price = None  # column not yet in schema
+                        (
+                            holding_id, ticker, state, stop_price,
+                            trailing_price, trailing_armed,
+                        ) = row
 
                         # Fetch current price
                         current_price = _fetch_current_price(ticker, gateway)
@@ -251,7 +254,7 @@ def run_stop_loss_loop(
                         h.ticker = ticker
                         h.stop_price_usd = stop_price
                         h.trailing_stop_price_usd = trailing_price
-                        h.trailing_stop_armed = trailing_price is not None
+                        h.trailing_stop_armed = bool(trailing_armed)
 
                         result = check_holding(h, current_price)
                         if result is not None:

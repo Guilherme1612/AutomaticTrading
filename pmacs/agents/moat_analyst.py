@@ -49,6 +49,13 @@ class MoatAnalystRunner(PersonaRunner):
         - ``moat_components[].type`` → ``moat_type`` (LLM uses natural-language
           "type" because the prompt labels moat dimensions; canonical schema
           uses ``moat_type``).
+        - ``moat_components[].moat_type`` may be a value not in the 6-value
+          Literal enum (e.g. ``"TEAM_EXPERTISE"``, ``"BRAND"``,
+          ``"REGULATION"``). Case-insensitive enum matcher falls back to
+          the first member (NETWORK_EFFECTS) — preserves the cycle instead
+          of aborting at attempt 3. Cycle 1 ONDS Jun 30 surfaced
+          ``moat_type: TEAM_EXPERTISE`` which Pydantic rejected with
+          literal_error.
         - ``moat_components[].evidence_ids`` may be empty when LLM omits it
           (Pydantic min_length=1 violated).
         - Top-level ``evidence_ids`` may also be empty.
@@ -64,7 +71,14 @@ class MoatAnalystRunner(PersonaRunner):
         )
         all_fixes.extend(fixes)
 
-        # 2) Pad empty evidence_ids at top + nested level
+        # 2) Normalize Literal enums (case-insensitive, default fallback).
+        # Cycle 1 ONDS Jun 30 surfaced ``moat_type: TEAM_EXPERTISE`` (not
+        # in the 6-value enum). Without this step, Pydantic raises
+        # literal_error and the persona aborts at attempt 3.
+        parsed, fixes = self._normalize_literal_enums(parsed, model_cls)
+        all_fixes.extend(fixes)
+
+        # 3) Pad empty evidence_ids at top + nested level
         parsed, fixes = self._ensure_min_evidence_ids(parsed, model_cls)
         all_fixes.extend(fixes)
 

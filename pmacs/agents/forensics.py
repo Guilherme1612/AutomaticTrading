@@ -171,6 +171,11 @@ class ForensicsRunner(PersonaRunner):
         # closest in-enum value by considering the actual red_flag severity
         # distribution (so POOR + high-severity flags maps to SEVERE_RISK
         # rather than CLEAN).
+        #
+        # Cycle 1 ONDS Jun 30 also surfaced ``"POOR — Aggressive
+        # accounting..."`` (the LLM concatenates a sentence onto the
+        # enum literal). We match the prefix (case-insensitive) and strip
+        # the trailing reasoning text so Pydantic gets a clean enum value.
         _QUALITY_ALIASES = {
             "POOR": "MATERIAL_CONCERNS",  # overridden below if severity warrants
             "BAD": "MATERIAL_CONCERNS",
@@ -184,31 +189,55 @@ class ForensicsRunner(PersonaRunner):
             "NEGATIVE": "MATERIAL_CONCERNS",
         }
         quality = parsed.get("overall_accounting_quality")
-        if isinstance(quality, str) and quality in _QUALITY_ALIASES:
-            # If the LLM says "POOR" but red_flags all have severity >= 0.7,
-            # escalate to SEVERE_RISK so the verdict is honest.
-            new_quality = _QUALITY_ALIASES[quality]
-            if quality in ("POOR", "BAD", "TERRIBLE", "CRITICAL") and red_flags:
-                max_sev = max(
-                    (rf.get("severity", 0.0) for rf in red_flags
-                     if isinstance(rf, dict)),
-                    default=0.0,
-                )
-                if max_sev >= 0.7:
-                    new_quality = "SEVERE_RISK"
-            parsed["overall_accounting_quality"] = new_quality
-            all_fixes.append({
-                "field": "overall_accounting_quality",
-                "from": quality,
-                "to": new_quality,
-                "reason": (
-                    f"LLM emitted overall_accounting_quality='{quality}' "
-                    f"which is not in the ForensicsOutput literal enum. "
-                    f"Folded to closest spec value '{new_quality}' so the "
-                    f"analysis survives (Pydantic literal_error would "
-                    f"otherwise reject every attempt)."
-                ),
-            })
+        if isinstance(quality, str):
+            # Strip leading enum-like word if the LLM concatenated
+            # reasoning (e.g. "POOR — Aggressive accounting"). Match
+            # case-insensitive prefix against the alias map.
+            quality_head = quality.strip().split(" ", 1)[0].rstrip(":—-,").upper()
+            if quality_head in _QUALITY_ALIASES or quality_head in {
+                "CLEAN", "MINOR_CONCERNS", "MATERIAL_CONCERNS",
+                "SEVERE_RISK", "INSUFFICIENT_DATA",
+            }:
+                # Normalize via alias if not already a canonical enum value
+                if quality_head in _QUALITY_ALIASES:
+                    new_quality = _QUALITY_ALIASES[quality_head]
+                    # If the LLM says "POOR" but red_flags all have severity >= 0.7,
+                    # escalate to SEVERE_RISK so the verdict is honest.
+                    if quality_head in ("POOR", "BAD", "TERRIBLE", "CRITICAL") and red_flags:
+                        max_sev = max(
+                            (rf.get("severity", 0.0) for rf in red_flags
+                             if isinstance(rf, dict)),
+                            default=0.0,
+                        )
+                        if max_sev >= 0.7:
+                            new_quality = "SEVERE_RISK"
+                    parsed["overall_accounting_quality"] = new_quality
+                    all_fixes.append({
+                        "field": "overall_accounting_quality",
+                        "from": quality,
+                        "to": new_quality,
+                        "reason": (
+                            f"LLM emitted overall_accounting_quality={quality!r} "
+                            f"which is not in the ForensicsOutput literal enum "
+                            f"(head token '{quality_head}' matched an alias). "
+                            f"Folded to closest spec value '{new_quality}' so "
+                            f"the analysis survives (Pydantic literal_error "
+                            f"would otherwise reject every attempt)."
+                        ),
+                    })
+                elif quality_head != quality:
+                    # Was already a valid enum literal but had trailing text
+                    parsed["overall_accounting_quality"] = quality_head
+                    all_fixes.append({
+                        "field": "overall_accounting_quality",
+                        "from": quality,
+                        "to": quality_head,
+                        "reason": (
+                            f"LLM concatenated reasoning text onto a valid "
+                            f"enum literal ({quality_head}). Stripped trailing "
+                            f"text so Pydantic accepts the value."
+                        ),
+                    })
 
         self._log_normalization(all_fixes, ticker=parsed.get("ticker", ""))
         return parsed

@@ -105,6 +105,40 @@ def test_forensics_poor_quality_coerced_to_material_concerns():
     assert out.overall_accounting_quality == "SEVERE_RISK"
 
 
+def test_forensics_poor_with_trailing_reasoning_text_stripped():
+    """Cycle 1 ONDS Jun 30 surfaced the LLM emitting
+    ``"POOR — Aggressive accounting..."`` (concatenated reasoning
+    onto the enum literal). The fix must strip the trailing text and
+    coerce to a clean enum value."""
+    from pmacs.agents.forensics import ForensicsRunner
+    from pmacs.schemas.personas import ForensicsOutput
+
+    parsed = {
+        "ticker": "ONDS",
+        "overall_accounting_quality": "POOR — Aggressive accounting patterns suggesting capitalization of expenses or one-time items.",
+        "red_flag_count": 1,
+        "red_flags": [
+            {
+                "category": "EARNINGS_QUALITY",
+                "severity": 0.30,
+                "description": "Mild accounting quality issue",
+                "evidence_ids": ["E001"],
+            },
+        ],
+        "p_up": 0.40,
+        "p_flat": 0.35,
+        "p_down": 0.25,
+        "evidence_ids": ["E001"],
+    }
+
+    runner = ForensicsRunner(cycle_id="test-onds-drift-2c")
+    fixed = runner._pre_validate(dict(parsed))
+    # Must be a clean canonical enum, not the LLM's concatenated string
+    assert fixed["overall_accounting_quality"] == "MATERIAL_CONCERNS"
+    out = ForensicsOutput.model_validate(fixed)
+    assert out.overall_accounting_quality == "MATERIAL_CONCERNS"
+
+
 # ---------------------------------------------------------------------------
 # InsiderActivity: transactions: <int> → []
 # ---------------------------------------------------------------------------
@@ -319,3 +353,58 @@ def test_catalyst_summarizer_missing_both_type_and_description():
     out = CatalystSummarizerOutput.model_validate(fixed)
     assert out.catalysts[0].catalyst_type == "earnings"
     assert out.catalysts[0].description
+
+
+# ---------------------------------------------------------------------------
+# MoatAnalyst: TEAM_EXPERTISE (not in 6-value enum)
+# ---------------------------------------------------------------------------
+
+
+def test_moat_analyst_team_expertise_coerced_to_network_effects():
+    """moat_type = TEAM_EXPERTISE (not in 6-value Literal enum) must
+    coerce to the first enum member (NETWORK_EFFECTS) so Pydantic accepts.
+
+    Cycle 1 ONDS Jun 30 surfaced Pydantic literal_error on the third
+    moat_components entry. Without normalization the persona aborts.
+    """
+    from pmacs.agents.moat_analyst import MoatAnalystRunner
+    from pmacs.schemas.personas import MoatAnalystOutput
+
+    parsed = {
+        "ticker": "ONDS",
+        "moat_components": [
+            {
+                "type": "SWITCHING_COSTS",  # LLM uses 'type' (natural lang)
+                "strength": 0.35,
+                "trajectory": "STABLE",
+                "reasoning": "Net revenue retention 112%",
+                "evidence_ids": ["E001"],
+            },
+            {
+                "moat_type": "TEAM_EXPERTISE",  # not in enum; should default
+                "strength": 0.40,
+                "trajectory": "STABLE",
+                "reasoning": "Engineering team depth",
+                "evidence_ids": ["E001"],
+            },
+        ],
+        "moat_strength": 0.40,
+        "competitive_entry_risk": "MODERATE",
+        "competitive_entry_reasoning": "Crowded market but not commoditized",
+        "p_up": 0.40,
+        "p_flat": 0.35,
+        "p_down": 0.25,
+        "evidence_ids": ["E001"],
+    }
+
+    runner = MoatAnalystRunner(cycle_id="test-onds-drift-6")
+    fixed = runner._pre_validate(dict(parsed))
+
+    # Both renames and enum normalizations applied
+    assert fixed["moat_components"][0]["moat_type"] == "SWITCHING_COSTS"
+    assert fixed["moat_components"][1]["moat_type"] == "NETWORK_EFFECTS"
+
+    # And Pydantic must accept
+    out = MoatAnalystOutput.model_validate(fixed)
+    assert out.moat_components[0].moat_type == "SWITCHING_COSTS"
+    assert out.moat_components[1].moat_type == "NETWORK_EFFECTS"

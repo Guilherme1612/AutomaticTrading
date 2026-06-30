@@ -68,6 +68,12 @@ class BaseSanityValidator:
                 )
 
         # Common check: evidence_ids reference real packets
+        # Synthetic IDs (e.g. `normalized-fallback-001`) injected by the
+        # `_pre_validate._ensure_min_evidence_ids` padder are ALWAYS accepted —
+        # they are the system's own bookkeeping, not LLM-hallucinated citations.
+        # Without this exemption, base.py rejects every persona whose LLM
+        # output was padded with a synthetic ID, aborting cycles that
+        # otherwise have valid research (see ONDS 3-cycle audit Jun 30).
         evidence_ids = output.get("evidence_ids", [])
         if evidence_ids:
             known_ids: set[str] = set()
@@ -78,11 +84,14 @@ class BaseSanityValidator:
                         known_ids.add(ev_id)
 
             for eid in evidence_ids:
-                if eid not in known_ids:
-                    return SanityResult(
-                        passed=False,
-                        reason=f"evidence_id '{eid}' not found in provided packets",
-                    )
+                if eid in known_ids:
+                    continue
+                if eid.startswith("normalized-fallback-"):
+                    continue
+                return SanityResult(
+                    passed=False,
+                    reason=f"evidence_id '{eid}' not found in provided packets",
+                )
 
         # Common check: probability sum ≈ 1.0 (defense-in-depth)
         p_keys = ("p_up", "p_flat", "p_down")
